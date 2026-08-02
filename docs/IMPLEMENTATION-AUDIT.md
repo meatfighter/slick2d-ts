@@ -1,6 +1,6 @@
 # Implementation Audit
 
-Date: 2026-08-01
+Date: 2026-08-02
 
 This audit compares the current TypeScript implementation against the Java Slick2D source and the three audited game projects:
 
@@ -14,9 +14,10 @@ This audit compares the current TypeScript implementation against the Java Slick
 ```text
 npm.cmd run lint
 npm.cmd run typecheck
+npm.cmd run build
 ```
 
-Both commands pass after the audit fixes.
+All commands pass after the audit fixes.
 
 ## Direct API Coverage
 
@@ -44,6 +45,34 @@ No game-title-specific modules are exported. The project names appear only as au
 - Added `ResourceLoader.track()` and connected image decode promises to `ResourceLoader.waitForAll()` so browser decode work participates in the preload barrier.
 - Updated `docs/SLICK2D-PARITY-API.md` to match the implementation and verified Java behavior.
 
+## External Audit Verification
+
+The follow-up audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_FULL_AUDIT_FOR_FIXES.md` was checked against the Java Slick2D source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+
+- `Image(String, boolean)` now treats the boolean as Slick's y-axis load flip, not a horizontal mirror.
+- `Image(String, Color)` and `Image(String, boolean, filter, Color)` now apply transparent-color alpha during browser decode.
+- `Image(ArrayBuffer | Blob, ref, flipped, filter)` now decodes the supplied bytes instead of ignoring them and loading by ref.
+- `Image(ImageData)` now uploads the supplied Slick image bytes instead of creating a blank canvas.
+- `Image(int, int)` defaults to `FILTER_NEAREST`, matching Java.
+- `Image.getScaledCopy` now changes logical display size without changing the sampled source rectangle.
+- `Image.ensureInverted` is now idempotent.
+- `Image.getColor` now reads cached texture pixel data instead of the current framebuffer.
+- `Image.bind`, `startUse`, and `endUse` now bind/check WebGL texture state through the renderer.
+- `Image.setRotation`, `rotate`, and `setAlpha` now follow Slick's modulo/no-clamp behavior.
+- `Image.setColor`/`setImageColor` now affect rendering through WebGL per-vertex color attributes.
+- `PackedSpriteSheet` now defaults to nearest filtering and validates malformed `.def` sections.
+- `XMLPackedSheet` now caches subimages at construction and wraps malformed XML or attributes in `SlickException`.
+- `SpriteSheet` now extends `Image`, uses nearest filtering for string constructors, caches tile subimages, performs Java-style bounds checks, and preserves `startUse`/`renderInUse`/`endUse` call shape.
+- `Color` constants, copy/decode constructors, `add`, `scale`, `brighter`, `darker`, byte getters, copy helpers, and `hashCode` now match the Slick source.
+- `Sound` and `Music` Blob constructors now register bytes with the resource loader; `SoundStore.isMusicPlaying()` now ignores sound-effect handles.
+
+Claims intentionally not converted into desktop-exact behavior:
+
+- Native applet, AWT/Swing, LWJGL Display, filesystem, classpath, OpenAL source-pool, and blocking timing behavior remain browser shims.
+- `Music` accepts the Java streaming hint but uses Web Audio buffers. This is deliberate for the web desktop browser target and the three games' music handoff code.
+- Shape/warped/sheared rendering remains explicitly unsupported because the audited game sources do not call those Slick paths.
+- `Graphics.copyArea`, `Graphics.getArea(...): Image`, and gradient-line color interpolation are not used by the game rendering paths. The byte-buffer `getArea` path used by copied container icon code is implemented through WebGL `readPixels`.
+
 ## Browser-Specific Boundaries
 
 These differences are intentional and must be kept during game ports:
@@ -62,4 +91,3 @@ The library is ready as a parity base for TS ports of the three games, provided 
 - ports game-domain classes locally rather than adding them to `slick2d-ts`;
 - replaces Java file/network side effects such as `FileOutputStream`, `URL.openStream`, `System.exit`, and applet lifecycle calls with game-local browser code;
 - keeps one TypeScript file per Java class for the game source, matching the library style.
-

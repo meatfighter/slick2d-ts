@@ -162,7 +162,7 @@ Display.sync(targetFPS)                      required shim; records cap request 
 GameContainer shared context statics         required shims; map to the active WebGL resource/context owner
 org.lwjgl.openal.AL                          required minimal shim for copied container/audio paths
 Controller button callback indexes           listener callbacks are one-based; polling/storage is zero-based
-ClassLoader/DataInputStream resources        preload with ResourceManager, read with BinaryReader
+ClassLoader/DataInputStream resources        preload/register with ResourceLoader, read with BinaryReader
 URL.openStream score/service calls           game-local async fetch, not ResourceLoader
 FileOutputStream recording/debug output      game-local Blob download or IndexedDB/localStorage export
 java.awt.Toolkit.getDefaultToolkit()         delete in browser ports; bootstrap owns DOM/canvas readiness
@@ -326,23 +326,23 @@ The source games also read binary and text resources through `ClassLoader.getRes
 
 Implement these rules:
 
-- The Slick parity layer must sit on top of the resource manager architecture from `docs/RESOURCE-MANAGEMENT-SYSTEM.md`.
-- `Image`, `Sound`, `Music`, `PackedSpriteSheet`, and `XMLPackedSheet` must hold `ResourceHandle` objects internally, not raw browser resources acquired ad hoc.
-- `AppGameContainer.start()` must create a startup `ResourceScope`, make it active while `Game.init` runs, then wait for `scope.ready()` before the first real frame.
-- Dynamic resources created after startup must acquire handles from either the current active scope or an explicit long-lived container scope.
-- Releasing a container or scene must release the associated resource scope so images, audio buffers, object URLs, and decoded data can be disposed deterministically.
+- The full resource manager architecture in `docs/RESOURCE-MANAGEMENT-SYSTEM.md` is the long-form design target. The phase-one Slick parity implementation uses `ResourceLoader` as the concrete shared cache, byte registry, and preload barrier.
+- `Image`, `Sound`, `Music`, `PackedSpriteSheet`, and `XMLPackedSheet` must register or retrieve work through `ResourceLoader`; they must not perform one-off uncached browser fetches.
+- `AppGameContainer.start()` must call `game.init`, then wait for `ResourceLoader.waitForAll()` before the first real frame.
+- Dynamic resources created after startup must begin loading immediately and participate in `ResourceLoader.waitForAll()` when their preparation promise is tracked.
+- Releasing a container must dispose WebGL and audio runtime state owned by the container. Per-scene reference-counted unloading is deferred until a full `ResourceManager`/`ResourceScope` implementation is added.
 - Cache keys must include handler kind plus every option that changes the runtime value, for example image path, filter mode, transparent color, atlas metadata path, and audio streaming mode.
 - The manager must cache in-flight requests as well as completed values so two `new Image("images/foo.png")` calls share one network/decode operation.
 - `ResourceLoader` is a Java compatibility adapter over the same manager. It must not maintain a second cache.
 - `ResourceLoader.getResourceAsStream(ref)` means "return already loaded bytes for this resource" in TS. It must not perform a synchronous network request.
-- Java `ClassLoader.getResourceAsStream(ref)` maps to `ResourceManager.acquire(binaryHandler, ref)` during preload, then to `ResourceHandle.get()` or `ResourceLoader.getResourceAsStream(ref)` after the preload barrier.
+- Java `ClassLoader.getResourceAsStream(ref)` maps to preloading/registering the bytes under the original Java ref string, then to `ResourceLoader.getResourceAsStream(ref)` after the preload barrier.
 - Java `DataInputStream` maps to `slick.support.BinaryReader`, which must implement Java-compatible big-endian reads for the methods used by the ports.
 - Stage text files map to the text handler; `.def` files map to the packed-sheet text handler; XML atlas files map to the XML handler; images map to the image-bitmap handler; audio maps to the audio-buffer or streaming-audio handler.
 - Java `URL.openStream` or `BufferedReader` over an HTTP score/service URL is not Slick resource loading. Port that code inside the game using `fetch`, make it asynchronous, and keep it out of `slick2d-ts`.
 - Java `FileOutputStream` and `BufferedOutputStream` recording/debug output is not Slick resource loading. Port that code inside the game using a `Blob` download for manual export, IndexedDB for persistent binary saves, or `localStorage` only for tiny text/state values.
-- Resource failures must produce structured errors with enough data to identify the path, handler kind, HTTP status when available, and original cause.
-- Resource progress and diagnostics must come from the resource manager, not from individual Slick wrapper classes.
-- Constructing `Image`, `Sound`, `Music`, `PackedSpriteSheet`, or `XMLPackedSheet` registers or retrieves a resource from the shared resource manager.
+- Resource failures must produce `SlickException` or stored `ResourceLoader` errors with enough data to identify the path and original cause.
+- Resource progress and diagnostics must come from `ResourceLoader` in phase one, then from `ResourceManager` when the fuller architecture is implemented.
+- Constructing `Image`, `Sound`, `Music`, `PackedSpriteSheet`, or `XMLPackedSheet` registers, retrieves, or tracks a resource through the shared resource loader.
 - Resource paths must preserve the exact Java string value as the logical cache key, for example `images/player.png` and `sound/start.ogg`. The resource manager may resolve that key against a configured base URL, but the public Slick object keeps the original string.
 - `AppGameContainer.start()` must await all resources queued during `Game.init`.
 - Resources created after startup must begin loading immediately and expose a ready state internally.
@@ -501,6 +501,7 @@ export interface RenderBackend {
     scale(x: number, y: number): void;
     rotate(x: number, y: number, angle: number): void;
     readPixels(x: number, y: number, width: number, height: number, target: Uint8Array): void;
+    bindTextureResource(resource: WebGLTextureResource): void;
     handleContextLost(): void;
     handleContextRestored(): void;
     dispose(): void;
@@ -815,6 +816,11 @@ export class Image implements Renderable {
     public constructor(ref: string, flipped: boolean, filter: number, transparent: Color);
     public constructor(width: number, height: number);
     public constructor(width: number, height: number, filter: number);
+    public constructor(input: ArrayBuffer | Blob, ref: string, flipped: boolean);
+    public constructor(input: ArrayBuffer | Blob, ref: string, flipped: boolean, filter: number);
+    public constructor(data: slick.opengl.ImageData);
+    public constructor(data: slick.opengl.ImageData, filter: number);
+    public constructor(image: Image);
     public setFilter(filter: number): void;
     public getFilter(): number;
     public getResourceReference(): string | null;
@@ -856,6 +862,7 @@ export class Image implements Renderable {
     public copy(): Image;
     public getScaledCopy(scale: number): Image;
     public getScaledCopy(width: number, height: number): Image;
+    public ensureInverted(): void;
     public getFlippedCopy(flipHorizontal: boolean, flipVertical: boolean): Image;
     public endUse(): void;
     public startUse(): void;
@@ -871,13 +878,20 @@ Implementation instructions:
 
 - Required by the games: constructors from path, constructors from width and height, `FILTER_NEAREST`, `draw`, `copy`, `getFlippedCopy`, `getGraphics`, `getHeight`, `getSubImage`, `getWidth`, `rotate`, `setAlpha`, and `setRotation`.
 - `Image(ref, false, Image.FILTER_NEAREST)` must disable smoothing for pixel-art rendering.
+- The `flipped` constructor flag is Slick's y-axis load inversion flag.
+- Transparent-color constructors must zero matching source pixels' alpha during browser decode.
+- `ArrayBuffer` and `Blob` constructors must decode the supplied bytes and register them under `ref`.
 - `Image(width, height)` creates a texture-backed render target with a framebuffer.
 - `getSubImage` returns a new `Image` view over the same source resource with a different source rectangle.
 - `copy` returns a new `Image` object sharing the source pixels but with independent alpha, rotation, filter, name, and center state.
+- `getScaledCopy` changes logical display width and height only. It must not change the sampled source rectangle.
+- `ensureInverted` must be idempotent.
+- `getColor` must sample cached texture pixel data, not the current framebuffer.
+- `setColor` and `setImageColor` must render with Slick per-corner color behavior through WebGL vertex colors.
 - `getFlippedCopy` composes the requested flip flags with the current image's flip state.
-- `rotate(angle)` adds degrees to the current rotation.
-- `setRotation(angle)` sets absolute degrees.
-- `setAlpha(alpha)` stores persistent per-image alpha.
+- `rotate(angle)` adds degrees to the current rotation and stores modulo `360`.
+- `setRotation(angle)` sets absolute degrees modulo `360`.
+- `setAlpha(alpha)` stores persistent per-image alpha without clamping.
 - `getGraphics()` returns a `Graphics` instance drawing into the image's framebuffer-backed render target. Throw `SlickException` when the image is not writable.
 - Texture/OpenGL methods such as `bind`, `startUse`, `endUse`, and `clampTexture` map to WebGL texture and batch state; they must exist even when a browser backend can collapse some state changes.
 - `flushPixelData()` drops cached CPU pixel data. When no CPU-side pixel cache exists, it returns immediately and records no state change.
@@ -1261,10 +1275,12 @@ Implementation instructions:
 ### `slick.SpriteSheet`
 
 ```ts
-export class SpriteSheet {
+export class SpriteSheet extends Image {
     public constructor(ref: string, tw: number, th: number);
     public constructor(ref: string, tw: number, th: number, spacing: number);
     public constructor(ref: string, tw: number, th: number, spacing: number, margin: number);
+    public constructor(ref: string, tw: number, th: number, col: Color);
+    public constructor(ref: string, tw: number, th: number, col: Color, spacing: number);
     public constructor(image: Image, tw: number, th: number);
     public constructor(image: Image, tw: number, th: number, spacing: number);
     public constructor(image: Image, tw: number, th: number, spacing: number, margin: number);
@@ -1281,8 +1297,11 @@ export class SpriteSheet {
 Implementation instructions:
 
 - Needed because `PackedSpriteSheet.getSpriteSheet` exposes it.
+- `SpriteSheet` must extend `Image`, matching Java Slick2D.
+- String constructors load with `Image.FILTER_NEAREST`.
 - `getSubImage` and `getSprite` return a tile image by sheet index, not pixel coordinate.
-- `spacing` and `margin` use Slick2D tile layout rules.
+- `getSubImage` returns cached tile images; `getSprite` validates bounds and returns a tile image view.
+- `spacing` and `margin` use Slick2D tile layout rules, including the Java vertical-count remainder increment.
 - `startUse()` flushes the active batch and records this sprite sheet as the active sheet-in-use.
 - `renderInUse(x, y, sx, sy)` draws `getSprite(sx, sy)` at `x, y` and must only be valid between `startUse()` and `endUse()`.
 - `endUse()` flushes the active batch and clears the active sheet-in-use flag.
@@ -2496,7 +2515,7 @@ export class BinaryReader {
 Implementation instructions:
 
 - Java counterpart: the subset of `DataInputStream` used by the source resource loaders.
-- This class is the browser replacement after bytes have been acquired through `ResourceManager`; it must not fetch data itself.
+- This class is the browser replacement after bytes have been acquired through `ResourceLoader`; it must not fetch data itself.
 - Use Java `DataInputStream` byte order: big-endian.
 - `read()` returns the next unsigned byte as `0..255`, or `-1` at EOF.
 - `readFully(target)` fills the whole target buffer or throws `SlickException` on EOF.
@@ -2616,7 +2635,7 @@ Song(Music, Music)                              new Song(intro, loop)
 Song(String, String, String)                    new Song(intro, intro2, loop)
 Song(Music, Music, Music)                       new Song(intro, intro2, loop)
 Song.stop/play/update()                         Song.stop/play/update()
-ClassLoader.getResourceAsStream(path)           ResourceManager.acquire(binaryHandler, path)
+ClassLoader.getResourceAsStream(path)           ResourceLoader.loadResource/registerResource, then getResourceAsStream(path)
 new DataInputStream(stream)                     new BinaryReader(bytes)
 DataInputStream.read()                          BinaryReader.read()
 DataInputStream.readFully(byte[])               BinaryReader.readFully(target)

@@ -1,6 +1,47 @@
 import { ResourceLoader } from "../util/ResourceLoader.js";
+import { SlickException } from "../SlickException.js";
+import type { Color } from "../Color.js";
 
 type TextureSource = ImageBitmap | HTMLImageElement | HTMLCanvasElement | OffscreenCanvas;
+type TextureInputSource = TextureSource | ArrayBuffer | Blob;
+type CanvasSource = HTMLCanvasElement | OffscreenCanvas;
+
+export type WebGLTextureLoadOptions = {
+    transparent?: Color | null;
+};
+
+function createCanvasSource(width: number, height: number): CanvasSource {
+    if (typeof OffscreenCanvas !== "undefined") {
+        return new OffscreenCanvas(width, height);
+    }
+    if (typeof document !== "undefined") {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        return canvas;
+    }
+    throw new SlickException("Texture staging requires a browser canvas implementation");
+}
+
+function get2dContext(canvas: CanvasSource): CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D {
+    const context = canvas.getContext("2d");
+    if (!context) {
+        throw new SlickException("Unable to create 2D texture staging context");
+    }
+    return context;
+}
+
+function sourceWidth(source: TextureSource): number {
+    return "width" in source ? Number(source.width) : 0;
+}
+
+function sourceHeight(source: TextureSource): number {
+    return "height" in source ? Number(source.height) : 0;
+}
+
+function colorByte(value: number): number {
+    return Math.trunc(value * 255);
+}
 
 /**
  * Internal WebGL texture resource.
@@ -15,24 +56,39 @@ export class WebGLTextureResource {
     public source: TextureSource | null;
     private texture: WebGLTexture | null = null;
     private readonly pending: Promise<void> | null;
+    private pixelData: Uint8ClampedArray | null = null;
 
     /** Creates a texture resource from an existing image-like source. */
-    public constructor(source: TextureSource, filter: number, ref?: string | null);
+    public constructor(source: TextureSource, filter: number, ref?: string | null, options?: WebGLTextureLoadOptions);
+    /** Creates a texture resource from already-available browser bytes. */
+    public constructor(source: ArrayBuffer | Blob, filter: number, ref: string, options?: WebGLTextureLoadOptions);
     /** Creates a texture resource from a Java resource reference. */
-    public constructor(ref: string, filter: number);
-    public constructor(sourceOrRef: TextureSource | string, filter: number, ref: string | null = null) {
+    public constructor(ref: string, filter: number, options?: WebGLTextureLoadOptions);
+    public constructor(sourceOrRef: TextureInputSource | string, filter: number, refOrOptions: string | null | WebGLTextureLoadOptions = null, options: WebGLTextureLoadOptions = {}) {
         this.filter = filter;
         if (typeof sourceOrRef === "string") {
             this.ref = sourceOrRef;
             this.width = 0;
             this.height = 0;
             this.source = null;
-            this.pending = ResourceLoader.track(this.load(sourceOrRef));
-        } else {
+            const loadOptions = typeof refOrOptions === "object" && refOrOptions !== null ? refOrOptions : options;
+            this.pending = ResourceLoader.track(this.load(sourceOrRef, loadOptions));
+        } else if (sourceOrRef instanceof ArrayBuffer || sourceOrRef instanceof Blob) {
+            const ref = typeof refOrOptions === "string" ? refOrOptions : "stream";
             this.ref = ref;
-            this.source = sourceOrRef;
-            this.width = "width" in sourceOrRef ? sourceOrRef.width : 0;
-            this.height = "height" in sourceOrRef ? sourceOrRef.height : 0;
+            this.width = 0;
+            this.height = 0;
+            this.source = null;
+            const bytesOptions = typeof refOrOptions === "object" && refOrOptions !== null ? refOrOptions : options;
+            this.pending = ResourceLoader.track(this.loadBytes(sourceOrRef, ref, bytesOptions));
+        } else {
+            const ref = typeof refOrOptions === "string" ? refOrOptions : refOrOptions;
+            const sourceOptions = typeof refOrOptions === "object" && refOrOptions !== null ? refOrOptions : options;
+            this.ref = typeof ref === "string" ? ref : null;
+            this.source = null;
+            this.width = 0;
+            this.height = 0;
+            this.prepareLoadedSource(sourceOrRef, sourceOptions);
             this.pending = null;
         }
     }
@@ -45,6 +101,20 @@ export class WebGLTextureResource {
     /** Returns a pending decode promise, if this resource was path-created. */
     public ready(): Promise<void> | null {
         return this.pending;
+    }
+
+    /** Returns the cached RGBA pixel at a texture-space coordinate. */
+    public getPixel(x: number, y: number): [number, number, number, number] | null {
+        if (!this.pixelData || x < 0 || y < 0 || x >= this.width || y >= this.height) {
+            return null;
+        }
+        const offset = (Math.trunc(y) * this.width + Math.trunc(x)) * 4;
+        return [
+            this.pixelData[offset],
+            this.pixelData[offset + 1],
+            this.pixelData[offset + 2],
+            this.pixelData[offset + 3]
+        ];
     }
 
     /** Returns or creates the WebGL texture for a context. */
@@ -74,6 +144,7 @@ export class WebGLTextureResource {
         this.texture = texture;
         this.width = width;
         this.height = height;
+        this.pixelData = null;
     }
 
     /** Applies the Slick filter mode to the WebGL texture. */
@@ -92,20 +163,30 @@ export class WebGLTextureResource {
         this.texture = null;
     }
 
-    private async load(ref: string): Promise<void> {
+    private async load(ref: string, options: WebGLTextureLoadOptions): Promise<void> {
         const bytes = await ResourceLoader.loadResource(ref);
-        const blob = new Blob([bytes]);
+        await this.loadBytes(bytes, ref, options);
+    }
+
+    private async loadBytes(input: ArrayBuffer | Blob, ref: string, options: WebGLTextureLoadOptions): Promise<void> {
+        let blob: Blob;
+        if (input instanceof ArrayBuffer) {
+            ResourceLoader.registerResource(ref, input);
+            blob = new Blob([input]);
+        } else {
+            const bytes = await input.arrayBuffer();
+            ResourceLoader.registerResource(ref, bytes);
+            blob = new Blob([bytes], { type: input.type });
+        }
         if (typeof createImageBitmap !== "undefined") {
             const bitmap = await createImageBitmap(blob);
-            this.source = bitmap;
-            this.width = bitmap.width;
-            this.height = bitmap.height;
+            this.prepareLoadedSource(bitmap, options);
             return;
         }
-        if (typeof Image === "undefined") {
-            return;
+        if (typeof globalThis.Image === "undefined") {
+            throw new SlickException(`Unable to decode image without ImageBitmap or HTMLImageElement: ${ref}`);
         }
-        const element = new Image();
+        const element = new globalThis.Image();
         const url = URL.createObjectURL(blob);
         try {
             await new Promise<void>((resolve, reject) => {
@@ -113,11 +194,43 @@ export class WebGLTextureResource {
                 element.onerror = () => reject(new Error(`Unable to decode image: ${ref}`));
                 element.src = url;
             });
-            this.source = element;
-            this.width = element.width;
-            this.height = element.height;
+            this.prepareLoadedSource(element, options);
         } finally {
             URL.revokeObjectURL(url);
+        }
+    }
+
+    private prepareLoadedSource(source: TextureSource, options: WebGLTextureLoadOptions): void {
+        this.width = sourceWidth(source);
+        this.height = sourceHeight(source);
+        if (this.width <= 0 || this.height <= 0) {
+            this.source = source;
+            return;
+        }
+
+        try {
+            const canvas = createCanvasSource(this.width, this.height);
+            const context = get2dContext(canvas);
+            context.drawImage(source, 0, 0);
+            const imageData = context.getImageData(0, 0, this.width, this.height);
+            if (options.transparent) {
+                const tr = colorByte(options.transparent.r);
+                const tg = colorByte(options.transparent.g);
+                const tb = colorByte(options.transparent.b);
+                for (let i = 0; i < imageData.data.length; i += 4) {
+                    if (imageData.data[i] === tr && imageData.data[i + 1] === tg && imageData.data[i + 2] === tb) {
+                        imageData.data[i + 3] = 0;
+                    }
+                }
+                context.putImageData(imageData, 0, 0);
+                this.source = canvas;
+            } else {
+                this.source = source;
+            }
+            this.pixelData = new Uint8ClampedArray(imageData.data);
+        } catch {
+            this.source = source;
+            this.pixelData = null;
         }
     }
 }

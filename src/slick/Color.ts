@@ -8,7 +8,36 @@ function clamp01(value: number): number {
 }
 
 function normalizeChannel(value: number): number {
-    return value > 1 ? clamp01(value / 255) : clamp01(value);
+    return value > 1 ? value / 255 : Math.min(value, 1);
+}
+
+function decodeInteger(value: string): number {
+    let text = value.trim();
+    let sign = 1;
+    if (text.startsWith("-")) {
+        sign = -1;
+        text = text.substring(1);
+    } else if (text.startsWith("+")) {
+        text = text.substring(1);
+    }
+
+    let radix = 10;
+    if (text.startsWith("0x") || text.startsWith("0X")) {
+        radix = 16;
+        text = text.substring(2);
+    } else if (text.startsWith("#")) {
+        radix = 16;
+        text = text.substring(1);
+    } else if (text.startsWith("0") && text.length > 1) {
+        radix = 8;
+        text = text.substring(1);
+    }
+
+    const parsed = Number.parseInt(text, radix);
+    if (Number.isNaN(parsed)) {
+        throw new Error(`For input string: "${value}"`);
+    }
+    return sign * parsed;
 }
 
 /**
@@ -26,10 +55,10 @@ export class Color {
     public static readonly black = new Color(0, 0, 0, 1);
     public static readonly gray = new Color(0.5, 0.5, 0.5, 1);
     public static readonly cyan = new Color(0, 1, 1, 1);
-    public static readonly darkGray = new Color(0.25, 0.25, 0.25, 1);
-    public static readonly lightGray = new Color(0.75, 0.75, 0.75, 1);
-    public static readonly pink = new Color(1, 0.68, 0.68, 1);
-    public static readonly orange = new Color(1, 0.78, 0, 1);
+    public static readonly darkGray = new Color(0.3, 0.3, 0.3, 1);
+    public static readonly lightGray = new Color(0.7, 0.7, 0.7, 1);
+    public static readonly pink = new Color(255, 175, 175, 255);
+    public static readonly orange = new Color(255, 200, 0, 255);
     public static readonly magenta = new Color(1, 0, 1, 1);
 
     public r: number;
@@ -40,14 +69,21 @@ export class Color {
     public constructor(r: number, g: number, b: number);
     public constructor(r: number, g: number, b: number, a: number);
     public constructor(packedInteger: number);
+    public constructor(color: Color);
     /**
      * Java Slick2D counterpart: Color(float, float, float, float) and Color(int).
      *
      * Creates a mutable RGBA color. Packed integers are interpreted as 0xAARRGGBB;
      * an alpha byte of 0 means 255 for compatibility with the audited code.
      */
-    public constructor(rOrPacked: number, g?: number, b?: number, a?: number) {
-        if (g === undefined || b === undefined) {
+    public constructor(rOrPackedOrColor: number | Color, g?: number, b?: number, a?: number) {
+        if (rOrPackedOrColor instanceof Color) {
+            this.r = rOrPackedOrColor.r;
+            this.g = rOrPackedOrColor.g;
+            this.b = rOrPackedOrColor.b;
+            this.a = rOrPackedOrColor.a;
+        } else if (g === undefined || b === undefined) {
+            const rOrPacked = rOrPackedOrColor;
             const packed = rOrPacked >>> 0;
             const alphaByte = (packed >>> 24) & 0xFF;
             this.a = (alphaByte === 0 ? 255 : alphaByte) / 255;
@@ -55,11 +91,20 @@ export class Color {
             this.g = ((packed >>> 8) & 0xFF) / 255;
             this.b = (packed & 0xFF) / 255;
         } else {
-            this.r = normalizeChannel(rOrPacked);
+            this.r = normalizeChannel(rOrPackedOrColor);
             this.g = normalizeChannel(g);
             this.b = normalizeChannel(b);
             this.a = normalizeChannel(a ?? 1);
         }
+    }
+
+    /**
+     * Java Slick2D counterpart: Color.decode(String).
+     *
+     * Decodes decimal, octal, `0x`, `0X`, and `#` integer strings.
+     */
+    public static decode(nm: string): Color {
+        return new Color(decodeInteger(nm));
     }
 
     /**
@@ -74,25 +119,25 @@ export class Color {
     /**
      * Java Slick2D counterpart: Color.add(Color).
      *
-     * Adds another color into this color, clamped to 0..1.
+     * Adds another color into this color.
      */
     public add(c: Color): void {
-        this.r = clamp01(this.r + c.r);
-        this.g = clamp01(this.g + c.g);
-        this.b = clamp01(this.b + c.b);
-        this.a = clamp01(this.a + c.a);
+        this.r += c.r;
+        this.g += c.g;
+        this.b += c.b;
+        this.a += c.a;
     }
 
     /**
      * Java Slick2D counterpart: Color.scale(float).
      *
-     * Multiplies this color in place by a scalar, clamped to 0..1.
+     * Multiplies this color in place by a scalar.
      */
     public scale(value: number): void {
-        this.r = clamp01(this.r * value);
-        this.g = clamp01(this.g * value);
-        this.b = clamp01(this.b * value);
-        this.a = clamp01(this.a * value);
+        this.r *= value;
+        this.g *= value;
+        this.b *= value;
+        this.a *= value;
     }
 
     /**
@@ -109,11 +154,12 @@ export class Color {
      *
      * Returns a brighter copy.
      */
-    public brighter(): Color {
+    public brighter(scale = 0.2): Color {
+        const factor = scale + 1;
         return new Color(
-            clamp01(this.r / 0.7),
-            clamp01(this.g / 0.7),
-            clamp01(this.b / 0.7),
+            this.r * factor,
+            this.g * factor,
+            this.b * factor,
             this.a
         );
     }
@@ -123,8 +169,9 @@ export class Color {
      *
      * Returns a darker copy.
      */
-    public darker(): Color {
-        return new Color(this.r * 0.7, this.g * 0.7, this.b * 0.7, this.a);
+    public darker(scale = 0.5): Color {
+        const factor = 1 - scale;
+        return new Color(this.r * factor, this.g * factor, this.b * factor, this.a);
     }
 
     /**
@@ -139,10 +186,10 @@ export class Color {
     /**
      * Java Slick2D counterpart: Color.hashCode().
      *
-     * Returns a packed 32-bit RGBA-ish value for map keys.
+     * Returns Slick2D's legacy hash based on truncated component sum.
      */
     public hashCode(): number {
-        return (this.toInt() | 0);
+        return Math.trunc(this.r + this.g + this.b + this.a) * 255;
     }
 
     /**
@@ -165,6 +212,60 @@ export class Color {
      */
     public copy(): Color {
         return new Color(this.r, this.g, this.b, this.a);
+    }
+
+    /** Java Slick2D counterpart: Color.getRed(). */
+    public getRed(): number {
+        return Math.trunc(this.r * 255);
+    }
+
+    /** Java Slick2D counterpart: Color.getGreen(). */
+    public getGreen(): number {
+        return Math.trunc(this.g * 255);
+    }
+
+    /** Java Slick2D counterpart: Color.getBlue(). */
+    public getBlue(): number {
+        return Math.trunc(this.b * 255);
+    }
+
+    /** Java Slick2D counterpart: Color.getAlpha(). */
+    public getAlpha(): number {
+        return Math.trunc(this.a * 255);
+    }
+
+    /** Java Slick2D counterpart: Color.getRedByte(). */
+    public getRedByte(): number {
+        return this.getRed();
+    }
+
+    /** Java Slick2D counterpart: Color.getGreenByte(). */
+    public getGreenByte(): number {
+        return this.getGreen();
+    }
+
+    /** Java Slick2D counterpart: Color.getBlueByte(). */
+    public getBlueByte(): number {
+        return this.getBlue();
+    }
+
+    /** Java Slick2D counterpart: Color.getAlphaByte(). */
+    public getAlphaByte(): number {
+        return this.getAlpha();
+    }
+
+    /** Java Slick2D counterpart: Color.addToCopy(Color). */
+    public addToCopy(c: Color): Color {
+        const copy = new Color(this.r, this.g, this.b, this.a);
+        copy.add(c);
+        return copy;
+    }
+
+    /** Java Slick2D counterpart: Color.scaleCopy(float). */
+    public scaleCopy(value: number): Color {
+        const copy = new Color(this.r, this.g, this.b, this.a);
+        copy.scale(value);
+        return copy;
     }
 
     /**

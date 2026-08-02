@@ -10,6 +10,7 @@ import type { WebGLTextureResource } from "./WebGLTextureResource.js";
 
 type ImageInternals = {
     __getTextureResource(): WebGLTextureResource | null;
+    __getCornerColors(): [Color, Color, Color, Color] | null;
 };
 
 const SOLID_VERTEX = `#version 300 es
@@ -29,10 +30,13 @@ void main() {
 const TEXTURE_VERTEX = `#version 300 es
 in vec2 a_position;
 in vec2 a_texCoord;
+in vec4 a_color;
 out vec2 v_texCoord;
+out vec4 v_color;
 void main() {
     gl_Position = vec4(a_position, 0.0, 1.0);
     v_texCoord = a_texCoord;
+    v_color = a_color;
 }`;
 
 const TEXTURE_FRAGMENT = `#version 300 es
@@ -40,9 +44,10 @@ precision mediump float;
 uniform sampler2D u_texture;
 uniform vec4 u_color;
 in vec2 v_texCoord;
+in vec4 v_color;
 out vec4 outColor;
 void main() {
-    outColor = texture(u_texture, v_texCoord) * u_color;
+    outColor = texture(u_texture, v_texCoord) * v_color * u_color;
 }`;
 
 /**
@@ -205,13 +210,18 @@ export class WebGLRenderer implements RenderBackend, SGL {
         const p2 = this.toClip(...transformPoint(matrix, x2, y));
         const p3 = this.toClip(...transformPoint(matrix, x2, y2));
         const p4 = this.toClip(...transformPoint(matrix, x, y2));
+        const cornerColors = (image as unknown as ImageInternals).__getCornerColors?.() ?? null;
+        const topLeft = cornerColors?.[0] ?? Color.white;
+        const topRight = cornerColors?.[1] ?? Color.white;
+        const bottomRight = cornerColors?.[2] ?? Color.white;
+        const bottomLeft = cornerColors?.[3] ?? Color.white;
         const vertices = new Float32Array([
-            p1[0], p1[1], u1, v1,
-            p2[0], p2[1], u2, v1,
-            p3[0], p3[1], u2, v2,
-            p1[0], p1[1], u1, v1,
-            p3[0], p3[1], u2, v2,
-            p4[0], p4[1], u1, v2
+            p1[0], p1[1], u1, v1, topLeft.r, topLeft.g, topLeft.b, topLeft.a,
+            p2[0], p2[1], u2, v1, topRight.r, topRight.g, topRight.b, topRight.a,
+            p3[0], p3[1], u2, v2, bottomRight.r, bottomRight.g, bottomRight.b, bottomRight.a,
+            p1[0], p1[1], u1, v1, topLeft.r, topLeft.g, topLeft.b, topLeft.a,
+            p3[0], p3[1], u2, v2, bottomRight.r, bottomRight.g, bottomRight.b, bottomRight.a,
+            p4[0], p4[1], u1, v2, bottomLeft.r, bottomLeft.g, bottomLeft.b, bottomLeft.a
         ]);
         gl.useProgram(textureProgram.program);
         gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -219,10 +229,13 @@ export class WebGLRenderer implements RenderBackend, SGL {
         gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STREAM_DRAW);
         const position = textureProgram.getAttribLocation(gl, "a_position");
         const texCoord = textureProgram.getAttribLocation(gl, "a_texCoord");
+        const colorAttrib = textureProgram.getAttribLocation(gl, "a_color");
         gl.enableVertexAttribArray(position);
-        gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 16, 0);
+        gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 32, 0);
         gl.enableVertexAttribArray(texCoord);
-        gl.vertexAttribPointer(texCoord, 2, gl.FLOAT, false, 16, 8);
+        gl.vertexAttribPointer(texCoord, 2, gl.FLOAT, false, 32, 8);
+        gl.enableVertexAttribArray(colorAttrib);
+        gl.vertexAttribPointer(colorAttrib, 4, gl.FLOAT, false, 32, 16);
         const colorLocation = textureProgram.getUniformLocation(gl, "u_color");
         gl.uniform4f(colorLocation, color.r, color.g, color.b, color.a * alpha * this.globalAlphaScale);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -333,6 +346,18 @@ export class WebGLRenderer implements RenderBackend, SGL {
             return;
         }
         gl.readPixels(x, this.height - y - height, width, height, gl.RGBA, gl.UNSIGNED_BYTE, target);
+    }
+
+    /** Binds a decoded WebGL texture resource to the active texture unit. */
+    public bindTextureResource(resource: WebGLTextureResource): void {
+        const gl = this.gl;
+        if (!gl) {
+            return;
+        }
+        const texture = resource.ensureTexture(gl);
+        if (texture) {
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+        }
     }
 
     /** Handles browser WebGL context loss. */

@@ -1,5 +1,6 @@
 import type { Color } from "../Color.js";
 import type { Image } from "../Image.js";
+import type { WebGLTextureResource } from "./WebGLTextureResource.js";
 import type { WebGLRenderTarget } from "./WebGLRenderTarget.js";
 
 export type Matrix3 = [
@@ -37,6 +38,7 @@ export interface RenderBackend {
     scale(x: number, y: number): void;
     rotate(x: number, y: number, angle: number): void;
     readPixels(x: number, y: number, width: number, height: number, target: Uint8Array): void;
+    bindTextureResource(resource: WebGLTextureResource): void;
     handleContextLost(): void;
     handleContextRestored(): void;
     dispose(): void;

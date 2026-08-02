@@ -34,8 +34,8 @@ export class PackedSpriteSheet {
     public constructor(def: string, filter: number);
     public constructor(def: string, filter: number, trans: Color);
     /** Java Slick2D counterpart: PackedSpriteSheet constructors. */
-    public constructor(def: string, filterOrTrans: number | Color = Image.FILTER_LINEAR, trans?: Color) {
-        const filter = typeof filterOrTrans === "number" ? filterOrTrans : Image.FILTER_LINEAR;
+    public constructor(def: string, filterOrTrans: number | Color = Image.FILTER_NEAREST, trans?: Color) {
+        const filter = typeof filterOrTrans === "number" ? filterOrTrans : Image.FILTER_NEAREST;
         const transparent = filterOrTrans instanceof Color ? filterOrTrans : trans;
         const textBytes = ResourceLoader.getResourceAsStream(def);
         if (!textBytes) {
@@ -58,7 +58,7 @@ export class PackedSpriteSheet {
     public getSprite(name: string): Image {
         const section = this.sections.get(name);
         if (!section) {
-            throw new SlickException(`Unknown sprite from packed sheet: ${name}`);
+            throw new Error(`Unknown sprite from packed sheet: ${name}`);
         }
         return this.fullImage.getSubImage(section.x, section.y, section.width, section.height);
     }
@@ -67,7 +67,7 @@ export class PackedSpriteSheet {
     public getSpriteSheet(name: string): SpriteSheet {
         const section = this.sections.get(name);
         if (!section) {
-            throw new SlickException(`Unknown sprite from packed sheet: ${name}`);
+            throw new Error(`Unknown sprite from packed sheet: ${name}`);
         }
         const tileWidth = section.width / section.tilesx;
         const tileHeight = section.height / section.tilesy;
@@ -76,15 +76,15 @@ export class PackedSpriteSheet {
 
     private parse(lines: string[]): void {
         for (let i = 0; i < lines.length;) {
-            if (lines[i] === undefined) {
-                break;
-            }
-            i++;
             while (i < lines.length && lines[i].trim() === "") {
                 i++;
             }
-            if (i + 6 >= lines.length) {
+            if (i >= lines.length) {
                 break;
+            }
+            i++;
+            if (i + 8 >= lines.length) {
+                throw new SlickException("Failed to process definitions file - invalid format?");
             }
             const section: PackedSection = {
                 name: lines[i++].trim(),
@@ -96,9 +96,17 @@ export class PackedSpriteSheet {
                 tilesy: Math.max(1, Number.parseInt(lines[i++].trim(), 10))
             };
             i += 2;
-            if (section.name.length > 0 && Number.isFinite(section.x) && Number.isFinite(section.y)) {
-                this.sections.set(section.name, section);
+            i++;
+            if (section.name.length === 0
+                || !Number.isFinite(section.x)
+                || !Number.isFinite(section.y)
+                || !Number.isFinite(section.width)
+                || !Number.isFinite(section.height)
+                || !Number.isFinite(section.tilesx)
+                || !Number.isFinite(section.tilesy)) {
+                throw new SlickException("Failed to process definitions file - invalid format?");
             }
+            this.sections.set(section.name, section);
         }
     }
 }

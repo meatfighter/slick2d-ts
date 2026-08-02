@@ -28,6 +28,10 @@ export class Sound {
             this.ref = ref ?? "sound";
             if (refOrUrlOrInput instanceof ArrayBuffer) {
                 ResourceLoader.registerResource(this.ref, refOrUrlOrInput);
+            } else {
+                void ResourceLoader.track(refOrUrlOrInput.arrayBuffer().then((bytes) => {
+                    ResourceLoader.registerResource(this.ref, bytes);
+                }));
             }
         }
     }

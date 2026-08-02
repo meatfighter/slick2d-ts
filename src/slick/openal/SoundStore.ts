@@ -31,6 +31,7 @@ export class SoundStore {
     private musicBus: GainNode | null = null;
     private buffers = new Map<string, Promise<AudioBuffer>>();
     private activeHandles = new Set<AudioPlaybackHandle>();
+    private musicHandles = new Set<AudioPlaybackHandle>();
 
     /** Java Slick2D counterpart: SoundStore.get(). */
     public static get(): SoundStore {
@@ -43,6 +44,7 @@ export class SoundStore {
             handle.stop();
         }
         this.activeHandles.clear();
+        this.musicHandles.clear();
     }
 
     /** Java Slick2D counterpart: SoundStore.disable(). */
@@ -129,7 +131,7 @@ export class SoundStore {
 
     /** Java Slick2D counterpart: SoundStore.isMusicPlaying(). */
     public isMusicPlaying(): boolean {
-        return Array.from(this.activeHandles).some((handle) => handle.playing());
+        return Array.from(this.musicHandles).some((handle) => handle.playing());
     }
 
     /** Java Slick2D counterpart: SoundStore.stopSoundEffect(int). */
@@ -213,6 +215,7 @@ export class SoundStore {
                 }
                 playing = false;
                 this.activeHandles.delete(handle);
+                this.musicHandles.delete(handle);
             },
             playing: () => playing
         };
@@ -234,6 +237,7 @@ export class SoundStore {
                 if (!source?.loop) {
                     playing = false;
                     this.activeHandles.delete(handle);
+                    this.musicHandles.delete(handle);
                     onEnded?.();
                 }
             };
@@ -242,6 +246,7 @@ export class SoundStore {
         }).catch(() => {
             playing = false;
             this.activeHandles.delete(handle);
+            this.musicHandles.delete(handle);
         });
         return handle;
     }
@@ -249,10 +254,12 @@ export class SoundStore {
     /** Browser parity helper: tracks an externally-created Web Audio handle. */
     public track(handle: AudioPlaybackHandle): void {
         this.activeHandles.add(handle);
+        this.musicHandles.add(handle);
     }
 
     /** Browser parity helper: stops tracking an externally-created Web Audio handle. */
     public untrack(handle: AudioPlaybackHandle): void {
         this.activeHandles.delete(handle);
+        this.musicHandles.delete(handle);
     }
 }

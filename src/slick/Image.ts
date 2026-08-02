@@ -23,6 +23,32 @@ function createCanvasSource(width: number, height: number): CanvasSource {
     throw new SlickException("Image(width, height) requires a browser canvas implementation");
 }
 
+function createCanvasFromSlickImageData(data: SlickImageData): CanvasSource {
+    const texWidth = data.getTexWidth();
+    const texHeight = data.getTexHeight();
+    const canvas = createCanvasSource(texWidth, texHeight);
+    const context = canvas.getContext("2d");
+    if (!context || typeof globalThis.ImageData === "undefined") {
+        throw new SlickException("Image(ImageData) requires browser ImageData and canvas 2D support");
+    }
+    const depth = data.getDepth();
+    const components = depth === 24 ? 3 : 4;
+    const source = data.getImageBufferData();
+    const pixels = new Uint8ClampedArray(texWidth * texHeight * 4);
+    for (let i = 0, j = 0; i < pixels.length; i += 4, j += components) {
+        pixels[i] = source[j] ?? 0;
+        pixels[i + 1] = source[j + 1] ?? 0;
+        pixels[i + 2] = source[j + 2] ?? 0;
+        pixels[i + 3] = components === 4 ? source[j + 3] ?? 255 : 255;
+    }
+    context.putImageData(new globalThis.ImageData(pixels, texWidth, texHeight), 0, 0);
+    return canvas;
+}
+
+function normalizeDegrees(angle: number): number {
+    return angle % 360;
+}
+
 /**
  * Java Slick2D counterpart: org.newdawn.slick.Image.
  *
@@ -36,18 +62,24 @@ export class Image implements Renderable {
     public static readonly FILTER_LINEAR = 1;
     public static readonly FILTER_NEAREST = 2;
 
+    private static inUse: Image | null = null;
+
     private textureResource: WebGLTextureResource;
     private renderTarget: WebGLRenderTarget | null = null;
     private sourceX = 0;
     private sourceY = 0;
     private sourceWidth = 0;
     private sourceHeight = 0;
+    private displayWidth = 0;
+    private displayHeight = 0;
     private flipHorizontal = false;
     private flipVertical = false;
+    private inverted = false;
     private alpha = 1;
     private rotation = 0;
     private centerX = 0;
     private centerY = 0;
+    private centerSet = false;
     private imageName: string | null = null;
     private destroyed = false;
     private cornerColors = new Map<number, Color>();
@@ -63,36 +95,64 @@ export class Image implements Renderable {
     public constructor(input: ArrayBuffer | Blob, ref: string, flipped: boolean, filter: number);
     public constructor(data: SlickImageData);
     public constructor(data: SlickImageData, filter: number);
+    public constructor(texture: WebGLTextureResource);
+    public constructor(image: Image);
     /**
      * Java Slick2D counterpart: Image constructors.
      *
      * Preserves Java overload shapes while routing browser loading through the
      * resource and WebGL texture systems.
      */
-    public constructor(a: string | number | ArrayBuffer | Blob | SlickImageData, b?: Color | boolean | number | string, c?: boolean | number, d?: number | Color) {
+    public constructor(a: string | number | ArrayBuffer | Blob | SlickImageData | WebGLTextureResource | Image, b?: Color | boolean | number | string, c?: boolean | number, d?: number | Color) {
         let filter: number;
         let width = 0;
         let height = 0;
 
-        if (typeof a === "string") {
-            this.flipHorizontal = typeof b === "boolean" ? b : false;
+        if (a instanceof Image) {
+            this.textureResource = a.textureResource;
+            this.renderTarget = null;
+            this.sourceX = a.sourceX;
+            this.sourceY = a.sourceY;
+            this.sourceWidth = a.getSourceWidth();
+            this.sourceHeight = a.getSourceHeight();
+            this.displayWidth = a.getWidth();
+            this.displayHeight = a.getHeight();
+            this.flipHorizontal = a.flipHorizontal;
+            this.flipVertical = a.flipVertical;
+            this.inverted = a.inverted;
+            this.centerX = a.centerX;
+            this.centerY = a.centerY;
+            this.centerSet = a.centerSet;
+            this.imageName = a.imageName;
+            return;
+        } else if (typeof a === "string") {
+            const flipped = typeof b === "boolean" ? b : false;
+            const transparent = b instanceof Color ? b : d instanceof Color ? d : null;
+            this.flipVertical = flipped;
+            this.inverted = flipped;
             filter = typeof c === "number" ? c : Image.FILTER_LINEAR;
-            this.textureResource = new WebGLTextureResource(a, filter);
+            this.textureResource = new WebGLTextureResource(a, filter, { transparent });
         } else if (typeof a === "number") {
             width = a;
             height = typeof b === "number" ? b : 0;
-            filter = typeof c === "number" ? c : Image.FILTER_LINEAR;
+            filter = typeof c === "number" ? c : Image.FILTER_NEAREST;
             const canvas = createCanvasSource(width, height);
             this.textureResource = new WebGLTextureResource(canvas, filter, null);
             this.renderTarget = new WebGLRenderTarget(width, height, this.textureResource);
         } else if (a instanceof ArrayBuffer || a instanceof Blob) {
             const ref = typeof b === "string" ? b : "stream";
+            const flipped = typeof c === "boolean" ? c : false;
+            this.flipVertical = flipped;
+            this.inverted = flipped;
             filter = typeof d === "number" ? d : Image.FILTER_LINEAR;
-            const resource = new WebGLTextureResource(ref, filter);
-            this.textureResource = resource;
+            this.textureResource = new WebGLTextureResource(a, filter, ref);
+        } else if (a instanceof WebGLTextureResource) {
+            this.textureResource = a;
+            width = a.width;
+            height = a.height;
         } else {
             filter = typeof b === "number" ? b : Image.FILTER_LINEAR;
-            const canvas = createCanvasSource(a.getTexWidth(), a.getTexHeight());
+            const canvas = createCanvasFromSlickImageData(a);
             this.textureResource = new WebGLTextureResource(canvas, filter, null);
             width = a.getWidth();
             height = a.getHeight();
@@ -100,11 +160,13 @@ export class Image implements Renderable {
 
         this.sourceWidth = width || this.textureResource.width;
         this.sourceHeight = height || this.textureResource.height;
+        this.displayWidth = this.sourceWidth;
+        this.displayHeight = this.sourceHeight;
         this.centerX = this.getWidth() / 2;
         this.centerY = this.getHeight() / 2;
     }
 
-    private static fromShared(resource: WebGLTextureResource, sourceX: number, sourceY: number, sourceWidth: number, sourceHeight: number, flipHorizontal: boolean, flipVertical: boolean): Image {
+    private static fromShared(resource: WebGLTextureResource, sourceX: number, sourceY: number, sourceWidth: number, sourceHeight: number, flipHorizontal: boolean, flipVertical: boolean, displayWidth: number = sourceWidth, displayHeight: number = sourceHeight, inverted: boolean = flipVertical): Image {
         const image = Object.create(Image.prototype) as Image;
         image.textureResource = resource;
         image.renderTarget = null;
@@ -112,12 +174,16 @@ export class Image implements Renderable {
         image.sourceY = sourceY;
         image.sourceWidth = sourceWidth;
         image.sourceHeight = sourceHeight;
+        image.displayWidth = displayWidth;
+        image.displayHeight = displayHeight;
         image.flipHorizontal = flipHorizontal;
         image.flipVertical = flipVertical;
+        image.inverted = inverted;
         image.alpha = 1;
         image.rotation = 0;
-        image.centerX = sourceWidth / 2;
-        image.centerY = sourceHeight / 2;
+        image.centerX = displayWidth / 2;
+        image.centerY = displayHeight / 2;
+        image.centerSet = false;
         image.imageName = null;
         image.destroyed = false;
         image.cornerColors = new Map<number, Color>();
@@ -182,7 +248,7 @@ export class Image implements Renderable {
 
     /** Java Slick2D counterpart: Image.bind(). */
     public bind(): void {
-        Color.white.bind();
+        Renderer.getBackend().bindTextureResource(this.textureResource);
     }
 
     /** Java Slick2D counterpart: Image.draw(). */
@@ -210,8 +276,8 @@ export class Image implements Renderable {
         let drawH = this.getHeight();
         let srcX = this.sourceX;
         let srcY = this.sourceY;
-        let srcW = this.getWidth();
-        let srcH = this.getHeight();
+        let srcW = this.getSourceWidth();
+        let srcH = this.getSourceHeight();
         let tint: Color | null = null;
 
         if (a instanceof Color) {
@@ -231,8 +297,6 @@ export class Image implements Renderable {
             srcY = this.sourceY + b;
             srcW = c - a;
             srcH = d - b;
-            drawW = srcW;
-            drawH = srcH;
         } else if (typeof a === "number" && typeof b === "number" && typeof c === "number" && typeof d === "number" && typeof e === "number" && typeof f === "number") {
             drawW = a - drawX;
             drawH = b - drawY;
@@ -274,21 +338,22 @@ export class Image implements Renderable {
     public setCenterOfRotation(x: number, y: number): void {
         this.centerX = x;
         this.centerY = y;
+        this.centerSet = true;
     }
 
     /** Java Slick2D counterpart: Image.getCenterOfRotationX(). */
     public getCenterOfRotationX(): number {
-        return this.centerX;
+        return this.centerSet ? this.centerX : this.getWidth() / 2;
     }
 
     /** Java Slick2D counterpart: Image.getCenterOfRotationY(). */
     public getCenterOfRotationY(): number {
-        return this.centerY;
+        return this.centerSet ? this.centerY : this.getHeight() / 2;
     }
 
     /** Java Slick2D counterpart: Image.setRotation(float). */
     public setRotation(angle: number): void {
-        this.rotation = angle;
+        this.rotation = normalizeDegrees(angle);
     }
 
     /** Java Slick2D counterpart: Image.getRotation(). */
@@ -303,12 +368,12 @@ export class Image implements Renderable {
 
     /** Java Slick2D counterpart: Image.setAlpha(float). */
     public setAlpha(alpha: number): void {
-        this.alpha = Math.max(0, Math.min(1, alpha));
+        this.alpha = alpha;
     }
 
     /** Java Slick2D counterpart: Image.rotate(float). */
     public rotate(angle: number): void {
-        this.rotation += angle;
+        this.rotation = normalizeDegrees(this.rotation + angle);
     }
 
     /** Java Slick2D counterpart: Image.getSubImage(int, int, int, int). */
@@ -331,21 +396,22 @@ export class Image implements Renderable {
 
     /** Java Slick2D counterpart: Image.getWidth(). */
     public getWidth(): number {
-        return this.sourceWidth || this.textureResource.width;
+        return this.displayWidth || this.sourceWidth || this.textureResource.width;
     }
 
     /** Java Slick2D counterpart: Image.getHeight(). */
     public getHeight(): number {
-        return this.sourceHeight || this.textureResource.height;
+        return this.displayHeight || this.sourceHeight || this.textureResource.height;
     }
 
     /** Java Slick2D counterpart: Image.copy(). */
     public copy(): Image {
-        const copy = Image.fromShared(this.textureResource, this.sourceX, this.sourceY, this.getWidth(), this.getHeight(), this.flipHorizontal, this.flipVertical);
+        const copy = Image.fromShared(this.textureResource, this.sourceX, this.sourceY, this.getSourceWidth(), this.getSourceHeight(), this.flipHorizontal, this.flipVertical, this.getWidth(), this.getHeight(), this.inverted);
         copy.alpha = this.alpha;
         copy.rotation = this.rotation;
         copy.centerX = this.centerX;
         copy.centerY = this.centerY;
+        copy.centerSet = this.centerSet;
         copy.imageName = this.imageName;
         copy.cornerColors = new Map(Array.from(this.cornerColors.entries()).map(([key, value]) => [key, value.copy()]));
         return copy;
@@ -357,14 +423,21 @@ export class Image implements Renderable {
     public getScaledCopy(width: number, height: number): Image;
     public getScaledCopy(a: number, b?: number): Image {
         const copy = this.copy();
-        copy.sourceWidth = b === undefined ? this.getWidth() * a : a;
-        copy.sourceHeight = b === undefined ? this.getHeight() * a : b;
+        copy.displayWidth = b === undefined ? Math.trunc(this.getWidth() * a) : a;
+        copy.displayHeight = b === undefined ? Math.trunc(this.getHeight() * a) : b;
+        if (!copy.centerSet) {
+            copy.centerX = copy.displayWidth / 2;
+            copy.centerY = copy.displayHeight / 2;
+        }
         return copy;
     }
 
     /** Java Slick2D counterpart: Image.ensureInverted(). */
     public ensureInverted(): void {
-        this.flipVertical = !this.flipVertical;
+        if (!this.inverted) {
+            this.flipVertical = !this.flipVertical;
+            this.inverted = true;
+        }
     }
 
     /** Java Slick2D counterpart: Image.getFlippedCopy(boolean, boolean). */
@@ -372,16 +445,27 @@ export class Image implements Renderable {
         const copy = this.copy();
         copy.flipHorizontal = this.flipHorizontal !== flipHorizontal;
         copy.flipVertical = this.flipVertical !== flipVertical;
+        copy.inverted = copy.flipVertical;
         return copy;
     }
 
     /** Java Slick2D counterpart: Image.endUse(). */
     public endUse(): void {
+        if (Image.inUse !== this) {
+            throw new SlickException("The sprite sheet is not currently in use");
+        }
+        Image.inUse = null;
         Renderer.get().flush();
     }
 
     /** Java Slick2D counterpart: Image.startUse(). */
     public startUse(): void {
+        if (Image.inUse !== null) {
+            throw new SlickException("Attempt to start use of a sprite sheet before ending use with another - see endUse()");
+        }
+        Image.inUse = this;
+        Color.white.bind();
+        this.bind();
         Renderer.get().flush();
     }
 
@@ -402,9 +486,17 @@ export class Image implements Renderable {
 
     /** Java Slick2D counterpart: Image.getColor(int, int). */
     public getColor(x: number, y: number): Color {
-        const bytes = new Uint8Array(4);
-        Renderer.getBackend().readPixels(this.sourceX + x, this.sourceY + y, 1, 1, bytes);
-        return new Color(bytes[0], bytes[1], bytes[2], bytes[3]);
+        const sx = Math.trunc(x);
+        const sy = Math.trunc(y);
+        const sourceWidth = this.getSourceWidth();
+        const sourceHeight = this.getSourceHeight();
+        const pixelX = this.flipHorizontal ? this.sourceX + sourceWidth - 1 - sx : this.sourceX + sx;
+        const pixelY = this.flipVertical ? this.sourceY + sourceHeight - 1 - sy : this.sourceY + sy;
+        const pixel = this.textureResource.getPixel(pixelX, pixelY);
+        if (!pixel) {
+            throw new SlickException("Image pixel data is not available; wait for resources to finish loading before calling getColor");
+        }
+        return new Color(pixel[0], pixel[1], pixel[2], pixel[3]);
     }
 
     /** Java Slick2D counterpart: Image.isDestroyed(). */
@@ -432,12 +524,25 @@ export class Image implements Renderable {
         return this.renderTarget;
     }
 
+    /** Internal renderer hook returning Slick per-corner tint colors. */
+    public __getCornerColors(): [Color, Color, Color, Color] | null {
+        if (this.cornerColors.size === 0) {
+            return null;
+        }
+        return [
+            this.cornerColors.get(Image.TOP_LEFT) ?? Color.white,
+            this.cornerColors.get(Image.TOP_RIGHT) ?? Color.white,
+            this.cornerColors.get(Image.BOTTOM_RIGHT) ?? Color.white,
+            this.cornerColors.get(Image.BOTTOM_LEFT) ?? Color.white
+        ];
+    }
+
     private drawInternal(x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, tint: Color | null): void {
         const renderer = Renderer.getBackend();
         const scaleX = width / (this.getWidth() || 1);
         const scaleY = height / (this.getHeight() || 1);
-        const centerX = x + this.centerX * scaleX;
-        const centerY = y + this.centerY * scaleY;
+        const centerX = x + this.getCenterOfRotationX() * scaleX;
+        const centerY = y + this.getCenterOfRotationY() * scaleY;
         renderer.pushTransform();
         if (this.rotation !== 0) {
             renderer.rotate(centerX, centerY, this.rotation);
@@ -454,5 +559,13 @@ export class Image implements Renderable {
         if (this.destroyed) {
             throw new SlickException("Image has been destroyed");
         }
+    }
+
+    private getSourceWidth(): number {
+        return this.sourceWidth || this.textureResource.width;
+    }
+
+    private getSourceHeight(): number {
+        return this.sourceHeight || this.textureResource.height;
     }
 }

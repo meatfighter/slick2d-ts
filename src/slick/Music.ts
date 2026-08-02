@@ -54,6 +54,10 @@ export class Music {
             this.ref = typeof streamingOrRef === "string" ? streamingOrRef : "music";
             if (refOrUrlOrInput instanceof ArrayBuffer) {
                 ResourceLoader.registerResource(this.ref, refOrUrlOrInput);
+            } else {
+                void ResourceLoader.track(refOrUrlOrInput.arrayBuffer().then((bytes) => {
+                    ResourceLoader.registerResource(this.ref, bytes);
+                }));
             }
         }
     }
