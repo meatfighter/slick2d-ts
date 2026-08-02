@@ -1,0 +1,39 @@
+{
+    "name": "slick2d-ts",
+    "version": "0.1.0",
+    "description": "A TypeScript/WebGL parity layer for the Slick2D APIs used by the audited Java games.",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        },
+        "./slick/*": {
+            "types": "./dist/slick/*.d.ts",
+            "import": "./dist/slick/*.js"
+        },
+        "./lwjgl/*": {
+            "types": "./dist/lwjgl/*.d.ts",
+            "import": "./dist/lwjgl/*.js"
+        }
+    },
+    "files": [
+        "dist",
+        "docs",
+        "LICENSE",
+        "README.md"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "lint": "eslint src --ext .ts",
+        "typecheck": "tsc -p tsconfig.json --noEmit"
+    },
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "eslint": "^10.8.0",
+        "typescript": "^5.9.0",
+        "typescript-eslint": "^8.65.0"
+    }
+}
