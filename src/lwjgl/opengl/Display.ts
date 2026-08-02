@@ -43,6 +43,8 @@ export class Display {
             Display.fullscreen = container.isFullscreen();
             Display.created = true;
             Display.closeRequested = false;
+        } else {
+            Display.fullscreen = false;
         }
     }
 
@@ -54,6 +56,14 @@ export class Display {
     /** Browser parity helper: returns the requested frame cap. */
     public static getSyncFrameRate(): number {
         return Display.frameRate;
+    }
+
+    /** Browser parity helper: records a browser-driven display size change. */
+    public static markResized(width?: number, height?: number): void {
+        Display.resized = true;
+        if (width !== undefined && height !== undefined) {
+            Display.currentMode = new DisplayMode(width, height);
+        }
     }
 
     public static create(): void;
@@ -72,6 +82,7 @@ export class Display {
     public static destroy(): void {
         Display.created = false;
         Display.closeRequested = false;
+        Display.fullscreen = false;
     }
 
     /** Java LWJGL counterpart: Display.isCreated(). */
@@ -168,8 +179,18 @@ export class Display {
 
     /** Java LWJGL counterpart: Display.setFullscreen(boolean). */
     public static setFullscreen(fullscreen: boolean): void | Promise<void> {
+        const previousFullscreen = Display.fullscreen;
         Display.fullscreen = fullscreen;
-        return Display.activeContainer?.setFullscreen(fullscreen);
+        const result = Display.activeContainer?.setFullscreen(fullscreen);
+        if (result instanceof Promise) {
+            return result.then(() => {
+                Display.fullscreen = Display.activeContainer?.isFullscreen() ?? fullscreen;
+            }).catch((error) => {
+                Display.fullscreen = previousFullscreen;
+                throw error;
+            });
+        }
+        Display.fullscreen = Display.activeContainer?.isFullscreen() ?? fullscreen;
     }
 
     /** Java LWJGL counterpart: Display.isFullscreen(). */

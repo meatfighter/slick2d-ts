@@ -1,5 +1,6 @@
 import { Mouse } from "../lwjgl/input/Mouse.js";
 import { Cursor } from "../lwjgl/input/Cursor.js";
+import { AL } from "../lwjgl/openal/AL.js";
 import { Display } from "../lwjgl/opengl/Display.js";
 import { Color } from "./Color.js";
 import type { Game } from "./Game.js";
@@ -15,6 +16,26 @@ import { ResourceLoader } from "./util/ResourceLoader.js";
 
 type DomImageData = ImageData;
 export type AppGameContainerErrorHandler = (error: Error) => void;
+type DisplaySnapshot = {
+    width: number;
+    height: number;
+    screenWidth: number;
+    screenHeight: number;
+    fullscreen: boolean;
+    lastWindowedWidth: number;
+    lastWindowedHeight: number;
+    canvasWidth: number;
+    canvasHeight: number;
+    canvasStyleWidth: string;
+    canvasStyleHeight: string;
+};
+type WindowedDisplayMode = {
+    width: number;
+    height: number;
+};
+type ResizeAwareGame = Game & {
+    containerSizeChanged(container: GameContainer): void;
+};
 
 function isCanvas(value: unknown): value is HTMLCanvasElement {
     return typeof HTMLCanvasElement !== "undefined" && value instanceof HTMLCanvasElement;
@@ -22,6 +43,10 @@ function isCanvas(value: unknown): value is HTMLCanvasElement {
 
 function isElement(value: unknown): value is HTMLElement {
     return typeof HTMLElement !== "undefined" && value instanceof HTMLElement;
+}
+
+function isResizeAwareGame(game: Game): game is ResizeAwareGame {
+    return typeof (game as Partial<ResizeAwareGame>).containerSizeChanged === "function";
 }
 
 /**
@@ -42,6 +67,7 @@ export class AppGameContainer extends GameContainer {
     private waitingForResources = false;
     private resourceError: unknown = null;
     private errorHandler: AppGameContainerErrorHandler | null = null;
+    private lastWindowedDisplayMode!: WindowedDisplayMode;
 
     public constructor(game: Game);
     public constructor(game: Game, width: number, height: number, fullscreen: boolean);
@@ -51,6 +77,7 @@ export class AppGameContainer extends GameContainer {
         this.title = game.getTitle();
         this.fullscreen = fullscreen;
         this.setDimensions(width, height);
+        this.lastWindowedDisplayMode = { width, height };
     }
 
     /** Java Slick2D counterpart: AppGameContainer.supportsAlphaInBackBuffer(). */
@@ -71,20 +98,34 @@ export class AppGameContainer extends GameContainer {
 
     /** Java Slick2D counterpart: AppGameContainer.setDisplayMode(int, int, boolean). */
     public setDisplayMode(width: number, height: number, fullscreen: boolean): void | Promise<void> {
+        const snapshot = this.captureDisplaySnapshot();
         this.setDimensions(width, height);
+        if (!fullscreen) {
+            this.setLastWindowedDisplayMode(width, height);
+        }
         if (this.canvas) {
             this.applyCanvasSize(width, height);
         }
         const fullscreenResult = this.setFullscreen(fullscreen);
-        if (fullscreenResult instanceof Promise) {
-            return fullscreenResult.then(() => {
+        const completeDisplayMode = (): void => {
+            if (fullscreen) {
                 if (this.isFullscreen()) {
                     this.applyBrowserDisplaySize();
-                } else {
-                    this.applyCanvasSize(width, height);
                 }
+            } else {
+                this.fullscreen = false;
+                this.applyWindowedDisplayMode(width, height);
+            }
+        };
+        if (fullscreenResult instanceof Promise) {
+            return fullscreenResult.then(completeDisplayMode).catch((error) => {
+                this.restoreDisplaySnapshot(snapshot);
+                throw error instanceof SlickException
+                    ? error
+                    : new SlickException(`Failed to set display mode: ${width}x${height} fullscreen=${fullscreen}`, error);
             });
         }
+        completeDisplayMode();
     }
 
     /** Java Slick2D counterpart: AppGameContainer.isFullscreen(). */
@@ -96,17 +137,39 @@ export class AppGameContainer extends GameContainer {
 
     /** Java Slick2D counterpart: AppGameContainer.setFullscreen(boolean). */
     public override setFullscreen(fullscreen: boolean): void | Promise<void> {
+        const previousFullscreen = this.fullscreen;
         this.fullscreen = fullscreen;
         if (!this.canvas || typeof document === "undefined") {
             return;
         }
         if (fullscreen && document.fullscreenElement !== this.canvas && this.canvas.requestFullscreen) {
             return this.canvas.requestFullscreen()
-                .then(() => this.applyBrowserDisplaySize())
-                .catch(() => undefined);
+                .then(() => {
+                    this.fullscreen = true;
+                    this.applyBrowserDisplaySize();
+                })
+                .catch((error) => {
+                    this.fullscreen = previousFullscreen;
+                    throw new SlickException("Failed to enter fullscreen", error);
+                });
         }
-        if (!fullscreen && document.fullscreenElement && document.exitFullscreen) {
-            return document.exitFullscreen().catch(() => undefined);
+        if (!fullscreen && document.fullscreenElement === this.canvas && document.exitFullscreen) {
+            return document.exitFullscreen()
+                .then(() => {
+                    this.fullscreen = false;
+                    this.applyWindowedDisplayMode();
+                    Mouse.restoreNativeCursorAfterForcedFullscreenExit();
+                })
+                .catch((error) => {
+                    this.fullscreen = previousFullscreen;
+                    throw new SlickException("Failed to exit fullscreen", error);
+                });
+        }
+        if (fullscreen && document.fullscreenElement === this.canvas) {
+            this.applyBrowserDisplaySize();
+        } else if (!fullscreen) {
+            this.applyWindowedDisplayMode();
+            Mouse.restoreNativeCursorAfterForcedFullscreenExit();
         }
     }
 
@@ -140,14 +203,14 @@ export class AppGameContainer extends GameContainer {
             Display.setActiveContainer(this);
             Display.create();
             Display.setTitle(this.title);
-            window.addEventListener("resize", this.handleBrowserResize);
-            document.addEventListener("fullscreenchange", this.handleBrowserResize);
+            window.addEventListener("resize", this.handleWindowResize);
+            document.addEventListener("fullscreenchange", this.handleFullscreenChange);
             Renderer.getBackend().initialize(this.canvas, {
                 alpha: true,
                 antialias: this.multiSample > 0,
                 stencil: GameContainer.stencil
             });
-            SoundStore.get().init();
+            AL.create();
             await this.game.init(this);
             await ResourceLoader.waitForAll();
             this.lastFrameTime = this.now();
@@ -243,16 +306,20 @@ export class AppGameContainer extends GameContainer {
             cancelAnimationFrame(this.animationFrame);
             this.animationFrame = 0;
         }
+        if (typeof document !== "undefined") {
+            this.exitBrowserFullscreenForDestroy();
+        }
         this.input.unbind();
         this.input.setPreventDefaultElement(null);
         Mouse.setElement(null);
         if (typeof window !== "undefined") {
-            window.removeEventListener("resize", this.handleBrowserResize);
+            window.removeEventListener("resize", this.handleWindowResize);
         }
         if (typeof document !== "undefined") {
-            document.removeEventListener("fullscreenchange", this.handleBrowserResize);
+            document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
         }
         Renderer.getBackend().dispose();
+        AL.destroy();
         Display.destroy();
         Display.setActiveContainer(null);
     }
@@ -265,6 +332,9 @@ export class AppGameContainer extends GameContainer {
     /** Browser parity helper used by Display.setDisplayMode. */
     public override setDisplayModeFromDisplay(mode: import("../lwjgl/opengl/DisplayMode.js").DisplayMode): void {
         super.setDisplayModeFromDisplay(mode);
+        if (!this.isFullscreen()) {
+            this.setLastWindowedDisplayMode(mode.getWidth(), mode.getHeight());
+        }
         if (this.canvas) {
             this.applyCanvasSize(mode.getWidth(), mode.getHeight());
         }
@@ -337,11 +407,31 @@ export class AppGameContainer extends GameContainer {
         this.animationFrame = requestAnimationFrame(this.loop);
     }
 
-    private readonly handleBrowserResize = (): void => {
-        if (this.isFullscreen()) {
-            this.applyBrowserDisplaySize();
-        } else if (this.canvas) {
-            Renderer.getBackend().initDisplay(this.canvas.width, this.canvas.height);
+    private readonly handleWindowResize = (): void => {
+        try {
+            if (this.isFullscreen()) {
+                this.applyBrowserDisplaySize();
+            }
+        } catch (error) {
+            this.reportError(error);
+        }
+    };
+
+    private readonly handleFullscreenChange = (): void => {
+        try {
+            if (!this.canvas || typeof document === "undefined") {
+                return;
+            }
+            if (document.fullscreenElement === this.canvas) {
+                this.fullscreen = true;
+                this.applyBrowserDisplaySize();
+                return;
+            }
+            this.fullscreen = false;
+            this.applyWindowedDisplayMode();
+            Mouse.restoreNativeCursorAfterForcedFullscreenExit();
+        } catch (error) {
+            this.reportError(error);
         }
     };
 
@@ -395,11 +485,7 @@ export class AppGameContainer extends GameContainer {
         if (!this.canvas) {
             return;
         }
-        this.canvas.width = width;
-        this.canvas.height = height;
-        this.canvas.style.width = `${width}px`;
-        this.canvas.style.height = `${height}px`;
-        Renderer.getBackend().initDisplay(width, height);
+        this.applySizedCanvas(width, height, `${width}px`, `${height}px`, true);
     }
 
     private applyBrowserDisplaySize(): void {
@@ -408,12 +494,59 @@ export class AppGameContainer extends GameContainer {
         }
         const width = Math.max(1, Math.trunc(window.innerWidth || this.width));
         const height = Math.max(1, Math.trunc(window.innerHeight || this.height));
-        this.setDimensions(width, height);
-        this.canvas.width = width;
-        this.canvas.height = height;
-        this.canvas.style.width = "100vw";
-        this.canvas.style.height = "100vh";
-        Renderer.getBackend().initDisplay(width, height);
+        this.applySizedCanvas(width, height, "100vw", "100vh", true);
+    }
+
+    private applyWindowedDisplayMode(width: number = this.lastWindowedDisplayMode.width, height: number = this.lastWindowedDisplayMode.height, notify: boolean = true): void {
+        if (!this.canvas) {
+            this.setDimensions(width, height);
+            return;
+        }
+        this.applySizedCanvas(width, height, `${width}px`, `${height}px`, notify);
+    }
+
+    private applySizedCanvas(width: number, height: number, styleWidth: string, styleHeight: string, notify: boolean): void {
+        if (!this.canvas) {
+            return;
+        }
+        const normalizedWidth = Math.max(1, Math.trunc(width));
+        const normalizedHeight = Math.max(1, Math.trunc(height));
+        const changed = this.width !== normalizedWidth
+            || this.height !== normalizedHeight
+            || this.canvas.width !== normalizedWidth
+            || this.canvas.height !== normalizedHeight
+            || this.canvas.style.width !== styleWidth
+            || this.canvas.style.height !== styleHeight;
+        this.setDimensions(normalizedWidth, normalizedHeight);
+        this.canvas.width = normalizedWidth;
+        this.canvas.height = normalizedHeight;
+        this.canvas.style.width = styleWidth;
+        this.canvas.style.height = styleHeight;
+        Renderer.getBackend().initDisplay(normalizedWidth, normalizedHeight);
+        if (notify && changed) {
+            Display.markResized(normalizedWidth, normalizedHeight);
+            this.notifyContainerSizeChanged();
+        }
+    }
+
+    private setLastWindowedDisplayMode(width: number, height: number): void {
+        this.lastWindowedDisplayMode = {
+            width: Math.max(1, Math.trunc(width)),
+            height: Math.max(1, Math.trunc(height))
+        };
+    }
+
+    private exitBrowserFullscreenForDestroy(): void {
+        if (!this.canvas || typeof document === "undefined") {
+            return;
+        }
+        this.fullscreen = false;
+        this.applyWindowedDisplayMode(undefined, undefined, false);
+        Mouse.restoreNativeCursorAfterForcedFullscreenExit();
+        if (document.fullscreenElement === this.canvas && document.exitFullscreen) {
+            void document.exitFullscreen().catch(() => {
+            });
+        }
     }
 
     private waitForQueuedResources(): void {
@@ -447,5 +580,46 @@ export class AppGameContainer extends GameContainer {
 
     private toError(error: unknown, message: string): Error {
         return error instanceof Error ? error : new SlickException(message, error);
+    }
+
+    private captureDisplaySnapshot(): DisplaySnapshot {
+        return {
+            width: this.width,
+            height: this.height,
+            screenWidth: this.screenWidth,
+            screenHeight: this.screenHeight,
+            fullscreen: this.fullscreen,
+            lastWindowedWidth: this.lastWindowedDisplayMode.width,
+            lastWindowedHeight: this.lastWindowedDisplayMode.height,
+            canvasWidth: this.canvas?.width ?? this.width,
+            canvasHeight: this.canvas?.height ?? this.height,
+            canvasStyleWidth: this.canvas?.style.width ?? "",
+            canvasStyleHeight: this.canvas?.style.height ?? ""
+        };
+    }
+
+    private restoreDisplaySnapshot(snapshot: DisplaySnapshot): void {
+        this.width = snapshot.width;
+        this.height = snapshot.height;
+        this.screenWidth = snapshot.screenWidth;
+        this.screenHeight = snapshot.screenHeight;
+        this.fullscreen = snapshot.fullscreen;
+        this.setLastWindowedDisplayMode(snapshot.lastWindowedWidth, snapshot.lastWindowedHeight);
+        this.graphics.setDimensions(this.width, this.height);
+        if (this.canvas) {
+            this.canvas.width = snapshot.canvasWidth;
+            this.canvas.height = snapshot.canvasHeight;
+            this.canvas.style.width = snapshot.canvasStyleWidth;
+            this.canvas.style.height = snapshot.canvasStyleHeight;
+            Renderer.getBackend().initDisplay(snapshot.canvasWidth, snapshot.canvasHeight);
+            Display.markResized(snapshot.canvasWidth, snapshot.canvasHeight);
+        }
+        this.notifyContainerSizeChanged();
+    }
+
+    private notifyContainerSizeChanged(): void {
+        if (isResizeAwareGame(this.game)) {
+            this.game.containerSizeChanged(this);
+        }
     }
 }

@@ -15,6 +15,7 @@ This audit compares the current TypeScript implementation against the Java Slick
 npm.cmd run lint
 npm.cmd run typecheck
 npm.cmd run build
+npm.cmd run test
 ```
 
 All commands pass after the audit fixes.
@@ -60,6 +61,13 @@ No game-title-specific modules are exported. The project names appear only as au
 - Allowed `Music.play()` / `loop()` while global music is off to become the current suspended music and resume audibly when music is enabled again, matching Java `playAsMusic`.
 - Wrapped initial `AppGameContainer.start()` init/preload work in cleanup/error handling so failed starts unbind listeners, reset Display/renderer state, and can be retried.
 - Fixed `ResourceLoader` location handling to try ordered browser locations, preserve root-relative paths like `/assets`, clear all locations on `removeAllResourceLocations()`, and refetch failed records on retry.
+- Fixed fullscreen/display-mode failures to reject with `SlickException`, restore previous canvas/container dimensions on denied fullscreen, and notify resize-aware games after browser-applied size changes.
+- Added a Java-style resize compatibility hook: if the wrapped game exposes `containerSizeChanged(container)`, `AppGameContainer` calls it after canvas/fullscreen/browser resize changes and marks `Display.wasResized()`.
+- Made `AppGameContainer.destroy()` call `AL.destroy()` so active Web Audio handles are stopped/cleared on host teardown, load failure, retry, or menu return paths.
+- Implemented transparent/native cursor parity for byte-buffer cursors: all-zero/transparent cursor data maps to CSS `cursor: none`, and non-transparent RGBA cursor bytes become a CSS cursor data URL.
+- Added last-windowed-display tracking so browser-forced fullscreen exits restore the Java windowed canvas mode instead of preserving the fullscreen viewport size.
+- Made destroy-while-fullscreen restore windowed canvas CSS/size, request `document.exitFullscreen()` fire-and-forget, restore transparent native cursors, and clear stale static `Display` fullscreen state.
+- Added Node regression tests for forced fullscreen exit, explicit fullscreen exit notification de-duplication, and fullscreen teardown cleanup.
 - Updated `docs/SLICK2D-PARITY-API.md` to match the implementation and verified Java behavior.
 
 ## External Audit Verification
@@ -112,6 +120,24 @@ The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_3
 - Initial `game.init()` or startup `ResourceLoader.waitForAll()` failures now clean up container state and either call `setErrorHandler()` or reject `start()` after cleanup.
 - `ResourceLoader` now fetches candidate locations in order, retries each candidate, applies cache-bust to every attempted URL, preserves `/assets` as origin-root absolute, and lets failed records be fetched again on retry.
 
+The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_4.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+
+- Fullscreen entry/exit failures now reject as `SlickException` instead of being swallowed.
+- A failed fullscreen display-mode request restores the previous logical and canvas dimensions instead of leaving a huge non-fullscreen canvas.
+- Browser-applied fullscreen and resize changes now mark `Display.wasResized()` and call a Java-style `containerSizeChanged(container)` hook when the active game exposes it, which keeps scalable render/input transforms current.
+- `AppGameContainer.destroy()` now mirrors Java teardown by calling `AL.destroy()`, stopping tracked sounds/music and clearing decoded audio buffers.
+- `Mouse.setNativeCursor(cursor)` now honors cursor pixel data for `Uint8Array` cursors, including all-zero transparent buffers used by the game to hide the pointer.
+
+The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_5.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+
+- `AppGameContainer` now tracks the last successful non-fullscreen display mode separately from requested fullscreen dimensions.
+- Browser-forced fullscreen exit restores the last windowed canvas backing size and CSS size, sets the container fullscreen flag false, marks `Display.wasResized()`, and calls `containerSizeChanged(container)` when the active game exposes that helper.
+- Explicit `setDisplayMode(width, height, false)` paths do not double-notify resize-aware games when the later browser `fullscreenchange` observes the same restored size.
+- `AppGameContainer.destroy()` now restores the windowed canvas size and cursor before clearing the Mouse element, requests `document.exitFullscreen()` when the canvas owns fullscreen, then tears down renderer/audio/display state.
+- `Display.destroy()` and `Display.setActiveContainer(null)` now clear stale static fullscreen state so `Display.isFullscreen()` is false between PWA sessions.
+- `Mouse` now remembers the visible native cursor before an all-transparent cursor hide and can restore it when fullscreen is exited by the browser or container teardown instead of by game code.
+- Added regression coverage for forced fullscreen exit, explicit exit notification count, and destroy-while-fullscreen cleanup.
+
 Claims intentionally not converted into desktop-exact behavior:
 
 - Native applet, AWT/Swing, LWJGL Display, filesystem, classpath, OpenAL source-pool, and blocking timing behavior remain browser shims.
@@ -119,6 +145,7 @@ Claims intentionally not converted into desktop-exact behavior:
 - `PackedSpriteSheet` and `XMLPackedSheet` still require metadata bytes to be preloaded before their constructors when those constructors synchronously parse `.def` or XML text. This is an explicit browser contract, not a place to fake Java classpath I/O.
 - `ResourceLoader` retry/cache-bust support does not replace a game PWA manifest or splash-screen loader; it gives the Slick parity layer the same hooks so assets loaded through Slick do not bypass those requirements.
 - Fullscreen and pointer lock remain asynchronous browser APIs. The library updates its canvas and WebGL dimensions when the promise/events settle; game ports that immediately call scale recalculation after `setDisplayMode` should either await the returned promise or also recalculate from `resize`/`fullscreenchange`.
+- Browser-forced fullscreen exits are handled by the library by restoring the last known non-fullscreen Slick mode. A port may still add game-local UI reactions, but it must not compensate by adding title-specific fullscreen state fixes to `slick2d-ts`.
 - Shape/warped/sheared rendering remains explicitly unsupported because the audited game sources do not call those Slick paths.
 - `Graphics.copyArea`, `Graphics.getArea(...): Image`, and gradient-line color interpolation are not used by the game rendering paths. The byte-buffer `getArea` path used by copied container icon code is implemented through WebGL `readPixels`.
 
@@ -134,6 +161,7 @@ These differences are intentional and must be kept during game ports:
 - Browser autoplay policy still requires a user gesture before reliable audio decode/playback. The host page should focus the canvas and initialize or resume audio from the Start button handler before entering the game loop.
 - Host pages should install `AppGameContainer.setErrorHandler()` when they need a splash/loading UI to display queued resource failures. The library still surfaces unhandled errors if no handler is installed.
 - DOM controls used for a browser menu should live outside the active canvas focus path or pause the container; either way, Slick input now ignores their keyboard and pointer events.
+- Cursor hiding now works at the canvas/native-cursor shim level, and forced fullscreen exit restores the visible cursor saved before the transparent hide. A PWA menu or hamburger overlay can still override cursor visibility with ordinary DOM/CSS outside the canvas.
 - `ResourceLoader.getResource(ref)` remains a syntactic best-effort URL helper. Actual load success is determined by `loadResource(ref)`, which tries every configured location.
 - `removeAllResourceLocations()` now matches Java and leaves no default browser location. Use `addResourceLocation("")` when a port intentionally wants relative-to-page lookup after clearing.
 - Applets/AWT/Swing/native window concepts are not library APIs. Use `AppGameContainer`/`ApplicationGameContainer`, DOM canvas, Fullscreen API, and Pointer Lock API.

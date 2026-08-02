@@ -556,8 +556,13 @@ Implement these rules:
 - `setFullscreen` maps to the browser Fullscreen API.
 - `setDisplayMode` and `setFullscreen` may return `Promise<void>` because browser fullscreen changes are asynchronous. When a promise is returned, dimensions and the WebGL display must be refreshed after it settles.
 - `AppGameContainer` must listen to `fullscreenchange` and `resize`, update canvas backing size and CSS size, then reinitialize the WebGL display dimensions.
+- Fullscreen entry/exit failures must reject with `SlickException`. Display-mode requests that resized the canvas before a failed fullscreen request must restore the previous logical and canvas dimensions.
+- After browser-applied display size changes, the container must mark `Display.wasResized()` and call `containerSizeChanged(container)` when the active game exposes that Java-style helper.
+- `AppGameContainer` must track the last successful non-fullscreen display mode separately from the requested fullscreen mode. Browser-forced fullscreen exit must restore that windowed mode, clear fullscreen CSS sizing, mark `Display.wasResized()`, and notify `containerSizeChanged(container)` when present.
+- `AppGameContainer.destroy()` must request browser fullscreen exit when the active canvas owns fullscreen, restore windowed canvas size/CSS synchronously, and clear stale Slick fullscreen state even though `document.exitFullscreen()` resolves asynchronously.
 - `setMouseGrabbed` maps to Pointer Lock where available.
 - Cursor methods must use CSS cursor values or browser cursor assets.
+- A transparent native cursor installed for fullscreen hiding must be restored when browser-forced fullscreen exit bypasses the game method that would normally call `Mouse.setNativeCursor(previousCursor)`.
 - Keyboard constants must retain the original LWJGL numeric values.
 - Input polling methods must preserve Slick2D's difference between "pressed once" and "currently down".
 - While the game canvas owns focus/input, Slick movement/action keys must call `KeyboardEvent.preventDefault()` so arrows and Space do not scroll or activate DOM UI. This must not suppress normal behavior when an editable/menu element has focus.
@@ -1487,8 +1492,13 @@ Implementation instructions:
 - `start()` must wrap canvas setup, renderer/audio initialization, `game.init()`, and the initial `ResourceLoader.waitForAll()` in cleanup/error handling. Startup failure must unbind input, remove browser listeners, dispose renderer state, reset `Display`, set `started=false`, and leave the same container retryable.
 - `setErrorHandler(handler)` installs the host callback for startup and async frame/resource errors. When present, the container must destroy itself and call the handler instead of relying on a raw RAF exception. When absent during startup, `start()` rejects after cleanup.
 - `setDisplayMode(width, height, fullscreen)` sets logical width and height, updates canvas sizing, then calls `setFullscreen(fullscreen)`. It returns the fullscreen promise when the browser starts one; ports that need immediate scale recalculation must await that promise.
-- `setFullscreen(fullscreen)` updates browser fullscreen state, then applies actual browser display dimensions after the promise resolves. `fullscreenchange` and `resize` events must also refresh canvas/WebGL display sizing.
-- `destroy` stops the loop, clears the input prevent-default element, releases event listeners, disposes the renderer backend, calls `Display.destroy()`, and unregisters the active container.
+- Successful non-fullscreen display-mode calls must update the stored last-windowed mode. Fullscreen display-mode calls must not overwrite it.
+- `setFullscreen(fullscreen)` updates browser fullscreen state, then applies actual browser display dimensions after the promise resolves. `fullscreenchange` handles browser-forced enter/exit, while `resize` only reapplies browser display dimensions while the canvas is actually fullscreen.
+- Fullscreen failures reject with `SlickException`; `setDisplayMode` restores the previous display snapshot before rethrowing when fullscreen is denied.
+- A browser-forced `fullscreenchange` to non-fullscreen must set `fullscreen=false`, restore the stored last-windowed canvas backing size and CSS pixel size, call `Display.markResized(width, height)`, invoke `containerSizeChanged(container)` on the active game if that method exists, and restore any transparent fullscreen cursor hide through `Mouse`.
+- Explicit `setDisplayMode(width, height, false)` must not double-notify resize-aware games when the browser `fullscreenchange` observes the same already-restored size.
+- After `applyCanvasSize`, `applyBrowserDisplaySize`, fullscreenchange, or resize updates the final backing size, call `Display.markResized(width, height)` and invoke `containerSizeChanged(container)` on the active game if that method exists.
+- `destroy` stops the loop, restores windowed canvas size/CSS if the canvas is fullscreen, restores transparent fullscreen cursors before clearing the Mouse element, requests `document.exitFullscreen()` fire-and-forget when needed, clears the input prevent-default element, releases event listeners, disposes the renderer backend, calls `AL.destroy()`, calls `Display.destroy()`, and unregisters the active container.
 - `supportsAlphaInBackBuffer` returns whether the backing canvas supports alpha.
 - `hasFocus()` must return false when `document.hasFocus()` is false; a stale canvas `activeElement` must not override browser focus loss.
 - The constructor without dimensions must use Slick2D's default `640x480` unless project configuration overrides it.
@@ -2027,6 +2037,7 @@ Implementation instructions:
 - Required by copied Slick2D `AppGameContainer.destroy()` and `SoundStore.init()` paths.
 - `create()` marks the browser audio subsystem as requested and initializes the shared `AudioContext` when possible. If autoplay rules prevent immediate resume, keep the context in a suspended/unlocked-pending state and let `Sound`/`Music` complete unlock on the next user gesture.
 - `destroy()` stops active sounds/music, releases audio nodes owned by the active container scope, and marks AL as not created.
+- `AppGameContainer.destroy()` must call `AL.destroy()` so host teardown paths that bypass `game.closeRequested()` still stop audio.
 - `isCreated()` returns the state set by `create()` and `destroy()`.
 
 ### `lwjgl.Sys`
@@ -2117,6 +2128,7 @@ export class Display {
     public static isCreated(): boolean;
     public static update(): void;
     public static sync(frameRate: number): void;
+    public static markResized(width?: number, height?: number): void;
     public static setParent(parent: unknown): void;
     public static setVSyncEnabled(enabled: boolean): void;
     public static setTitle(title: string): void;
@@ -2145,10 +2157,13 @@ Implementation instructions:
 - `getAvailableDisplayModes` returns a deterministic list of immutable `DisplayMode` values: the browser screen size when available, the active canvas backing size when available, `640x480`, and `800x600`, with duplicates removed in that order. All generated modes use `32` bits per pixel and `60` Hz.
 - `getDisplayMode` returns the active container/canvas mode when a container exists; otherwise it returns the browser screen mode when available; otherwise it returns `640x480`.
 - `setDisplayMode(mode)` updates the active container logical size and records `mode` as the current display mode.
+- `setFullscreen(fullscreen)` records the requested state, delegates to the active container, and restores the previous static state if an asynchronous browser fullscreen request rejects.
 - `create`, `destroy`, and `update` map to active canvas lifecycle state rather than constructing a native display.
 - `create()`, `destroy()`, and registering a new active container clear stale close-request state.
+- `destroy()` and `setActiveContainer(null)` must also clear static fullscreen state so `Display.isFullscreen()` is false after a PWA menu tears down a fullscreen game session.
 - `create(pixelFormat, sharedContext)` must accept the shared-context argument used by Slick2D and route it to the same renderer resource owner used by `GameContainer.enableSharedContext()`.
 - `sync(frameRate)` records the requested frame cap for diagnostics and for the container loop's scheduling policy. It must return immediately and must never block the browser thread.
+- `markResized(width, height)` is the browser helper used by containers after canvas/fullscreen resize. It sets the flag consumed by `wasResized()` and updates the current display mode when dimensions are supplied.
 - `setParent` records the DOM host element or browser canvas owner when supplied.
 - `setVSyncEnabled` records the requested flag; browser animation frames are already display-synchronized.
 - `setTitle` maps to `document.title` when a document is available.
@@ -2164,6 +2179,7 @@ export class Mouse {
     public static isGrabbed(): boolean;
     public static setNativeCursor(cursor: Cursor | null): void;
     public static getNativeCursor(): Cursor | null;
+    public static restoreNativeCursorAfterForcedFullscreenExit(): void;
 }
 ```
 
@@ -2172,6 +2188,9 @@ Implementation instructions:
 - Required by copied container cursor code.
 - `setGrabbed` maps to Pointer Lock.
 - Native cursor methods map to CSS cursor state.
+- `setNativeCursor(null)` restores the canvas cursor style to the host default.
+- `setNativeCursor(cursor)` must honor byte-buffer cursor data when available. All-zero or fully transparent RGBA cursor bytes map to CSS `cursor: none`; non-transparent RGBA cursor bytes map to a CSS data URL with the stored hotspot. Unsupported cursor data falls back to `default`.
+- `restoreNativeCursorAfterForcedFullscreenExit()` restores the visible cursor saved immediately before an all-transparent native cursor was installed. It is a browser helper for forced fullscreen exit and destroy paths where Java game code did not get to call its own cursor restoration method.
 
 ### `lwjgl.input.Cursor`
 
@@ -2184,7 +2203,7 @@ export class Cursor {
 Implementation instructions:
 
 - Provide a compatibility value object for cursor loader code.
-- Store hotspot and image data. `Mouse.setNativeCursor` maps it to a CSS cursor URL when the browser accepts the image dimensions and hotspot, otherwise it records the cursor and leaves the CSS cursor unchanged.
+- Store hotspot and image data. `Mouse.setNativeCursor` maps `Uint8Array` RGBA cursor bytes to CSS cursor state, including transparent cursor hiding.
 
 ### `lwjgl.BufferUtils`
 
