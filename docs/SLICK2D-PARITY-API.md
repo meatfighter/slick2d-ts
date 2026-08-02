@@ -336,6 +336,9 @@ Implement these rules:
 - `ResourceLoader` is a Java compatibility adapter over the same manager. It must not maintain a second cache.
 - `ResourceLoader.getResourceAsStream(ref)` means "return already loaded bytes for this resource" in TS. It must not perform a synchronous network request.
 - Java `ClassLoader.getResourceAsStream(ref)` maps to preloading/registering the bytes under the original Java ref string, then to `ResourceLoader.getResourceAsStream(ref)` after the preload barrier.
+- `ResourceLoader.setCacheBust(value)` appends or replaces a `v` query parameter on network fetch URLs while preserving the exact Java ref as the cache key.
+- `ResourceLoader.setRetryOptions(retries, delayMs)` configures network retry attempts for resources loaded through Slick. Retries apply only to fetch transport failures and non-OK HTTP responses; decode/parse failures fail immediately.
+- `ResourceLoader.hasPending()` and `getPendingCount()` report queued fetch/decode work, including browser-only promises registered through `track()`.
 - Java `DataInputStream` maps to `slick.support.BinaryReader`, which must implement Java-compatible big-endian reads for the methods used by the ports.
 - Stage text files map to the text handler; `.def` files map to the packed-sheet text handler; XML atlas files map to the XML handler; images map to the image-bitmap handler; audio maps to the audio-buffer or streaming-audio handler.
 - Java `URL.openStream` or `BufferedReader` over an HTTP score/service URL is not Slick resource loading. Port that code inside the game using `fetch`, make it asynchronous, and keep it out of `slick2d-ts`.
@@ -346,11 +349,13 @@ Implement these rules:
 - Resource paths must preserve the exact Java string value as the logical cache key, for example `images/player.png` and `sound/start.ogg`. The resource manager may resolve that key against a configured base URL, but the public Slick object keeps the original string.
 - `AppGameContainer.start()` must await all resources queued during `Game.init`.
 - Resources created after startup must begin loading immediately and expose a ready state internally.
+- Resources created from a loading screen or any other `update` after startup must still participate in the shared barrier. `AppGameContainer` must allow the current progress frame to render, then pause the next update until `ResourceLoader.hasPending()` is false or a queued promise rejects.
 - Drawing an image whose handle is still pending after the startup barrier skips that draw and logs one warning keyed by resource path. Drawing an image whose handle failed throws `SlickException`.
 - Playing audio whose handle is still pending or blocked by browser autoplay produces no sound and logs one warning keyed by resource path. Playing audio whose handle failed throws `SlickException`.
 - Missing or failed required resources must surface as `SlickException`.
 - `.def` packed-sheet files must be loaded as text and parsed according to `PackedSpriteSheet`.
 - XML packed-sheet files must be loaded as text and parsed with `DOMParser`.
+- Constructors that synchronously parse bytes, including `PackedSpriteSheet` and `XMLPackedSheet`, cannot fetch their metadata in the constructor. A port must preload/register the `.def` or XML bytes first, or call an async game-local loader before constructing the Slick parity object.
 
 ### Timing
 
@@ -529,8 +534,13 @@ Implement these rules:
 
 - `Sound` represents short effects.
 - `Music` represents longer tracks and can loop.
+- `Sound` and `Music` constructors preserve Java call shape, but they must immediately queue fetch plus Web Audio decode through `SoundStore.preloadAudioBuffer(ref)` and `ResourceLoader.track()`.
+- `Sound.ready()` / `Sound.load()` and `Music.ready()` / `Music.load()` are browser parity helpers that return the constructor-queued decode promise. They do not replace Java-style `play()` call sites; they exist so loading screens and host bootstraps can await browser work explicitly.
 - `Sound.play(pitch, volume)` maps pitch to playback rate. Clamp or reject values the browser backend cannot play, and document that decision in the method comment.
 - `Music.setVolume` persists across future `play` and `loop` calls.
+- `Music` must preserve Java Slick2D's single global current music channel. Starting one `Music` stops/swaps the previous current instance, updates listener state, and makes `oldMusic.playing()` return false immediately.
+- `Music.stop()` and `pause()` must invalidate pending async starts so a decoded buffer cannot start after the game has stopped or changed modes.
+- `GameContainer.setMusicOn(false)` / `SoundStore.setMusicOn(false)` pauses active music, not just mutes it. Setting music on again resumes from the stored position when possible.
 - Browser autoplay restrictions must be handled by deferring playback until audio is unlocked by a user gesture.
 - `playing()` must report whether the sound or music instance is currently active.
 
@@ -539,10 +549,13 @@ Implement these rules:
 Implement these rules:
 
 - `setFullscreen` maps to the browser Fullscreen API.
+- `setDisplayMode` and `setFullscreen` may return `Promise<void>` because browser fullscreen changes are asynchronous. When a promise is returned, dimensions and the WebGL display must be refreshed after it settles.
+- `AppGameContainer` must listen to `fullscreenchange` and `resize`, update canvas backing size and CSS size, then reinitialize the WebGL display dimensions.
 - `setMouseGrabbed` maps to Pointer Lock where available.
 - Cursor methods must use CSS cursor values or browser cursor assets.
 - Keyboard constants must retain the original LWJGL numeric values.
 - Input polling methods must preserve Slick2D's difference between "pressed once" and "currently down".
+- While the game canvas owns focus/input, Slick movement/action keys must call `KeyboardEvent.preventDefault()` so arrows and Space do not scroll or activate DOM UI. This must not suppress normal behavior when an editable/menu element has focus.
 - Controller methods must use the Gamepad API and preserve Slick2D's listener method names.
 
 ## Required API Surface
@@ -1044,6 +1057,9 @@ export class Input {
     public static disableControllers(): void;
     public static getKeyName(code: number): string;
     public constructor(height: number);
+    public bindToElement(target: HTMLElement | Window | Document): void;
+    public setPreventDefaultElement(element: HTMLElement | null): void;
+    public unbind(): void;
     public setDoubleClickInterval(delay: number): void;
     public setMouseClickTolerance(mouseClickTolerance: number): void;
     public initControllers(): void;
@@ -1141,6 +1157,8 @@ Implementation instructions:
 - `clearKeyPressedRecord` clears all one-shot key pressed state.
 - `clearControlPressedRecord` clears all one-shot controller pressed state.
 - `clearMousePressedRecord` clears all one-shot mouse pressed state.
+- `bindToElement` and `unbind` are browser parity helpers used by containers. They attach/remove keyboard, pointer, wheel, and gamepad event handling without changing Java-facing polling methods.
+- `setPreventDefaultElement(element)` records the canvas or host element whose focused game keys should suppress browser defaults. Suppress only mapped game-control keys and never suppress while an `input`, `textarea`, `select`, `button`, or `contentEditable` element owns focus.
 - `setScale` and `setOffset` are required by `ScalableGame` and `ScalableGame2`; they transform browser pointer coordinates into game coordinates.
 - Gamepad direction methods must support `Input.ANY_CONTROLLER`.
 - `isButton1Pressed`, `isButton2Pressed`, and `isButton3Pressed` delegate to `isButtonPressed(0/1/2, controller)`.
@@ -1156,6 +1174,8 @@ export class Sound {
     public constructor(ref: string);
     public constructor(url: URL);
     public constructor(input: ArrayBuffer | Blob, ref: string);
+    public ready(): Promise<void>;
+    public load(): Promise<void>;
     public play(): void;
     public play(pitch: number, volume: number): void;
     public playAt(pitch: number, volume: number, x: number, y: number, z: number): void;
@@ -1169,8 +1189,11 @@ export class Sound {
 Implementation instructions:
 
 - Required by the games: `constructor(ref)`, `play()`, `play(pitch, volume)`, `playing()`, and `stop()`.
+- Constructors queue byte fetch and Web Audio decode immediately, matching Java's observable "loaded after construction" behavior through an async browser barrier.
+- `ready()` and `load()` return the decode readiness promise and reject with `SlickException` on missing/corrupt audio. Java-style game code may keep `play()` synchronous as long as the port's loading flow awaits the shared resource barrier.
 - `play()` uses pitch `1` and volume `1`.
 - `play(pitch, volume)` clamps volume to `0..1` and maps pitch to playback rate.
+- `playing()` returns true for handles that have been requested and have not ended, stopped, or failed, including a first play that is waiting for an already-queued browser decode to settle.
 - `playAt` is a browser-adapted parity method: ignore positional coordinates and behave exactly like `play(pitch, volume)`.
 - `loop` repeats until `stop`.
 
@@ -1184,6 +1207,8 @@ export class Music {
     public constructor(url: URL, streamingHint: boolean);
     public constructor(input: ArrayBuffer | Blob, ref: string);
     public static poll(delta: number): void;
+    public ready(): Promise<void>;
+    public load(): Promise<void>;
     public addListener(listener: MusicListener): void;
     public removeListener(listener: MusicListener): void;
     public play(): void;
@@ -1205,9 +1230,13 @@ export class Music {
 Implementation instructions:
 
 - Required by the games: `constructor(ref)`, `constructor(ref, streamingHint)`, `loop`, `play`, `playing`, `setVolume`, and `stop`.
-- `streamingHint` selects streaming playback when supported, but must not alter public behavior.
+- `streamingHint` is accepted for Java constructor parity. Phase one uses decoded Web Audio buffers for both streaming-hint values; do not introduce `HTMLAudioElement` streaming unless a later audit documents exact handoff semantics.
+- Constructors queue byte fetch and Web Audio decode immediately. `ready()` and `load()` expose that browser readiness promise and reject with `SlickException` when the track cannot be fetched or decoded.
 - `play()` uses pitch `1` and the instance's current volume.
 - `loop()` loops indefinitely.
+- Starting a track makes it the single current music instance, stops any previous current music, and fires `musicSwapped(oldMusic, this)` on the old music's listeners.
+- `playing()` returns true only while this instance is the current music and has not ended, stopped, paused, or been swapped out.
+- `pause()` stores the current position and stops the active `AudioBufferSourceNode`; `resume()` starts a new source at that stored position because Web Audio source nodes are one-shot.
 - `setVolume(volume)` clamps and stores `0..1` volume.
 - `setPosition(position)` returns whether the backend accepted the seek, matching Slick2D's boolean return.
 - `fade(duration, endVolume, stopAfterFade)` stores a fade operation in milliseconds; `Music.poll(delta)` advances active fades and dispatches end-of-track listener events.
@@ -1225,7 +1254,7 @@ export interface MusicListener {
 Implementation instructions:
 
 - Notify listeners when a non-looping track ends.
-- `musicSwapped` exists for Java signature parity but is not called by phase-one `Music`, because the audited source games handle music handoff in game-local `Main` state. If a later global music handoff API is added, update this document before dispatching `musicSwapped`.
+- Notify the old current music's listeners through `musicSwapped(oldMusic, newMusic)` when a new `Music` instance replaces it, matching Java Slick2D's single-channel handoff.
 
 ### `slick.PackedSpriteSheet`
 
@@ -1244,6 +1273,7 @@ export class PackedSpriteSheet {
 Implementation instructions:
 
 - Required by the games: `constructor(def, Image.FILTER_NEAREST)` and `getSprite(name)`.
+- Browser contract: the `.def` bytes must already be available through `ResourceLoader.getResourceAsStream(def)` before construction. Use `ResourceLoader.loadResource(def)` plus `waitForAll()`, or `registerResource(def, bytes)`, from the host/game loader.
 - Parse Slick2D `.def` packed-sheet files using the copied Java parser shape:
   - Normalize `\` to `/` in the `.def` path.
   - Compute `basePath` from the directory of the `.def` file.
@@ -1267,6 +1297,7 @@ export class XMLPackedSheet {
 Implementation instructions:
 
 - Required heavily by the source project that uses XML sprite atlases.
+- Browser contract: the XML bytes must already be available through `ResourceLoader.getResourceAsStream(xmlRef)` before construction. Use `ResourceLoader.loadResource(xmlRef)` plus `waitForAll()`, or `registerResource(xmlRef, bytes)`, from the host/game loader.
 - Load `imageRef` as the backing image exactly like the Java code: `new Image(imageRef, false, Image.FILTER_NEAREST)`.
 - Load `xmlRef` as XML text and parse it with `DOMParser`.
 - Parse `<sprite>` entries with `name`, `x`, `y`, `width`, and `height` attributes.
@@ -1433,8 +1464,11 @@ Implementation instructions:
 
 - Required by the games: constructor, `setAlwaysRender`, `setClearEachFrame`, `setDisplayMode`, `setShowFPS`, `setSmoothDeltas`, `setSoundOn`, `setVSync`, and `start`.
 - `start` creates or binds the canvas, initializes input/audio/rendering, calls `game.init`, resolves resources queued during init, and begins the browser loop.
-- `setDisplayMode(width, height, fullscreen)` sets logical width and height, updates canvas sizing, then calls `setFullscreen(fullscreen)`.
-- `destroy` stops the loop and releases event listeners.
+- `start` focuses the canvas, routes input through `Input.bindToElement(window)`, and calls `Input.setPreventDefaultElement(canvas)` so game keys suppress browser defaults only during canvas-owned play.
+- If resources are queued during a later `update`, the loop must finish rendering the current progress frame, wait for `ResourceLoader.waitForAll()`, reset `lastFrameTime`, and then resume. Rejections destroy the container and throw a `SlickException` or the original `Error`.
+- `setDisplayMode(width, height, fullscreen)` sets logical width and height, updates canvas sizing, then calls `setFullscreen(fullscreen)`. It returns the fullscreen promise when the browser starts one; ports that need immediate scale recalculation must await that promise.
+- `setFullscreen(fullscreen)` updates browser fullscreen state, then applies actual browser display dimensions after the promise resolves. `fullscreenchange` and `resize` events must also refresh canvas/WebGL display sizing.
+- `destroy` stops the loop, clears the input prevent-default element, releases event listeners, and disposes the renderer backend.
 - `supportsAlphaInBackBuffer` returns whether the backing canvas supports alpha.
 - The constructor without dimensions must use Slick2D's default `640x480` unless project configuration overrides it.
 
@@ -1456,7 +1490,7 @@ Implementation instructions:
 - `setResizable` toggles whether browser resize events update the canvas/container size.
 - Java's `setIcon(ref)` path uses `LoadableImageData` and `Display.setIcon`. In TS, load the same resource bytes through `ResourceLoader`, decode with `TGAImageData` for `.tga` or `ImageIOImageData` otherwise, then set the browser favicon or no-op when the host page owns icons.
 - `start()` creates or attaches an `HTMLCanvasElement`, initializes WebGL, initializes controllers/input, calls `game.init`, then enters the fixed-step RAF game loop.
-- `setDisplayMode(width, height, fullscreen)` updates the logical container size and fullscreen request state. It returns `Promise<void>` only when a browser fullscreen request is actually started; otherwise it returns `void`.
+- `setDisplayMode(width, height, fullscreen)` updates the logical container size and fullscreen request state. It returns `Promise<void>` when a browser fullscreen enter or exit request is started; otherwise it returns `void`.
 
 ### `slick.ScalableGame`
 
@@ -1552,12 +1586,16 @@ export class ResourceLoader {
     public static addResourceLocation(location: unknown): void;
     public static removeResourceLocation(location: unknown): void;
     public static removeAllResourceLocations(): void;
+    public static setCacheBust(value: string | number | null): void;
+    public static setRetryOptions(retries: number, delayMs?: number): void;
     public static getResource(ref: string): URL | null;
     public static getResourceAsStream(ref: string): ArrayBuffer | null;
     public static resourceExists(ref: string): boolean;
     public static registerResource(ref: string, data: ArrayBuffer | Uint8Array): void;
     public static loadResource(ref: string): Promise<ArrayBuffer>;
     public static track<T>(promise: Promise<T>): Promise<T>;
+    public static getPendingCount(): number;
+    public static hasPending(): boolean;
     public static resourceFailed(ref: string): boolean;
     public static getResourceError(ref: string): unknown;
     public static waitForAll(): Promise<void>;
@@ -1571,7 +1609,11 @@ Implementation instructions:
 - Back these calls with the modern resource manager from `docs/RESOURCE-MANAGEMENT-SYSTEM.md`.
 - Browser code cannot synchronously fetch new network resources. These methods may only return already loaded resources.
 - `loadResource(ref)` is the browser async fetch/decode-byte entry point. It must cache in-flight requests by the original Java ref string.
+- `setCacheBust(value)` configures the network URL query parameter `v`. Passing `null` clears the setting. The cache key remains the original Java ref.
+- `setRetryOptions(retries, delayMs)` configures fetch retries. Clamp negative values to zero and wait `delayMs` between attempts when greater than zero.
 - `track(promise)` adds browser-only preparation work, such as `ImageBitmap` decode, to `waitForAll()` without changing Java method names.
+- `getPendingCount()` returns queued byte fetches plus tracked browser preparation promises that have not settled.
+- `hasPending()` returns `getPendingCount() > 0` and is used by the container loop to catch dynamic Java-style loading steps after startup.
 - `waitForAll()` is the preload barrier that must be awaited before code constructs classes that synchronously parse bytes, including `PackedSpriteSheet`, `XMLPackedSheet`, and game-local `BinaryReader`/map loaders.
 - Provide additional modern async helpers in this class only if they do not replace the Java-named methods.
 
@@ -1890,6 +1932,13 @@ Implementation instructions:
 ### `slick.openal.SoundStore`
 
 ```ts
+export interface AudioPlaybackHandle {
+    stop(): void;
+    pause?(): void;
+    resume?(): void;
+    playing(): boolean;
+}
+
 export class SoundStore {
     public static get(): SoundStore;
     public clear(): void;
@@ -1911,6 +1960,14 @@ export class SoundStore {
     public isMusicPlaying(): boolean;
     public stopSoundEffect(id: number): void;
     public getSourceCount(): number;
+    public getAudioContext(): AudioContext | null;
+    public getSoundBus(): GainNode | null;
+    public getMusicBus(): GainNode | null;
+    public loadAudioBuffer(ref: string): Promise<AudioBuffer>;
+    public preloadAudioBuffer(ref: string): Promise<void>;
+    public playSound(ref: string, pitch: number, volume: number, loop: boolean, onEnded?: () => void): AudioPlaybackHandle | null;
+    public track(handle: AudioPlaybackHandle): void;
+    public untrack(handle: AudioPlaybackHandle): void;
 }
 ```
 
@@ -1920,7 +1977,13 @@ Implementation instructions:
 - The broader methods must delegate to the same audio subsystem used by `Sound` and `Music`.
 - `get()` returns a singleton, matching Java.
 - `clear` stops active audio and releases cached audio resources owned by the active container scope.
-- Source IDs are compatibility-only numbers. `getSourceCount()` returns the number of currently allocated browser audio voices if the audio subsystem models a pool; otherwise it returns `0` consistently.
+- `setMusicOn(false)` pauses tracked music handles and stores enough state for `setMusicOn(true)` to resume. This mirrors Java `pauseLoop()`/`restartLoop()` behavior and must not be implemented as volume-only muting.
+- `setSoundsOn(false)` prevents future sound effects from starting; active effect handles may continue unless `clear()` or `stop()` is called, matching the narrower Java sound toggle behavior used by the games.
+- `loadAudioBuffer(ref)` loads bytes through `ResourceLoader.loadResource(ref)`, decodes them through the shared `AudioContext`, caches the in-flight/completed decode promise, deletes failed cache entries, and rejects with `SlickException`.
+- `preloadAudioBuffer(ref)` tracks `loadAudioBuffer(ref)` through `ResourceLoader.track()` and is what `Sound` and `Music` constructors must call.
+- `playSound(ref, pitch, volume, loop, onEnded)` is the shared effect playback helper. It keeps `Sound.play()` non-async, starts after the decode promise resolves, clamps playback rate and gain to supported ranges, and logs load/playback errors.
+- `track(handle)` and `untrack(handle)` register externally-created music handles so `clear`, `isMusicPlaying`, and music toggles can operate over both effects and music.
+- Source IDs are compatibility-only numbers. `getSourceCount()` returns the number of currently tracked browser audio voices.
 
 ### `lwjgl.openal.AL`
 

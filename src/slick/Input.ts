@@ -101,6 +101,7 @@ export class Input {
     private keyRepeatInterval = 50;
     private doubleClickDelay = 250;
     private mouseClickTolerance = 5;
+    private preventDefaultElement: HTMLElement | null = null;
 
     /**
      * Java Slick2D counterpart: Input.disableControllers().
@@ -138,6 +139,11 @@ export class Input {
         target.addEventListener("pointerup", this.handlePointerUp as EventListener);
         target.addEventListener("pointermove", this.handlePointerMove as EventListener);
         target.addEventListener("wheel", this.handleWheel as EventListener);
+    }
+
+    /** Browser parity helper: element whose focused game keys should suppress browser defaults. */
+    public setPreventDefaultElement(element: HTMLElement | null): void {
+        this.preventDefaultElement = element;
     }
 
     /** Browser parity helper: removes attached DOM listeners. */
@@ -484,6 +490,9 @@ export class Input {
         if (key === 0) {
             return;
         }
+        if (this.shouldPreventDefault(event, key)) {
+            event.preventDefault();
+        }
         const wasDown = this.downKeys.has(key);
         this.downKeys.add(key);
         if (!wasDown || this.keyRepeat) {
@@ -498,6 +507,9 @@ export class Input {
 
     private readonly handleKeyUp = (event: KeyboardEvent): void => {
         const key = Input.keyCodeFromEvent(event);
+        if (this.shouldPreventDefault(event, key)) {
+            event.preventDefault();
+        }
         this.downKeys.delete(key);
         for (const listener of this.keyListeners) {
             if (isAccepting(listener)) {
@@ -552,7 +564,10 @@ export class Input {
     };
 
     private updateMouse(event: PointerEvent): void {
-        const target = event.currentTarget as Element | null;
+        const currentTarget = event.currentTarget;
+        const target = typeof Element !== "undefined" && currentTarget instanceof Element
+            ? currentTarget
+            : this.preventDefaultElement;
         const rect = target && "getBoundingClientRect" in target
             ? target.getBoundingClientRect()
             : { left: 0, top: 0 };
@@ -617,6 +632,32 @@ export class Input {
         return Input.eventCodeToKey.get(event.code) ?? 0;
     }
 
+    private shouldPreventDefault(event: KeyboardEvent, key: number): boolean {
+        if (!Input.defaultPreventedKeys.has(key) || event.defaultPrevented) {
+            return false;
+        }
+        const active = typeof document !== "undefined" ? document.activeElement : null;
+        if (active && Input.isInteractiveElement(active)) {
+            return false;
+        }
+        if (!this.preventDefaultElement) {
+            return true;
+        }
+        return active === this.preventDefaultElement
+            || active === document.body
+            || active === document.documentElement
+            || event.target === this.preventDefaultElement;
+    }
+
+    private static isInteractiveElement(element: Element): boolean {
+        const tag = element.tagName.toUpperCase();
+        return tag === "INPUT"
+            || tag === "TEXTAREA"
+            || tag === "SELECT"
+            || tag === "BUTTON"
+            || (element as HTMLElement).isContentEditable;
+    }
+
     private static readonly eventCodeToKey = new Map<string, number>([
         ["Escape", Input.KEY_ESCAPE],
         ["Digit1", Input.KEY_1],
@@ -678,4 +719,27 @@ export class Input {
     private static readonly keyNames = new Map<number, string>(
         Array.from(Input.eventCodeToKey.entries()).map(([name, code]) => [code, name])
     );
+
+    private static readonly defaultPreventedKeys = new Set<number>([
+        Input.KEY_ESCAPE,
+        Input.KEY_2,
+        Input.KEY_4,
+        Input.KEY_6,
+        Input.KEY_8,
+        Input.KEY_W,
+        Input.KEY_A,
+        Input.KEY_S,
+        Input.KEY_D,
+        Input.KEY_I,
+        Input.KEY_J,
+        Input.KEY_K,
+        Input.KEY_L,
+        Input.KEY_P,
+        Input.KEY_RETURN,
+        Input.KEY_SPACE,
+        Input.KEY_UP,
+        Input.KEY_LEFT,
+        Input.KEY_RIGHT,
+        Input.KEY_DOWN
+    ]);
 }

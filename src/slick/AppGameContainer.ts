@@ -38,6 +38,8 @@ export class AppGameContainer extends GameContainer {
     private framesThisSecond = 0;
     private fpsWindowStart = 0;
     private alphaInBackBuffer = true;
+    private waitingForResources = false;
+    private resourceError: unknown = null;
 
     public constructor(game: Game);
     public constructor(game: Game, width: number, height: number, fullscreen: boolean);
@@ -64,13 +66,18 @@ export class AppGameContainer extends GameContainer {
     public setDisplayMode(width: number, height: number, fullscreen: boolean): void | Promise<void> {
         this.setDimensions(width, height);
         if (this.canvas) {
-            this.canvas.width = width;
-            this.canvas.height = height;
-            this.canvas.style.width = `${width}px`;
-            this.canvas.style.height = `${height}px`;
-            Renderer.getBackend().initDisplay(width, height);
+            this.applyCanvasSize(width, height);
         }
-        return this.setFullscreen(fullscreen);
+        const fullscreenResult = this.setFullscreen(fullscreen);
+        if (fullscreenResult instanceof Promise) {
+            return fullscreenResult.then(() => {
+                if (this.isFullscreen()) {
+                    this.applyBrowserDisplaySize();
+                } else {
+                    this.applyCanvasSize(width, height);
+                }
+            });
+        }
     }
 
     /** Java Slick2D counterpart: AppGameContainer.isFullscreen(). */
@@ -87,7 +94,9 @@ export class AppGameContainer extends GameContainer {
             return;
         }
         if (fullscreen && document.fullscreenElement !== this.canvas && this.canvas.requestFullscreen) {
-            return this.canvas.requestFullscreen().catch(() => undefined);
+            return this.canvas.requestFullscreen()
+                .then(() => this.applyBrowserDisplaySize())
+                .catch(() => undefined);
         }
         if (!fullscreen && document.fullscreenElement && document.exitFullscreen) {
             return document.exitFullscreen().catch(() => undefined);
@@ -116,11 +125,15 @@ export class AppGameContainer extends GameContainer {
         this.canvas.style.width = `${this.width}px`;
         this.canvas.style.height = `${this.height}px`;
         this.canvas.tabIndex = this.canvas.tabIndex < 0 ? 0 : this.canvas.tabIndex;
+        this.canvas.focus();
         Mouse.setElement(this.canvas);
         this.input.bindToElement(window);
+        this.input.setPreventDefaultElement(this.canvas);
         Display.setActiveContainer(this);
         Display.create();
         Display.setTitle(this.title);
+        window.addEventListener("resize", this.handleBrowserResize);
+        document.addEventListener("fullscreenchange", this.handleBrowserResize);
         Renderer.getBackend().initialize(this.canvas, {
             alpha: true,
             antialias: this.multiSample > 0,
@@ -214,7 +227,14 @@ export class AppGameContainer extends GameContainer {
             this.animationFrame = 0;
         }
         this.input.unbind();
+        this.input.setPreventDefaultElement(null);
         Mouse.setElement(null);
+        if (typeof window !== "undefined") {
+            window.removeEventListener("resize", this.handleBrowserResize);
+        }
+        if (typeof document !== "undefined") {
+            document.removeEventListener("fullscreenchange", this.handleBrowserResize);
+        }
         Renderer.getBackend().dispose();
         Display.setActiveContainer(null);
     }
@@ -228,8 +248,7 @@ export class AppGameContainer extends GameContainer {
     public override setDisplayModeFromDisplay(mode: import("../lwjgl/opengl/DisplayMode.js").DisplayMode): void {
         super.setDisplayModeFromDisplay(mode);
         if (this.canvas) {
-            this.canvas.width = mode.getWidth();
-            this.canvas.height = mode.getHeight();
+            this.applyCanvasSize(mode.getWidth(), mode.getHeight());
         }
     }
 
@@ -241,6 +260,15 @@ export class AppGameContainer extends GameContainer {
 
     private readonly loop = (time: number): void => {
         if (this.destroyed) {
+            return;
+        }
+        if (this.resourceError) {
+            const error = this.resourceError;
+            this.resourceError = null;
+            this.destroy();
+            throw error instanceof Error ? error : new SlickException("Failed to load queued resources", error);
+        }
+        if (this.waitingForResources) {
             return;
         }
         const rawDelta = Math.max(0, Math.trunc(time - this.lastFrameTime));
@@ -256,6 +284,7 @@ export class AppGameContainer extends GameContainer {
                 SoundStore.get().poll(delta);
             }
         }
+        let waitForResources = ResourceLoader.hasPending();
         if (this.alwaysRender || !this.paused) {
             if (this.clearEachFrame) {
                 Renderer.getBackend().beginFrame(this.width, this.height, this.graphics.getBackground());
@@ -268,13 +297,26 @@ export class AppGameContainer extends GameContainer {
                 this.graphics.drawString(`FPS: ${this.fps}`, 10, 10);
             }
             Renderer.getBackend().endFrame();
+            waitForResources = waitForResources || ResourceLoader.hasPending();
         }
         this.updateFps(time);
         if (this.game.closeRequested() && Display.isCloseRequested()) {
             this.destroy();
             return;
         }
+        if (waitForResources) {
+            this.waitForQueuedResources();
+            return;
+        }
         this.animationFrame = requestAnimationFrame(this.loop);
+    };
+
+    private readonly handleBrowserResize = (): void => {
+        if (this.isFullscreen()) {
+            this.applyBrowserDisplaySize();
+        } else if (this.canvas) {
+            Renderer.getBackend().initDisplay(this.canvas.width, this.canvas.height);
+        }
     };
 
     private resolveCanvas(): HTMLCanvasElement {
@@ -321,5 +363,49 @@ export class AppGameContainer extends GameContainer {
 
     private now(): number {
         return typeof performance !== "undefined" ? performance.now() : Date.now();
+    }
+
+    private applyCanvasSize(width: number, height: number): void {
+        if (!this.canvas) {
+            return;
+        }
+        this.canvas.width = width;
+        this.canvas.height = height;
+        this.canvas.style.width = `${width}px`;
+        this.canvas.style.height = `${height}px`;
+        Renderer.getBackend().initDisplay(width, height);
+    }
+
+    private applyBrowserDisplaySize(): void {
+        if (!this.canvas || typeof window === "undefined") {
+            return;
+        }
+        const width = Math.max(1, Math.trunc(window.innerWidth || this.width));
+        const height = Math.max(1, Math.trunc(window.innerHeight || this.height));
+        this.setDimensions(width, height);
+        this.canvas.width = width;
+        this.canvas.height = height;
+        this.canvas.style.width = "100vw";
+        this.canvas.style.height = "100vh";
+        Renderer.getBackend().initDisplay(width, height);
+    }
+
+    private waitForQueuedResources(): void {
+        this.waitingForResources = true;
+        void ResourceLoader.waitForAll()
+            .then(() => {
+                this.waitingForResources = false;
+                if (!this.destroyed) {
+                    this.lastFrameTime = this.now();
+                    this.animationFrame = requestAnimationFrame(this.loop);
+                }
+            })
+            .catch((error) => {
+                this.waitingForResources = false;
+                this.resourceError = error;
+                if (!this.destroyed) {
+                    this.animationFrame = requestAnimationFrame(this.loop);
+                }
+            });
     }
 }

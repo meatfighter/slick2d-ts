@@ -7,6 +7,11 @@ type ResourceRecord = {
     error?: unknown;
 };
 
+type FetchFailure = {
+    status?: number;
+    cause?: unknown;
+};
+
 function trimSlashes(value: string): string {
     return value.replace(/^\/+|\/+$/g, "");
 }
@@ -21,6 +26,9 @@ export class ResourceLoader {
     private static locations: string[] = [""];
     private static records = new Map<string, ResourceRecord>();
     private static trackedPromises = new Set<Promise<unknown>>();
+    private static cacheBustValue: string | null = null;
+    private static retryCount = 0;
+    private static retryDelay = 250;
 
     /**
      * Java Slick2D counterpart: ResourceLoader.addResourceLocation(ResourceLocation).
@@ -51,6 +59,26 @@ export class ResourceLoader {
     }
 
     /**
+     * Browser parity helper.
+     *
+     * Adds or clears a cache-version query parameter on network fetch URLs
+     * while preserving the original Java ref string as the cache key.
+     */
+    public static setCacheBust(value: string | number | null): void {
+        ResourceLoader.cacheBustValue = value === null ? null : String(value);
+    }
+
+    /**
+     * Browser parity helper.
+     *
+     * Configures retry attempts for browser resource fetches.
+     */
+    public static setRetryOptions(retries: number, delayMs: number = 250): void {
+        ResourceLoader.retryCount = Math.max(0, Math.trunc(retries));
+        ResourceLoader.retryDelay = Math.max(0, Math.trunc(delayMs));
+    }
+
+    /**
      * Java Slick2D counterpart: ResourceLoader.getResource(String).
      *
      * Returns a URL for a resource path if it can be resolved syntactically.
@@ -59,9 +87,9 @@ export class ResourceLoader {
         for (const location of ResourceLoader.locations) {
             try {
                 if (location.length === 0) {
-                    return new URL(ref, globalThis.location?.href ?? "http://localhost/");
+                    return ResourceLoader.withCacheBust(new URL(ref, globalThis.location?.href ?? "http://localhost/"));
                 }
-                return new URL(`${trimSlashes(location)}/${ref}`, globalThis.location?.href ?? "http://localhost/");
+                return ResourceLoader.withCacheBust(new URL(`${trimSlashes(location)}/${ref}`, globalThis.location?.href ?? "http://localhost/"));
             } catch {
                 continue;
             }
@@ -128,11 +156,8 @@ export class ResourceLoader {
         }
 
         const record: ResourceRecord = { ref };
-        record.promise = fetch(url)
+        record.promise = ResourceLoader.fetchWithRetry(url, ref)
             .then(async (response) => {
-                if (!response.ok) {
-                    throw new SlickException(`Failed to load resource ${ref}: HTTP ${response.status}`);
-                }
                 const data = await response.arrayBuffer();
                 record.data = data;
                 return data.slice(0);
@@ -157,6 +182,27 @@ export class ResourceLoader {
         });
         ResourceLoader.trackedPromises.add(tracked);
         return tracked;
+    }
+
+    /**
+     * Browser parity helper.
+     *
+     * Returns the number of browser resource or decode operations still queued.
+     */
+    public static getPendingCount(): number {
+        const pendingFetches = Array.from(ResourceLoader.records.values())
+            .filter((record) => record.promise !== undefined && record.data === undefined && record.error === undefined)
+            .length;
+        return pendingFetches + ResourceLoader.trackedPromises.size;
+    }
+
+    /**
+     * Browser parity helper.
+     *
+     * Returns true while any tracked browser resource work is still pending.
+     */
+    public static hasPending(): boolean {
+        return ResourceLoader.getPendingCount() > 0;
     }
 
     /**
@@ -197,5 +243,36 @@ export class ResourceLoader {
     public static clearCache(): void {
         ResourceLoader.records.clear();
         ResourceLoader.trackedPromises.clear();
+    }
+
+    private static withCacheBust(url: URL): URL {
+        if (ResourceLoader.cacheBustValue !== null) {
+            url.searchParams.set("v", ResourceLoader.cacheBustValue);
+        }
+        return url;
+    }
+
+    private static async fetchWithRetry(url: URL, ref: string): Promise<Response> {
+        let failure: FetchFailure | null = null;
+        for (let attempt = 0; attempt <= ResourceLoader.retryCount; attempt++) {
+            try {
+                const response = await fetch(url);
+                if (response.ok) {
+                    return response;
+                }
+                failure = { status: response.status };
+            } catch (cause) {
+                failure = { cause };
+            }
+            if (attempt < ResourceLoader.retryCount && ResourceLoader.retryDelay > 0) {
+                await new Promise<void>((resolve) => {
+                    setTimeout(resolve, ResourceLoader.retryDelay);
+                });
+            }
+        }
+        if (failure?.status !== undefined) {
+            throw new SlickException(`Failed to load resource ${ref}: HTTP ${failure.status}`);
+        }
+        throw new SlickException(`Failed to load resource ${ref}`, failure?.cause);
     }
 }

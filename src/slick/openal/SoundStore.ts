@@ -1,4 +1,6 @@
 import { ResourceLoader } from "../util/ResourceLoader.js";
+import { SlickException } from "../SlickException.js";
+import { Log } from "../util/Log.js";
 
 type WebAudioGlobal = typeof globalThis & {
     webkitAudioContext?: typeof AudioContext;
@@ -10,6 +12,10 @@ type WebAudioGlobal = typeof globalThis & {
 export interface AudioPlaybackHandle {
     /** Stops playback if the source has started. */
     stop(): void;
+    /** Pauses playback when supported by the handle. */
+    pause?(): void;
+    /** Resumes playback when supported by the handle. */
+    resume?(): void;
     /** Returns true while the source is active. */
     playing(): boolean;
 }
@@ -45,6 +51,7 @@ export class SoundStore {
         }
         this.activeHandles.clear();
         this.musicHandles.clear();
+        this.buffers.clear();
     }
 
     /** Java Slick2D counterpart: SoundStore.disable(). */
@@ -67,6 +74,13 @@ export class SoundStore {
     /** Java Slick2D counterpart: SoundStore.setMusicOn(boolean). */
     public setMusicOn(music: boolean): void {
         this.musicEnabled = music;
+        for (const handle of Array.from(this.musicHandles)) {
+            if (music) {
+                handle.resume?.();
+            } else {
+                handle.pause?.();
+            }
+        }
     }
 
     /** Java Slick2D counterpart: SoundStore.isMusicOn(). */
@@ -185,9 +199,20 @@ export class SoundStore {
             return Promise.reject(new Error("Web Audio API is not available"));
         }
         const promise = ResourceLoader.loadResource(ref)
-            .then((bytes) => context.decodeAudioData(bytes.slice(0)));
+            .then((bytes) => context.decodeAudioData(bytes.slice(0)))
+            .catch((error) => {
+                this.buffers.delete(ref);
+                throw new SlickException(`Failed to load audio: ${ref}`, error);
+            });
         this.buffers.set(ref, promise);
         return promise;
+    }
+
+    /** Browser parity helper: queues audio decode work into ResourceLoader.waitForAll(). */
+    public preloadAudioBuffer(ref: string): Promise<void> {
+        const tracked = ResourceLoader.track(this.loadAudioBuffer(ref).then(() => undefined));
+        void tracked.catch(() => undefined);
+        return tracked;
     }
 
     /** Browser parity helper: plays a decoded sound effect through Web Audio. */
@@ -201,7 +226,7 @@ export class SoundStore {
             return null;
         }
         let source: AudioBufferSourceNode | null = null;
-        let playing = false;
+        let playing = true;
         let stopped = false;
         const handle: AudioPlaybackHandle = {
             stop: () => {
@@ -242,11 +267,11 @@ export class SoundStore {
                 }
             };
             source.start();
-            playing = true;
-        }).catch(() => {
+        }).catch((error) => {
             playing = false;
             this.activeHandles.delete(handle);
             this.musicHandles.delete(handle);
+            Log.error(`Failed to play sound: ${ref}`, error);
         });
         return handle;
     }

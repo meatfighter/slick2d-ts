@@ -8,6 +8,7 @@ import { ResourceLoader } from "./util/ResourceLoader.js";
  */
 export class Sound {
     private readonly ref: string;
+    private readonly readyPromise: Promise<void>;
     private active: AudioPlaybackHandle[] = [];
 
     public constructor(ref: string);
@@ -21,19 +22,35 @@ export class Sound {
     public constructor(refOrUrlOrInput: string | URL | ArrayBuffer | Blob, ref?: string) {
         if (typeof refOrUrlOrInput === "string") {
             this.ref = refOrUrlOrInput;
-            void ResourceLoader.loadResource(this.ref).catch(() => undefined);
+            this.readyPromise = SoundStore.get().preloadAudioBuffer(this.ref);
         } else if (refOrUrlOrInput instanceof URL) {
             this.ref = refOrUrlOrInput.toString();
+            this.readyPromise = SoundStore.get().preloadAudioBuffer(this.ref);
         } else {
             this.ref = ref ?? "sound";
             if (refOrUrlOrInput instanceof ArrayBuffer) {
                 ResourceLoader.registerResource(this.ref, refOrUrlOrInput);
+                this.readyPromise = SoundStore.get().preloadAudioBuffer(this.ref);
             } else {
-                void ResourceLoader.track(refOrUrlOrInput.arrayBuffer().then((bytes) => {
+                const registered = refOrUrlOrInput.arrayBuffer().then((bytes) => {
                     ResourceLoader.registerResource(this.ref, bytes);
-                }));
+                });
+                this.readyPromise = ResourceLoader.track(registered
+                    .then(() => SoundStore.get().loadAudioBuffer(this.ref))
+                    .then(() => undefined));
+                void this.readyPromise.catch(() => undefined);
             }
         }
+    }
+
+    /** Browser parity helper: waits for constructor-queued audio decode. */
+    public ready(): Promise<void> {
+        return this.readyPromise;
+    }
+
+    /** Browser parity helper: Java-style explicit load alias. */
+    public load(): Promise<void> {
+        return this.ready();
     }
 
     /** Java Slick2D counterpart: Sound.play(). */
@@ -72,7 +89,8 @@ export class Sound {
 
     /** Java Slick2D counterpart: Sound.playing(). */
     public playing(): boolean {
-        return this.active.some((handle) => handle.playing());
+        this.active = this.active.filter((handle) => handle.playing());
+        return this.active.length > 0;
     }
 
     /** Java Slick2D counterpart: Sound.stop(). */
