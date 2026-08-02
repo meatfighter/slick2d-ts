@@ -139,6 +139,12 @@ export class Input {
         target.addEventListener("pointerup", this.handlePointerUp as EventListener);
         target.addEventListener("pointermove", this.handlePointerMove as EventListener);
         target.addEventListener("wheel", this.handleWheel as EventListener);
+        if (typeof window !== "undefined") {
+            window.addEventListener("blur", this.handleFocusLost);
+        }
+        if (typeof document !== "undefined") {
+            document.addEventListener("visibilitychange", this.handleVisibilityChange);
+        }
     }
 
     /** Browser parity helper: element whose focused game keys should suppress browser defaults. */
@@ -157,6 +163,12 @@ export class Input {
         this.target.removeEventListener("pointerup", this.handlePointerUp as EventListener);
         this.target.removeEventListener("pointermove", this.handlePointerMove as EventListener);
         this.target.removeEventListener("wheel", this.handleWheel as EventListener);
+        if (typeof window !== "undefined") {
+            window.removeEventListener("blur", this.handleFocusLost);
+        }
+        if (typeof document !== "undefined") {
+            document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+        }
         this.target = null;
     }
 
@@ -447,6 +459,14 @@ export class Input {
     /** Java Slick2D counterpart: Input.poll(int, int). */
     public poll(_width: number, height: number): void {
         this.height = height;
+        if (!Input.browserHasInputFocus()) {
+            this.clearAllInputState();
+            return;
+        }
+        if (this.paused) {
+            this.clearPressedRecords();
+            return;
+        }
         this.pollControllers();
     }
 
@@ -473,8 +493,7 @@ export class Input {
     /** Java Slick2D counterpart: Input.pause(). */
     public pause(): void {
         this.paused = true;
-        this.downKeys.clear();
-        this.downMouse.clear();
+        this.clearAllInputState();
     }
 
     /** Java Slick2D counterpart: Input.resume(). */
@@ -483,15 +502,15 @@ export class Input {
     }
 
     private readonly handleKeyDown = (event: KeyboardEvent): void => {
-        if (this.paused) {
-            return;
-        }
         const key = Input.keyCodeFromEvent(event);
         if (key === 0) {
             return;
         }
         if (this.shouldPreventDefault(event, key)) {
             event.preventDefault();
+        }
+        if (this.paused || !this.shouldAcceptGameKey(event)) {
+            return;
         }
         const wasDown = this.downKeys.has(key);
         this.downKeys.add(key);
@@ -507,10 +526,16 @@ export class Input {
 
     private readonly handleKeyUp = (event: KeyboardEvent): void => {
         const key = Input.keyCodeFromEvent(event);
+        if (key === 0) {
+            return;
+        }
         if (this.shouldPreventDefault(event, key)) {
             event.preventDefault();
         }
         this.downKeys.delete(key);
+        if (this.paused || !this.shouldAcceptGameKey(event)) {
+            return;
+        }
         for (const listener of this.keyListeners) {
             if (isAccepting(listener)) {
                 listener.keyReleased(key, event.key?.length === 1 ? event.key : "\0");
@@ -519,6 +544,9 @@ export class Input {
     };
 
     private readonly handlePointerDown = (event: PointerEvent): void => {
+        if (this.paused || !this.shouldAcceptPointerEvent(event)) {
+            return;
+        }
         this.updateMouse(event);
         this.downMouse.add(event.button);
         this.pressedMouse.add(event.button);
@@ -530,6 +558,9 @@ export class Input {
     };
 
     private readonly handlePointerUp = (event: PointerEvent): void => {
+        if (this.paused || (!this.shouldAcceptPointerEvent(event) && this.downMouse.size === 0)) {
+            return;
+        }
         this.updateMouse(event);
         this.downMouse.delete(event.button);
         for (const listener of this.mouseListeners) {
@@ -541,6 +572,9 @@ export class Input {
     };
 
     private readonly handlePointerMove = (event: PointerEvent): void => {
+        if (this.paused || (!this.shouldAcceptPointerEvent(event) && this.downMouse.size === 0)) {
+            return;
+        }
         const oldX = this.mouseX;
         const oldY = this.mouseY;
         this.updateMouse(event);
@@ -556,12 +590,37 @@ export class Input {
     };
 
     private readonly handleWheel = (event: WheelEvent): void => {
+        if (this.paused || !this.shouldAcceptPointerEvent(event)) {
+            return;
+        }
         for (const listener of this.mouseListeners) {
             if (isAccepting(listener)) {
                 listener.mouseWheelMoved(Math.trunc(-event.deltaY));
             }
         }
     };
+
+    private readonly handleFocusLost = (): void => {
+        this.clearAllInputState();
+    };
+
+    private readonly handleVisibilityChange = (): void => {
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+            this.clearAllInputState();
+        }
+    };
+
+    private clearPressedRecords(): void {
+        this.clearKeyPressedRecord();
+        this.clearMousePressedRecord();
+        this.clearControlPressedRecord();
+    }
+
+    private clearAllInputState(): void {
+        this.downKeys.clear();
+        this.downMouse.clear();
+        this.clearPressedRecords();
+    }
 
     private updateMouse(event: PointerEvent): void {
         const currentTarget = event.currentTarget;
@@ -632,6 +691,13 @@ export class Input {
         return Input.eventCodeToKey.get(event.code) ?? 0;
     }
 
+    private static browserHasInputFocus(): boolean {
+        if (typeof document === "undefined") {
+            return true;
+        }
+        return document.visibilityState !== "hidden" && document.hasFocus();
+    }
+
     private shouldPreventDefault(event: KeyboardEvent, key: number): boolean {
         if (!Input.defaultPreventedKeys.has(key) || event.defaultPrevented) {
             return false;
@@ -647,6 +713,37 @@ export class Input {
             || active === document.body
             || active === document.documentElement
             || event.target === this.preventDefaultElement;
+    }
+
+    private shouldAcceptGameKey(event: KeyboardEvent): boolean {
+        const target = event.target;
+        if (typeof Element !== "undefined" && target instanceof Element && Input.isInteractiveElement(target)) {
+            return false;
+        }
+        const active = typeof document !== "undefined" ? document.activeElement : null;
+        if (active && Input.isInteractiveElement(active)) {
+            return false;
+        }
+        if (!this.preventDefaultElement || typeof document === "undefined") {
+            return true;
+        }
+        if (active === this.preventDefaultElement || active === document.body || active === document.documentElement || target === this.preventDefaultElement) {
+            return true;
+        }
+        return typeof Node !== "undefined" && target instanceof Node && this.preventDefaultElement.contains(target);
+    }
+
+    private shouldAcceptPointerEvent(event: PointerEvent | WheelEvent): boolean {
+        if (!this.preventDefaultElement) {
+            return true;
+        }
+        const target = event.target;
+        if (typeof Element !== "undefined" && target instanceof Element && Input.isInteractiveElement(target)) {
+            return false;
+        }
+        return typeof Node !== "undefined"
+            && target instanceof Node
+            && (target === this.preventDefaultElement || this.preventDefaultElement.contains(target));
     }
 
     private static isInteractiveElement(element: Element): boolean {

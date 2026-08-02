@@ -34,6 +34,7 @@ export class Music {
     private startedAt = 0;
     private paused = false;
     private playingFlag = false;
+    private globallySuspended = false;
     private stopRequested = false;
     private startToken = 0;
     private handle: AudioPlaybackHandle | null = null;
@@ -135,6 +136,7 @@ export class Music {
         this.stopSource(true, true);
         this.paused = true;
         this.playingFlag = false;
+        this.globallySuspended = false;
         Music.active.delete(this);
     }
 
@@ -145,6 +147,7 @@ export class Music {
         this.positionOffset = 0;
         this.paused = false;
         this.playingFlag = false;
+        this.globallySuspended = false;
         Music.active.delete(this);
         this.fadeState = null;
         if (Music.currentMusic === this) {
@@ -156,6 +159,8 @@ export class Music {
     public resume(): void {
         if (this.paused) {
             this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
+        } else if (this.globallySuspended && SoundStore.get().musicOn()) {
+            this.resumeForMusicOn();
         }
     }
 
@@ -208,9 +213,6 @@ export class Music {
     }
 
     private start(loop: boolean, pitch: number, volume: number, offset: number = 0): void {
-        if (!SoundStore.get().musicOn()) {
-            return;
-        }
         const oldMusic = Music.currentMusic;
         if (oldMusic && oldMusic !== this) {
             oldMusic.stopForSwap(this);
@@ -223,58 +225,25 @@ export class Music {
         this.setVolume(volume);
         this.paused = false;
         this.playingFlag = true;
+        this.globallySuspended = !SoundStore.get().musicOn();
         this.ensureHandle();
         const token = ++this.startToken;
         void this.readyPromise.then(() => this.loadBuffer()).then((buffer) => {
             if (token !== this.startToken || Music.currentMusic !== this || !this.playingFlag) {
                 return;
             }
-            const context = SoundStore.get().getAudioContext();
-            const bus = SoundStore.get().getMusicBus();
-            if (!context || !bus) {
-                throw new SlickException("Music playback requires Web Audio API");
-            }
-            this.stopSource(true);
-            this.ensureHandle();
-            void context.resume().catch(() => undefined);
-            const source = context.createBufferSource();
-            this.source = source;
-            this.gain = context.createGain();
             this.buffer = buffer;
-            source.buffer = buffer;
-            source.loop = loop;
-            source.playbackRate.value = this.playbackRate;
-            this.gain.gain.value = this.volume;
-            source.connect(this.gain);
-            this.gain.connect(bus);
-            this.positionOffset = Math.max(0, Math.min(offset, buffer.duration));
-            this.startedAt = context.currentTime;
-            this.stopRequested = false;
-            source.onended = () => {
-                if (this.source !== source) {
-                    return;
-                }
-                const requested = this.stopRequested;
-                this.source = null;
-                this.gain = null;
-                if (!requested && !loop) {
-                    this.clearHandle();
-                    this.playingFlag = false;
-                    this.positionOffset = 0;
-                    Music.active.delete(this);
-                    if (Music.currentMusic === this) {
-                        Music.currentMusic = null;
-                    }
-                    for (const listener of this.listeners) {
-                        listener.musicEnded(this);
-                    }
-                }
-            };
-            source.start(0, this.positionOffset);
-            Music.active.add(this);
+            if (!SoundStore.get().musicOn()) {
+                this.globallySuspended = true;
+                this.positionOffset = Math.max(0, Math.min(offset, buffer.duration));
+                return;
+            }
+            this.globallySuspended = false;
+            this.startSource(buffer, loop, offset);
         }).catch((error) => {
             if (token === this.startToken && Music.currentMusic === this) {
                 this.playingFlag = false;
+                this.globallySuspended = false;
                 Music.currentMusic = null;
                 this.clearHandle();
             }
@@ -311,6 +280,7 @@ export class Music {
         this.stopSource(true);
         this.playingFlag = false;
         this.paused = false;
+        this.globallySuspended = false;
         this.fadeState = null;
         Music.active.delete(this);
         if (Music.currentMusic === this) {
@@ -342,6 +312,69 @@ export class Music {
         }
     }
 
+    private startSource(buffer: AudioBuffer, loop: boolean, offset: number): void {
+        const context = SoundStore.get().getAudioContext();
+        const bus = SoundStore.get().getMusicBus();
+        if (!context || !bus) {
+            throw new SlickException("Music playback requires Web Audio API");
+        }
+        this.stopSource(true);
+        this.ensureHandle();
+        void context.resume().catch(() => undefined);
+        const source = context.createBufferSource();
+        this.source = source;
+        this.gain = context.createGain();
+        source.buffer = buffer;
+        source.loop = loop;
+        source.playbackRate.value = this.playbackRate;
+        this.gain.gain.value = this.volume;
+        source.connect(this.gain);
+        this.gain.connect(bus);
+        this.positionOffset = Math.max(0, Math.min(offset, buffer.duration));
+        this.startedAt = context.currentTime;
+        this.stopRequested = false;
+        source.onended = () => {
+            if (this.source !== source) {
+                return;
+            }
+            const requested = this.stopRequested;
+            this.source = null;
+            this.gain = null;
+            if (!requested && !loop) {
+                this.clearHandle();
+                this.playingFlag = false;
+                this.globallySuspended = false;
+                this.positionOffset = 0;
+                Music.active.delete(this);
+                if (Music.currentMusic === this) {
+                    Music.currentMusic = null;
+                }
+                for (const listener of this.listeners) {
+                    listener.musicEnded(this);
+                }
+            }
+        };
+        source.start(0, this.positionOffset);
+        Music.active.add(this);
+    }
+
+    private suspendForMusicOff(): void {
+        if (Music.currentMusic !== this || !this.playingFlag || this.globallySuspended) {
+            return;
+        }
+        this.positionOffset = this.getPosition();
+        this.globallySuspended = true;
+        this.stopSource(true, true);
+    }
+
+    private resumeForMusicOn(): void {
+        if (Music.currentMusic !== this || !this.playingFlag || this.paused || !this.globallySuspended) {
+            return;
+        }
+        this.globallySuspended = false;
+        this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
+    }
+
     private ensureHandle(): void {
         if (this.handle) {
             SoundStore.get().track(this.handle);
@@ -350,7 +383,8 @@ export class Music {
         this.handle = {
             stop: () => this.stop(),
             pause: () => this.pause(),
-            resume: () => this.resume(),
+            suspend: () => this.suspendForMusicOff(),
+            resume: () => this.resumeForMusicOn(),
             playing: () => this.playing()
         };
         SoundStore.get().track(this.handle);

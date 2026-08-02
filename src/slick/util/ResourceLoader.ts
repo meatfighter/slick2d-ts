@@ -12,10 +12,6 @@ type FetchFailure = {
     cause?: unknown;
 };
 
-function trimSlashes(value: string): string {
-    return value.replace(/^\/+|\/+$/g, "");
-}
-
 /**
  * Java Slick2D counterpart: org.newdawn.slick.util.ResourceLoader.
  *
@@ -52,10 +48,11 @@ export class ResourceLoader {
     /**
      * Java Slick2D counterpart: ResourceLoader.removeAllResourceLocations().
      *
-     * Clears base URL/path strings and keeps the default relative lookup.
+     * Clears base URL/path strings. No network resources resolve until a
+     * location is added or bytes are registered directly.
      */
     public static removeAllResourceLocations(): void {
-        ResourceLoader.locations = [""];
+        ResourceLoader.locations = [];
     }
 
     /**
@@ -84,17 +81,7 @@ export class ResourceLoader {
      * Returns a URL for a resource path if it can be resolved syntactically.
      */
     public static getResource(ref: string): URL | null {
-        for (const location of ResourceLoader.locations) {
-            try {
-                if (location.length === 0) {
-                    return ResourceLoader.withCacheBust(new URL(ref, globalThis.location?.href ?? "http://localhost/"));
-                }
-                return ResourceLoader.withCacheBust(new URL(`${trimSlashes(location)}/${ref}`, globalThis.location?.href ?? "http://localhost/"));
-            } catch {
-                continue;
-            }
-        }
-        return null;
+        return ResourceLoader.getResourceCandidates(ref)[0] ?? null;
     }
 
     /**
@@ -146,17 +133,17 @@ export class ResourceLoader {
         if (existing?.data) {
             return existing.data.slice(0);
         }
-        if (existing?.promise) {
+        if (existing?.promise && existing.error === undefined) {
             return existing.promise;
         }
 
-        const url = ResourceLoader.getResource(ref);
-        if (!url || !globalThis.fetch) {
+        const urls = ResourceLoader.getResourceCandidates(ref);
+        if (urls.length === 0 || !globalThis.fetch) {
             throw new SlickException(`Unable to resolve resource: ${ref}`);
         }
 
         const record: ResourceRecord = { ref };
-        record.promise = ResourceLoader.fetchWithRetry(url, ref)
+        record.promise = ResourceLoader.fetchFromCandidates(urls, ref)
             .then(async (response) => {
                 const data = await response.arrayBuffer();
                 record.data = data;
@@ -250,6 +237,43 @@ export class ResourceLoader {
             url.searchParams.set("v", ResourceLoader.cacheBustValue);
         }
         return url;
+    }
+
+    private static getResourceCandidates(ref: string): URL[] {
+        const urls: URL[] = [];
+        for (const location of ResourceLoader.locations) {
+            try {
+                urls.push(ResourceLoader.withCacheBust(ResourceLoader.resolveLocation(location, ref)));
+            } catch {
+                continue;
+            }
+        }
+        return urls;
+    }
+
+    private static resolveLocation(location: string, ref: string): URL {
+        const baseHref = globalThis.location?.href ?? "http://localhost/";
+        if (location.length === 0) {
+            return new URL(ref, baseHref);
+        }
+        const normalizedLocation = location.endsWith("/") ? location : `${location}/`;
+        const normalizedRef = ref.replace(/^\/+/, "");
+        return new URL(normalizedRef, new URL(normalizedLocation, baseHref));
+    }
+
+    private static async fetchFromCandidates(urls: URL[], ref: string): Promise<Response> {
+        let failure: unknown = null;
+        for (const url of urls) {
+            try {
+                return await ResourceLoader.fetchWithRetry(url, ref);
+            } catch (error) {
+                failure = error;
+            }
+        }
+        if (failure instanceof SlickException) {
+            throw failure;
+        }
+        throw new SlickException(`Failed to load resource ${ref}`, failure);
     }
 
     private static async fetchWithRetry(url: URL, ref: string): Promise<Response> {

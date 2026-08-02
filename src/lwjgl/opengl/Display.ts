@@ -42,6 +42,7 @@ export class Display {
             Display.currentMode = new DisplayMode(container.getScreenWidth(), container.getScreenHeight());
             Display.fullscreen = container.isFullscreen();
             Display.created = true;
+            Display.closeRequested = false;
         }
     }
 
@@ -61,6 +62,7 @@ export class Display {
     /** Java LWJGL counterpart: Display.create(...). */
     public static create(_pixelFormat?: PixelFormat, _sharedContext?: unknown): void {
         Display.created = true;
+        Display.closeRequested = false;
         if (_pixelFormat && _pixelFormat.getStencilBits() > 0) {
             GameContainer.enableStencil();
         }
@@ -69,6 +71,7 @@ export class Display {
     /** Java LWJGL counterpart: Display.destroy(). */
     public static destroy(): void {
         Display.created = false;
+        Display.closeRequested = false;
     }
 
     /** Java LWJGL counterpart: Display.isCreated(). */

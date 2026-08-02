@@ -50,6 +50,16 @@ No game-title-specific modules are exported. The project names appear only as au
 - Added a runtime resource barrier in `AppGameContainer` so resources queued after `game.init()` can render loading progress once, then pause the loop until queued fetch/decode work settles.
 - Added game-key `preventDefault()` handling scoped to the active canvas so arrows, Space, Enter, Escape, WASD/IJKL, and number-pad-style top-row controls do not scroll or trigger browser UI during play.
 - Updated fullscreen/display sizing to use the browser Fullscreen API promise, `fullscreenchange`, and `resize` before recalculating WebGL display dimensions.
+- Fixed `AppGameContainer` close-request ordering so `game.closeRequested()` is called only after `Display.isCloseRequested()` is true, matching Java and avoiding per-frame game shutdown side effects.
+- Reset static `Display` close state on create/destroy/new active container registration, and destroy the Display shim with `AppGameContainer.destroy()`.
+- Added `AppGameContainer.setErrorHandler()` so async frame/resource failures queued after `start()` can be delivered to the host PWA instead of requiring a raw RAF exception.
+- Fixed `Input.pause()` and paused `poll()` to clear one-shot key, mouse, and controller records like Java.
+- Split browser default prevention from Slick input acceptance so focused DOM controls can use Space/Enter/arrows without leaking one-shot keys or pointer clicks into the game.
+- Added browser lost-focus cleanup for Slick input on `window.blur`, hidden `visibilitychange`, and inactive `poll()` so held movement keys cannot stick after a missed `keyup`.
+- Fixed global music-off handling so `SoundStore.setMusicOn(false)` suspends audible Web Audio playback without invoking public `Music.pause()` semantics or clearing `Music.playing()`.
+- Allowed `Music.play()` / `loop()` while global music is off to become the current suspended music and resume audibly when music is enabled again, matching Java `playAsMusic`.
+- Wrapped initial `AppGameContainer.start()` init/preload work in cleanup/error handling so failed starts unbind listeners, reset Display/renderer state, and can be retried.
+- Fixed `ResourceLoader` location handling to try ordered browser locations, preserve root-relative paths like `/assets`, clear all locations on `removeAllResourceLocations()`, and refetch failed records on retry.
 - Updated `docs/SLICK2D-PARITY-API.md` to match the implementation and verified Java behavior.
 
 ## External Audit Verification
@@ -84,6 +94,24 @@ The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT.m
 - `Input` now prevents browser defaults for mapped game keys only when the game canvas owns input and not when an editable/menu control has focus.
 - `AppGameContainer` now updates display size after fullscreen promises, `fullscreenchange`, and `resize` events, and dynamic resource work queued during loading frames blocks the next frame until it completes.
 
+The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_2.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+
+- `AppGameContainer` now checks `Display.isCloseRequested()` before calling `game.closeRequested()`, matching Java's loop and preventing game-specific close side effects during ordinary frames.
+- `Display.create()`, `Display.destroy()`, and registering a new active container now clear stale static close requests so PWA menu/restart flows do not inherit a previous exit flag.
+- `AppGameContainer.destroy()` now calls `Display.destroy()` so `Display.isCreated()` and close-state lifecycle match the active container.
+- `AppGameContainer.setErrorHandler(handler)` lets the host receive async frame/resource failures after `start()` has resolved. Without a handler, errors are still surfaced asynchronously instead of being swallowed.
+- `Input.pause()` and paused `Input.poll()` now clear pressed key, mouse, and controller records, matching Java Slick2D.
+- Keyboard events from focused DOM controls are ignored by Slick input state, and pointer/wheel events outside the game surface are ignored, so menu buttons/sliders do not enqueue stale game actions.
+
+The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_3.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+
+- Lost browser focus now clears held key/mouse state and one-shot input records so movement keys cannot remain down after a missed `keyup`.
+- `AppGameContainer.hasFocus()` no longer treats a stale canvas `activeElement` as focused when `document.hasFocus()` is false.
+- Global `setMusicOn(false)` now performs a Java-style music-store suspension rather than a public `Music.pause()`, preserving current music and `playing()` semantics.
+- A music start requested while global music is off now becomes the current suspended track and starts audibly when music is enabled again.
+- Initial `game.init()` or startup `ResourceLoader.waitForAll()` failures now clean up container state and either call `setErrorHandler()` or reject `start()` after cleanup.
+- `ResourceLoader` now fetches candidate locations in order, retries each candidate, applies cache-bust to every attempted URL, preserves `/assets` as origin-root absolute, and lets failed records be fetched again on retry.
+
 Claims intentionally not converted into desktop-exact behavior:
 
 - Native applet, AWT/Swing, LWJGL Display, filesystem, classpath, OpenAL source-pool, and blocking timing behavior remain browser shims.
@@ -104,6 +132,10 @@ These differences are intentional and must be kept during game ports:
 - Browser resource fetch/decode is asynchronous. Any Java code that synchronously parses resource bytes must preload those refs before construction, then read through `ResourceLoader.getResourceAsStream`.
 - Dynamic Java-style loading screens may construct resources during `update`; `AppGameContainer` renders that progress frame, then waits for `ResourceLoader.hasPending()` work before the next update.
 - Browser autoplay policy still requires a user gesture before reliable audio decode/playback. The host page should focus the canvas and initialize or resume audio from the Start button handler before entering the game loop.
+- Host pages should install `AppGameContainer.setErrorHandler()` when they need a splash/loading UI to display queued resource failures. The library still surfaces unhandled errors if no handler is installed.
+- DOM controls used for a browser menu should live outside the active canvas focus path or pause the container; either way, Slick input now ignores their keyboard and pointer events.
+- `ResourceLoader.getResource(ref)` remains a syntactic best-effort URL helper. Actual load success is determined by `loadResource(ref)`, which tries every configured location.
+- `removeAllResourceLocations()` now matches Java and leaves no default browser location. Use `addResourceLocation("")` when a port intentionally wants relative-to-page lookup after clearing.
 - Applets/AWT/Swing/native window concepts are not library APIs. Use `AppGameContainer`/`ApplicationGameContainer`, DOM canvas, Fullscreen API, and Pointer Lock API.
 
 ## Port Readiness
@@ -113,7 +145,9 @@ The library is ready as a parity base for TS ports of the three games, provided 
 - preloads atlas XML/DEF files, image files, binary map files, and audio refs before Java-style synchronous constructors/readers need them;
 - awaits `Sound.ready()` / `Music.ready()` or relies on the `AppGameContainer` dynamic resource barrier before leaving loading modes that construct audio after `init`;
 - treats fullscreen toggles as browser-async: await `setDisplayMode` when it returns a promise, then recalculate scalable container transforms, while also handling resize/fullscreen events;
+- installs an `AppGameContainer` error handler before `start()` when the PWA needs to show loading/resource errors inside the UI;
 - focuses the game canvas when handing control from menu DOM to game input so browser key defaults are suppressed only during play;
+- configures `ResourceLoader` locations deliberately for the deployed base path, for example `addResourceLocation("/assets")` for origin-root assets or `addResourceLocation("assets")` for route-relative assets;
 - ports game-domain classes locally rather than adding them to `slick2d-ts`;
 - replaces Java file/network side effects such as `FileOutputStream`, `URL.openStream`, `System.exit`, and applet lifecycle calls with game-local browser code;
 - keeps one TypeScript file per Java class for the game source, matching the library style.

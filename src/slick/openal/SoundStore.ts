@@ -14,6 +14,8 @@ export interface AudioPlaybackHandle {
     stop(): void;
     /** Pauses playback when supported by the handle. */
     pause?(): void;
+    /** Suspends audible playback for global music-off without changing public Music.pause() state. */
+    suspend?(): void;
     /** Resumes playback when supported by the handle. */
     resume?(): void;
     /** Returns true while the source is active. */
@@ -78,7 +80,11 @@ export class SoundStore {
             if (music) {
                 handle.resume?.();
             } else {
-                handle.pause?.();
+                if (handle.suspend) {
+                    handle.suspend();
+                } else {
+                    handle.pause?.();
+                }
             }
         }
     }

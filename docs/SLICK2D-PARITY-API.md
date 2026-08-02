@@ -339,6 +339,9 @@ Implement these rules:
 - `ResourceLoader.setCacheBust(value)` appends or replaces a `v` query parameter on network fetch URLs while preserving the exact Java ref as the cache key.
 - `ResourceLoader.setRetryOptions(retries, delayMs)` configures network retry attempts for resources loaded through Slick. Retries apply only to fetch transport failures and non-OK HTTP responses; decode/parse failures fail immediately.
 - `ResourceLoader.hasPending()` and `getPendingCount()` report queued fetch/decode work, including browser-only promises registered through `track()`.
+- Browser resource locations must preserve Java's ordered search semantics. `loadResource(ref)` tries every configured location in order, retries that candidate according to retry settings, then falls through to the next location before failing.
+- `removeAllResourceLocations()` clears every location, matching Java. Add `""` explicitly when a port wants the default relative-to-page lookup after clearing.
+- Root-relative browser locations such as `/assets` must stay origin-root absolute. Relative locations such as `assets` stay relative to the deployed page/base URL. Absolute `https://...` locations stay absolute.
 - Java `DataInputStream` maps to `slick.support.BinaryReader`, which must implement Java-compatible big-endian reads for the methods used by the ports.
 - Stage text files map to the text handler; `.def` files map to the packed-sheet text handler; XML atlas files map to the XML handler; images map to the image-bitmap handler; audio maps to the audio-buffer or streaming-audio handler.
 - Java `URL.openStream` or `BufferedReader` over an HTTP score/service URL is not Slick resource loading. Port that code inside the game using `fetch`, make it asynchronous, and keep it out of `slick2d-ts`.
@@ -350,6 +353,7 @@ Implement these rules:
 - `AppGameContainer.start()` must await all resources queued during `Game.init`.
 - Resources created after startup must begin loading immediately and expose a ready state internally.
 - Resources created from a loading screen or any other `update` after startup must still participate in the shared barrier. `AppGameContainer` must allow the current progress frame to render, then pause the next update until `ResourceLoader.hasPending()` is false or a queued promise rejects.
+- Resource or frame failures after `start()` has resolved must be deliverable to the host PWA through `AppGameContainer.setErrorHandler(handler)`. The fallback may still surface an uncaught asynchronous error, but host loading UIs must not be forced to rely on global `error` or `unhandledrejection`.
 - Drawing an image whose handle is still pending after the startup barrier skips that draw and logs one warning keyed by resource path. Drawing an image whose handle failed throws `SlickException`.
 - Playing audio whose handle is still pending or blocked by browser autoplay produces no sound and logs one warning keyed by resource path. Playing audio whose handle failed throws `SlickException`.
 - Missing or failed required resources must surface as `SlickException`.
@@ -540,7 +544,8 @@ Implement these rules:
 - `Music.setVolume` persists across future `play` and `loop` calls.
 - `Music` must preserve Java Slick2D's single global current music channel. Starting one `Music` stops/swaps the previous current instance, updates listener state, and makes `oldMusic.playing()` return false immediately.
 - `Music.stop()` and `pause()` must invalidate pending async starts so a decoded buffer cannot start after the game has stopped or changed modes.
-- `GameContainer.setMusicOn(false)` / `SoundStore.setMusicOn(false)` pauses active music, not just mutes it. Setting music on again resumes from the stored position when possible.
+- `GameContainer.setMusicOn(false)` / `SoundStore.setMusicOn(false)` suspends audible active music, not just mutes it. It must not call public `Music.pause()` semantics, and it must preserve the current music instance and `Music.playing()` state. Setting music on again resumes from the stored position when possible.
+- `Music.play()` or `loop()` while global music is off still registers that track as current and prepares it; audible Web Audio playback waits until global music is enabled.
 - Browser autoplay restrictions must be handled by deferring playback until audio is unlocked by a user gesture.
 - `playing()` must report whether the sound or music instance is currently active.
 
@@ -556,6 +561,8 @@ Implement these rules:
 - Keyboard constants must retain the original LWJGL numeric values.
 - Input polling methods must preserve Slick2D's difference between "pressed once" and "currently down".
 - While the game canvas owns focus/input, Slick movement/action keys must call `KeyboardEvent.preventDefault()` so arrows and Space do not scroll or activate DOM UI. This must not suppress normal behavior when an editable/menu element has focus.
+- DOM controls outside the game surface must not be recorded as Slick input at all. Split "prevent browser default" from "accept as game input" so buttons, sliders, text fields, and contenteditable elements remain normal browser controls.
+- Window blur, hidden `visibilitychange`, and inactive input polling must clear held keyboard/mouse state plus one-shot key, mouse, and controller records. Browser input can miss a `keyup`; do not let held state survive lost focus.
 - Controller methods must use the Gamepad API and preserve Slick2D's listener method names.
 
 ## Required API Surface
@@ -1159,6 +1166,11 @@ Implementation instructions:
 - `clearMousePressedRecord` clears all one-shot mouse pressed state.
 - `bindToElement` and `unbind` are browser parity helpers used by containers. They attach/remove keyboard, pointer, wheel, and gamepad event handling without changing Java-facing polling methods.
 - `setPreventDefaultElement(element)` records the canvas or host element whose focused game keys should suppress browser defaults. Suppress only mapped game-control keys and never suppress while an `input`, `textarea`, `select`, `button`, or `contentEditable` element owns focus.
+- Keyboard events from focused interactive DOM controls must be ignored by Slick state and listeners entirely, not merely allowed to keep their browser default behavior.
+- Pointer and wheel events outside the prevent-default/game element must be ignored unless they are completing an existing game drag/release.
+- `pause()` clears held key/mouse state plus key, mouse, and controller pressed records. `poll()` must clear those pressed records and return while paused, matching Java Slick2D.
+- `bindToElement` must also install browser lost-focus cleanup on `window.blur` and document `visibilitychange`. The cleanup clears `downKeys`, `downMouse`, `pressedKeys`, `pressedMouse`, and `controlPressed`.
+- `poll()` must clear all browser-held input state and return when the document is hidden or `document.hasFocus()` is false.
 - `setScale` and `setOffset` are required by `ScalableGame` and `ScalableGame2`; they transform browser pointer coordinates into game coordinates.
 - Gamepad direction methods must support `Input.ANY_CONTROLLER`.
 - `isButton1Pressed`, `isButton2Pressed`, and `isButton3Pressed` delegate to `isButtonPressed(0/1/2, controller)`.
@@ -1236,7 +1248,9 @@ Implementation instructions:
 - `loop()` loops indefinitely.
 - Starting a track makes it the single current music instance, stops any previous current music, and fires `musicSwapped(oldMusic, this)` on the old music's listeners.
 - `playing()` returns true only while this instance is the current music and has not ended, stopped, paused, or been swapped out.
-- `pause()` stores the current position and stops the active `AudioBufferSourceNode`; `resume()` starts a new source at that stored position because Web Audio source nodes are one-shot.
+- `pause()` is the public Java `Music.pause()` equivalent: it stores the current position, stops the active `AudioBufferSourceNode`, and makes `playing()` false.
+- Global music-off suspension is separate from public `pause()`: it stops audible playback and stores position without clearing `playing()` or `currentMusic`.
+- `resume()` starts a new source at the stored public-pause position because Web Audio source nodes are one-shot. Global music-on resume uses the same one-shot-source restart internally while preserving Java global music toggle semantics.
 - `setVolume(volume)` clamps and stores `0..1` volume.
 - `setPosition(position)` returns whether the backend accepted the seek, matching Slick2D's boolean return.
 - `fade(duration, endVolume, stopAfterFade)` stores a fade operation in milliseconds; `Music.poll(delta)` advances active fades and dispatches end-of-track listener events.
@@ -1431,9 +1445,12 @@ Implementation instructions:
 ### `slick.AppGameContainer`
 
 ```ts
+export type AppGameContainerErrorHandler = (error: Error) => void;
+
 export class AppGameContainer extends GameContainer {
     public constructor(game: Game);
     public constructor(game: Game, width: number, height: number, fullscreen: boolean);
+    public setErrorHandler(handler: AppGameContainerErrorHandler | null): void;
     public supportsAlphaInBackBuffer(): boolean;
     public setTitle(title: string): void;
     public setDisplayMode(width: number, height: number, fullscreen: boolean): void | Promise<void>;
@@ -1464,12 +1481,16 @@ Implementation instructions:
 
 - Required by the games: constructor, `setAlwaysRender`, `setClearEachFrame`, `setDisplayMode`, `setShowFPS`, `setSmoothDeltas`, `setSoundOn`, `setVSync`, and `start`.
 - `start` creates or binds the canvas, initializes input/audio/rendering, calls `game.init`, resolves resources queued during init, and begins the browser loop.
+- The RAF loop must match Java close behavior: check `Display.isCloseRequested()` first, and call `game.closeRequested()` only inside that branch.
 - `start` focuses the canvas, routes input through `Input.bindToElement(window)`, and calls `Input.setPreventDefaultElement(canvas)` so game keys suppress browser defaults only during canvas-owned play.
 - If resources are queued during a later `update`, the loop must finish rendering the current progress frame, wait for `ResourceLoader.waitForAll()`, reset `lastFrameTime`, and then resume. Rejections destroy the container and throw a `SlickException` or the original `Error`.
+- `start()` must wrap canvas setup, renderer/audio initialization, `game.init()`, and the initial `ResourceLoader.waitForAll()` in cleanup/error handling. Startup failure must unbind input, remove browser listeners, dispose renderer state, reset `Display`, set `started=false`, and leave the same container retryable.
+- `setErrorHandler(handler)` installs the host callback for startup and async frame/resource errors. When present, the container must destroy itself and call the handler instead of relying on a raw RAF exception. When absent during startup, `start()` rejects after cleanup.
 - `setDisplayMode(width, height, fullscreen)` sets logical width and height, updates canvas sizing, then calls `setFullscreen(fullscreen)`. It returns the fullscreen promise when the browser starts one; ports that need immediate scale recalculation must await that promise.
 - `setFullscreen(fullscreen)` updates browser fullscreen state, then applies actual browser display dimensions after the promise resolves. `fullscreenchange` and `resize` events must also refresh canvas/WebGL display sizing.
-- `destroy` stops the loop, clears the input prevent-default element, releases event listeners, and disposes the renderer backend.
+- `destroy` stops the loop, clears the input prevent-default element, releases event listeners, disposes the renderer backend, calls `Display.destroy()`, and unregisters the active container.
 - `supportsAlphaInBackBuffer` returns whether the backing canvas supports alpha.
+- `hasFocus()` must return false when `document.hasFocus()` is false; a stale canvas `activeElement` must not override browser focus loss.
 - The constructor without dimensions must use Slick2D's default `640x480` unless project configuration overrides it.
 
 ### `slick.ApplicationGameContainer`
@@ -1608,7 +1629,11 @@ Implementation instructions:
 - Keep the public Java method names for compatibility.
 - Back these calls with the modern resource manager from `docs/RESOURCE-MANAGEMENT-SYSTEM.md`.
 - Browser code cannot synchronously fetch new network resources. These methods may only return already loaded resources.
-- `loadResource(ref)` is the browser async fetch/decode-byte entry point. It must cache in-flight requests by the original Java ref string.
+- `addResourceLocation(location)` appends a browser base location to the ordered search list. Use `""` for relative-to-current-page lookup, `/assets` for origin-root assets, `assets` for deployed-route-relative assets, and absolute URLs for CDN-style locations.
+- `removeAllResourceLocations()` clears the list completely, matching Java. No network lookup occurs until another location is added.
+- `getResource(ref)` returns the first syntactically resolvable candidate URL and is not proof that the resource exists.
+- `loadResource(ref)` is the browser async fetch/decode-byte entry point. It must cache in-flight requests by the original Java ref string, but a previous failed record must not permanently block a retry.
+- `loadResource(ref)` must generate every candidate URL from the ordered locations, apply cache-bust to each candidate, run configured retries for that candidate, and then try the next candidate before failing.
 - `setCacheBust(value)` configures the network URL query parameter `v`. Passing `null` clears the setting. The cache key remains the original Java ref.
 - `setRetryOptions(retries, delayMs)` configures fetch retries. Clamp negative values to zero and wait `delayMs` between attempts when greater than zero.
 - `track(promise)` adds browser-only preparation work, such as `ImageBitmap` decode, to `waitForAll()` without changing Java method names.
@@ -1935,6 +1960,7 @@ Implementation instructions:
 export interface AudioPlaybackHandle {
     stop(): void;
     pause?(): void;
+    suspend?(): void;
     resume?(): void;
     playing(): boolean;
 }
@@ -1977,7 +2003,7 @@ Implementation instructions:
 - The broader methods must delegate to the same audio subsystem used by `Sound` and `Music`.
 - `get()` returns a singleton, matching Java.
 - `clear` stops active audio and releases cached audio resources owned by the active container scope.
-- `setMusicOn(false)` pauses tracked music handles and stores enough state for `setMusicOn(true)` to resume. This mirrors Java `pauseLoop()`/`restartLoop()` behavior and must not be implemented as volume-only muting.
+- `setMusicOn(false)` calls `suspend()` on tracked music handles when available and stores enough state for `setMusicOn(true)` to resume. This mirrors Java `pauseLoop()`/`restartLoop()` behavior, must not call public `Music.pause()` semantics for `Music` handles, and must not be implemented as volume-only muting.
 - `setSoundsOn(false)` prevents future sound effects from starting; active effect handles may continue unless `clear()` or `stop()` is called, matching the narrower Java sound toggle behavior used by the games.
 - `loadAudioBuffer(ref)` loads bytes through `ResourceLoader.loadResource(ref)`, decodes them through the shared `AudioContext`, caches the in-flight/completed decode promise, deletes failed cache entries, and rejects with `SlickException`.
 - `preloadAudioBuffer(ref)` tracks `loadAudioBuffer(ref)` through `ResourceLoader.track()` and is what `Sound` and `Music` constructors must call.
@@ -2105,6 +2131,7 @@ export class Display {
     public static isActive(): boolean;
     public static isVisible(): boolean;
     public static isCloseRequested(): boolean;
+    public static requestClose(): void;
     public static wasResized(): boolean;
     public static getWidth(): number;
     public static getHeight(): number;
@@ -2119,6 +2146,7 @@ Implementation instructions:
 - `getDisplayMode` returns the active container/canvas mode when a container exists; otherwise it returns the browser screen mode when available; otherwise it returns `640x480`.
 - `setDisplayMode(mode)` updates the active container logical size and records `mode` as the current display mode.
 - `create`, `destroy`, and `update` map to active canvas lifecycle state rather than constructing a native display.
+- `create()`, `destroy()`, and registering a new active container clear stale close-request state.
 - `create(pixelFormat, sharedContext)` must accept the shared-context argument used by Slick2D and route it to the same renderer resource owner used by `GameContainer.enableSharedContext()`.
 - `sync(frameRate)` records the requested frame cap for diagnostics and for the container loop's scheduling policy. It must return immediately and must never block the browser thread.
 - `setParent` records the DOM host element or browser canvas owner when supplied.
@@ -2126,6 +2154,7 @@ Implementation instructions:
 - `setTitle` maps to `document.title` when a document is available.
 - `setIcon` maps through `GameContainer.setIcons` or records the request as a compatibility no-op.
 - `setResizable` controls whether resize events alter the active container.
+- `requestClose()` is the browser helper used by `GameContainer.exit()` to emulate LWJGL's window close flag. `AppGameContainer` must call `game.closeRequested()` only after `isCloseRequested()` returns true.
 
 ### `lwjgl.input.Mouse`
 

@@ -14,6 +14,7 @@ import { SlickException } from "./SlickException.js";
 import { ResourceLoader } from "./util/ResourceLoader.js";
 
 type DomImageData = ImageData;
+export type AppGameContainerErrorHandler = (error: Error) => void;
 
 function isCanvas(value: unknown): value is HTMLCanvasElement {
     return typeof HTMLCanvasElement !== "undefined" && value instanceof HTMLCanvasElement;
@@ -40,6 +41,7 @@ export class AppGameContainer extends GameContainer {
     private alphaInBackBuffer = true;
     private waitingForResources = false;
     private resourceError: unknown = null;
+    private errorHandler: AppGameContainerErrorHandler | null = null;
 
     public constructor(game: Game);
     public constructor(game: Game, width: number, height: number, fullscreen: boolean);
@@ -54,6 +56,11 @@ export class AppGameContainer extends GameContainer {
     /** Java Slick2D counterpart: AppGameContainer.supportsAlphaInBackBuffer(). */
     public supportsAlphaInBackBuffer(): boolean {
         return this.alphaInBackBuffer;
+    }
+
+    /** Browser parity helper: reports async frame/resource errors to the host page. */
+    public setErrorHandler(handler: AppGameContainerErrorHandler | null): void {
+        this.errorHandler = handler;
     }
 
     /** Java Slick2D counterpart: AppGameContainer.setTitle(String). */
@@ -119,32 +126,42 @@ export class AppGameContainer extends GameContainer {
         }
         this.destroyed = false;
         this.started = true;
-        this.canvas = this.resolveCanvas();
-        this.canvas.width = this.width;
-        this.canvas.height = this.height;
-        this.canvas.style.width = `${this.width}px`;
-        this.canvas.style.height = `${this.height}px`;
-        this.canvas.tabIndex = this.canvas.tabIndex < 0 ? 0 : this.canvas.tabIndex;
-        this.canvas.focus();
-        Mouse.setElement(this.canvas);
-        this.input.bindToElement(window);
-        this.input.setPreventDefaultElement(this.canvas);
-        Display.setActiveContainer(this);
-        Display.create();
-        Display.setTitle(this.title);
-        window.addEventListener("resize", this.handleBrowserResize);
-        document.addEventListener("fullscreenchange", this.handleBrowserResize);
-        Renderer.getBackend().initialize(this.canvas, {
-            alpha: true,
-            antialias: this.multiSample > 0,
-            stencil: GameContainer.stencil
-        });
-        SoundStore.get().init();
-        await this.game.init(this);
-        await ResourceLoader.waitForAll();
-        this.lastFrameTime = this.now();
-        this.fpsWindowStart = this.lastFrameTime;
-        this.animationFrame = requestAnimationFrame(this.loop);
+        try {
+            this.canvas = this.resolveCanvas();
+            this.canvas.width = this.width;
+            this.canvas.height = this.height;
+            this.canvas.style.width = `${this.width}px`;
+            this.canvas.style.height = `${this.height}px`;
+            this.canvas.tabIndex = this.canvas.tabIndex < 0 ? 0 : this.canvas.tabIndex;
+            this.canvas.focus();
+            Mouse.setElement(this.canvas);
+            this.input.bindToElement(window);
+            this.input.setPreventDefaultElement(this.canvas);
+            Display.setActiveContainer(this);
+            Display.create();
+            Display.setTitle(this.title);
+            window.addEventListener("resize", this.handleBrowserResize);
+            document.addEventListener("fullscreenchange", this.handleBrowserResize);
+            Renderer.getBackend().initialize(this.canvas, {
+                alpha: true,
+                antialias: this.multiSample > 0,
+                stencil: GameContainer.stencil
+            });
+            SoundStore.get().init();
+            await this.game.init(this);
+            await ResourceLoader.waitForAll();
+            this.lastFrameTime = this.now();
+            this.fpsWindowStart = this.lastFrameTime;
+            this.animationFrame = requestAnimationFrame(this.loop);
+        } catch (error) {
+            const reported = this.toError(error, "Failed to start AppGameContainer");
+            this.destroy();
+            if (this.errorHandler) {
+                this.errorHandler(reported);
+                return;
+            }
+            throw reported;
+        }
     }
 
     /** Java Slick2D counterpart: AppGameContainer.setUpdateOnlyWhenVisible(boolean). */
@@ -203,9 +220,7 @@ export class AppGameContainer extends GameContainer {
 
     /** Java Slick2D counterpart: AppGameContainer.hasFocus(). */
     public override hasFocus(): boolean {
-        return typeof document === "undefined"
-            || document.hasFocus()
-            || (this.canvas !== null && document.activeElement === this.canvas);
+        return typeof document === "undefined" || document.hasFocus();
     }
 
     /** Java Slick2D counterpart: AppGameContainer.getScreenHeight(). */
@@ -222,6 +237,8 @@ export class AppGameContainer extends GameContainer {
     public destroy(): void {
         this.destroyed = true;
         this.started = false;
+        this.waitingForResources = false;
+        this.resourceError = null;
         if (this.animationFrame !== 0) {
             cancelAnimationFrame(this.animationFrame);
             this.animationFrame = 0;
@@ -236,6 +253,7 @@ export class AppGameContainer extends GameContainer {
             document.removeEventListener("fullscreenchange", this.handleBrowserResize);
         }
         Renderer.getBackend().dispose();
+        Display.destroy();
         Display.setActiveContainer(null);
     }
 
@@ -262,11 +280,19 @@ export class AppGameContainer extends GameContainer {
         if (this.destroyed) {
             return;
         }
+        try {
+            this.loopFrame(time);
+        } catch (error) {
+            this.reportError(error);
+        }
+    };
+
+    private loopFrame(time: number): void {
         if (this.resourceError) {
             const error = this.resourceError;
             this.resourceError = null;
-            this.destroy();
-            throw error instanceof Error ? error : new SlickException("Failed to load queued resources", error);
+            this.reportError(error);
+            return;
         }
         if (this.waitingForResources) {
             return;
@@ -300,7 +326,7 @@ export class AppGameContainer extends GameContainer {
             waitForResources = waitForResources || ResourceLoader.hasPending();
         }
         this.updateFps(time);
-        if (this.game.closeRequested() && Display.isCloseRequested()) {
+        if (Display.isCloseRequested() && this.game.closeRequested()) {
             this.destroy();
             return;
         }
@@ -309,7 +335,7 @@ export class AppGameContainer extends GameContainer {
             return;
         }
         this.animationFrame = requestAnimationFrame(this.loop);
-    };
+    }
 
     private readonly handleBrowserResize = (): void => {
         if (this.isFullscreen()) {
@@ -402,10 +428,24 @@ export class AppGameContainer extends GameContainer {
             })
             .catch((error) => {
                 this.waitingForResources = false;
-                this.resourceError = error;
-                if (!this.destroyed) {
-                    this.animationFrame = requestAnimationFrame(this.loop);
-                }
+                this.reportError(error);
             });
+    }
+
+    private reportError(error: unknown): void {
+        this.resourceError = null;
+        const reported = this.toError(error, "Failed to run AppGameContainer frame");
+        this.destroy();
+        if (this.errorHandler) {
+            this.errorHandler(reported);
+            return;
+        }
+        setTimeout(() => {
+            throw reported;
+        }, 0);
+    }
+
+    private toError(error: unknown, message: string): Error {
+        return error instanceof Error ? error : new SlickException(message, error);
     }
 }
