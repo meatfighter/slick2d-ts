@@ -68,6 +68,16 @@ No game-title-specific modules are exported. The project names appear only as au
 - Added last-windowed-display tracking so browser-forced fullscreen exits restore the Java windowed canvas mode instead of preserving the fullscreen viewport size.
 - Made destroy-while-fullscreen restore windowed canvas CSS/size, request `document.exitFullscreen()` fire-and-forget, restore transparent native cursors, and clear stale static `Display` fullscreen state.
 - Added Node regression tests for forced fullscreen exit, explicit fullscreen exit notification de-duplication, and fullscreen teardown cleanup.
+- Made `AppGameContainer` default to Java's visible-only update policy and reset frame timing across hidden/visible transitions so hidden time is not fed into the next visible update.
+- Modeled Java `SoundStore` initialization gating: pre-init `setSoundOn`/`setMusicOn` calls are ignored, and successful init enables sound effects and music.
+- Added a finite Java-style logical sound-effect source pool with source 0 reserved for music, source capacity diagnostics, and drop-on-exhaustion behavior.
+- Changed `Sound.playing()` and `Sound.stop()` to track only the latest logical source for that `Sound`, while `SoundStore.clear()` / `AL.destroy()` remain the global cleanup paths.
+- Matched Java sound-effect volume behavior: `Sound` applies global sound volume before `SoundStore.playSound`, `SoundStore` applies it again when creating the source, and later `setSoundVolume` calls do not retroactively change already-playing sound-effect gain.
+- Fixed failed `Sound.play()` / `Sound.loop()` attempts to clear the remembered latest source, matching Java `AudioImpl` when `SoundStore` returns `-1`.
+- Matched Java's `findFreeSource()` loop bound by keeping both source 0 and the last logical source unavailable to sound effects.
+- Implemented `SoundStore.stopSoundEffect(id)` for logical source IDs and made `setMaxSources(...)` stop any effect that would land in the newly unavailable last slot.
+- Fixed no-argument `Music.play()` and `Music.loop()` to reset the individual music volume to `1`, matching Java's `play(1.0f, 1.0f)` and `loop(1.0f, 1.0f)` delegates.
+- Replaced direct `FastTrig` `Math.sin`/`Math.cos` calls with Java Slick2D's angle-reduction implementation and `cos(x) = sin(x + PI/2)` rule.
 - Updated `docs/SLICK2D-PARITY-API.md` to match the implementation and verified Java behavior.
 
 ## External Audit Verification
@@ -138,16 +148,52 @@ The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_5
 - `Mouse` now remembers the visible native cursor before an all-transparent cursor hide and can restore it when fullscreen is exited by the browser or container teardown instead of by game code.
 - Added regression coverage for forced fullscreen exit, explicit exit notification count, and destroy-while-fullscreen cleanup.
 
+The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_6.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+
+- `AppGameContainer` now defaults `updateOnlyWhenVisible` to true, matching Java `AppGameContainer`, while preserving the public setter/getter override.
+- Hidden frames skip update/render by default, and visibility restoration resets frame timing so the first visible update receives only visible elapsed time.
+- `SoundStore` now has Java-style `inited`/`soundWorks` gating: pre-init sound/music toggle calls are no-ops, and the first successful init enables both sound effects and music.
+- `SoundStore` now exposes `setMaxSources(max)` and uses a finite logical source pool for effects, with source 0 reserved for music and no-play return when all effect sources are occupied.
+- `SoundStore.getSourceCount()` now returns logical source capacity instead of the number of currently active browser handles.
+- `Sound.stop()` and `Sound.playing()` now operate on the latest handle/source for that `Sound`, matching Java `AudioImpl`, instead of stopping/reporting every overlapping handle spawned by the same `Sound`.
+- Sound-effect gain now follows the checked Slick2D Java source's double global-volume application and does not retroactively alter active sound effects when `setSoundVolume(...)` changes later.
+- Added regression coverage for visible-only updates, hidden-frame delta reset, pre-init audio toggles, source-pool exhaustion/reuse, latest-source stop semantics, and sound-effect gain.
+
+The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_7.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+
+- A failed `Sound.play(...)`, `playAt(...)`, or `loop(...)` now clears the remembered latest source/handle, so `Sound.playing()` and `Sound.stop()` see no current source just like Java `AudioImpl.index = -1`.
+- `SoundStore` now uses Java's exact effect-source search bound, equivalent to `for (i = 1; i < sourceCount - 1; i++)`, so source 0 and the final logical source are unavailable for effects.
+- Regression tests now encode that `setMaxSources(3)` gives one effect slot, while `setMaxSources(4)` gives two effect slots.
+- The additional source-pool audit found and fixed `setMaxSources(...)` preserving a handle in the new last/unavailable slot after resizing down.
+- The additional public API audit found and fixed `SoundStore.stopSoundEffect(id)`, which now stops the matching logical source instead of no-oping.
+
+The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_8.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+
+- No-argument `Music.play()` now starts with pitch `1` and volume `1` instead of reusing the instance's previous volume.
+- No-argument `Music.loop()` now starts with pitch `1` and volume `1` instead of reusing the instance's previous volume.
+- Explicit overloads such as `play(1, 0.25)` and `loop(1, 0.25)` continue to preserve the supplied volume.
+- Added regression coverage for no-argument music volume reset and explicit-volume overload behavior.
+
+The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_9.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+
+- `FastTrig.sin(...)` now mirrors Java Slick2D's `reduceSinAngle(...)` algorithm before dispatching to `Math.sin` or `Math.cos`.
+- `FastTrig.cos(...)` now mirrors Java Slick2D by returning `FastTrig.sin(radians + Math.PI / 2)` instead of direct `Math.cos`.
+- Added regression coverage for the Java-style expected values over small, branch-switching, large, and negative radian samples, plus the explicit cosine offset rule.
+
+The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_10.md` was checked after the follow-up placeholder audit. It reported no new game-relevant Slick2D TypeScript repair items for the `SlickMsPacMan` browser port. Its remaining cautions are game-port concerns, not library defects: preserve Java integer division/truncation when porting game arithmetic, and keep the browser PWA shell/start-menu/audio-unlock behavior outside the Slick compatibility library.
+
 Claims intentionally not converted into desktop-exact behavior:
 
-- Native applet, AWT/Swing, LWJGL Display, filesystem, classpath, OpenAL source-pool, and blocking timing behavior remain browser shims.
+- Native applet, AWT/Swing, LWJGL Display, filesystem, classpath, native OpenAL buffers/sources, and blocking timing behavior remain browser shims.
 - `Music` accepts the Java streaming hint but uses Web Audio buffers. This is deliberate for the web desktop browser target and the three games' music handoff code.
 - `PackedSpriteSheet` and `XMLPackedSheet` still require metadata bytes to be preloaded before their constructors when those constructors synchronously parse `.def` or XML text. This is an explicit browser contract, not a place to fake Java classpath I/O.
 - `ResourceLoader` retry/cache-bust support does not replace a game PWA manifest or splash-screen loader; it gives the Slick parity layer the same hooks so assets loaded through Slick do not bypass those requirements.
 - Fullscreen and pointer lock remain asynchronous browser APIs. The library updates its canvas and WebGL dimensions when the promise/events settle; game ports that immediately call scale recalculation after `setDisplayMode` should either await the returned promise or also recalculate from `resize`/`fullscreenchange`.
 - Browser-forced fullscreen exits are handled by the library by restoring the last known non-fullscreen Slick mode. A port may still add game-local UI reactions, but it must not compensate by adding title-specific fullscreen state fixes to `slick2d-ts`.
-- Shape/warped/sheared rendering remains explicitly unsupported because the audited game sources do not call those Slick paths.
-- `Graphics.copyArea`, `Graphics.getArea(...): Image`, and gradient-line color interpolation are not used by the game rendering paths. The byte-buffer `getArea` path used by copied container icon code is implemented through WebGL `readPixels`.
+- Shape rendering, warped/sheared image rendering, `Graphics.copyArea`, `Graphics.getArea(...): Image`, and gradient-line color interpolation are now implemented through the WebGL2 renderer even though the three audited game rendering paths do not call most of those APIs.
+- `Graphics.fillRect(..., ShapeFill)` remains explicitly unsupported because the library does not include Slick's shape-fill hierarchy and none of the three audited games call it.
+- Raw SGL texture-name methods now maintain a simple WebGL texture ID map. Fixed-function calls without a WebGL2 equivalent, such as clip planes, texture-env state, point-size state, mirror-clamp extension checks, and secondary color, remain compatibility shims and are not used by the audited games.
+- `Sound.playAt(...)` now routes coordinates through a Web Audio `PannerNode` when available; the audited games do not call it, but it no longer ignores `x/y/z` on capable browsers.
 
 ## Browser-Specific Boundaries
 
@@ -155,6 +201,7 @@ These differences are intentional and must be kept during game ports:
 
 - WebGL2 is the rendering backend. Do not port Slick's desktop renderer internals or add Phaser/Pixi/Three to the core library.
 - Web Audio API is the audio backend. The Slick `streamingHint` constructor parameter is accepted for parity but does not switch to `HTMLAudioElement`.
+- Web Audio sources remain one-shot browser nodes, but `SoundStore` now provides Java-visible logical source slots, capacity, exhaustion/drop behavior, and source IDs for compatibility.
 - Gamepad API backs controller polling and callbacks. Listener button callbacks stay one-based; stored polling mappings stay zero-based.
 - Browser resource fetch/decode is asynchronous. Any Java code that synchronously parses resource bytes must preload those refs before construction, then read through `ResourceLoader.getResourceAsStream`.
 - Dynamic Java-style loading screens may construct resources during `update`; `AppGameContainer` renders that progress frame, then waits for `ResourceLoader.hasPending()` work before the next update.

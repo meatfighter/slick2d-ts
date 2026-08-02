@@ -114,7 +114,7 @@ export class Music {
     public play(): void;
     /** Java Slick2D counterpart: Music.play(float, float). */
     public play(pitch: number, volume: number): void;
-    public play(pitch: number = 1, volume: number = this.volume): void {
+    public play(pitch: number = 1, volume: number = 1): void {
         this.start(false, pitch, volume);
     }
 
@@ -122,7 +122,7 @@ export class Music {
     public loop(): void;
     /** Java Slick2D counterpart: Music.loop(float, float). */
     public loop(pitch: number, volume: number): void;
-    public loop(pitch: number = 1, volume: number = this.volume): void {
+    public loop(pitch: number = 1, volume: number = 1): void {
         this.start(true, pitch, volume);
     }
 

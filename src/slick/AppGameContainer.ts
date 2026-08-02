@@ -76,6 +76,7 @@ export class AppGameContainer extends GameContainer {
         super(game);
         this.title = game.getTitle();
         this.fullscreen = fullscreen;
+        this.updateOnlyWhenVisible = true;
         this.setDimensions(width, height);
         this.lastWindowedDisplayMode = { width, height };
     }
@@ -205,6 +206,7 @@ export class AppGameContainer extends GameContainer {
             Display.setTitle(this.title);
             window.addEventListener("resize", this.handleWindowResize);
             document.addEventListener("fullscreenchange", this.handleFullscreenChange);
+            document.addEventListener("visibilitychange", this.handleVisibilityChange);
             Renderer.getBackend().initialize(this.canvas, {
                 alpha: true,
                 antialias: this.multiSample > 0,
@@ -317,6 +319,7 @@ export class AppGameContainer extends GameContainer {
         }
         if (typeof document !== "undefined") {
             document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
+            document.removeEventListener("visibilitychange", this.handleVisibilityChange);
         }
         Renderer.getBackend().dispose();
         AL.destroy();
@@ -371,6 +374,10 @@ export class AppGameContainer extends GameContainer {
         const delta = this.smoothDeltas ? Math.round((rawDelta + Math.max(0, this.getTime() - this.lastFrameTime)) / 2) : rawDelta;
         this.lastFrameTime = time;
         const visible = typeof document === "undefined" || document.visibilityState !== "hidden";
+        if (this.updateOnlyWhenVisible && !visible) {
+            this.animationFrame = requestAnimationFrame(this.loop);
+            return;
+        }
         if (!this.updateOnlyWhenVisible || visible) {
             this.input.poll(this.width, this.height);
             if (!this.paused) {
@@ -432,6 +439,12 @@ export class AppGameContainer extends GameContainer {
             Mouse.restoreNativeCursorAfterForcedFullscreenExit();
         } catch (error) {
             this.reportError(error);
+        }
+    };
+
+    private readonly handleVisibilityChange = (): void => {
+        if (typeof document !== "undefined" && document.visibilityState !== "hidden") {
+            this.lastFrameTime = this.now();
         }
     };
 

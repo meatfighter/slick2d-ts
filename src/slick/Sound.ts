@@ -5,11 +5,11 @@ import { ResourceLoader } from "./util/ResourceLoader.js";
  * Java Slick2D counterpart: org.newdawn.slick.Sound.
  *
  * Short sound effect wrapper with Slick-compatible play/stop methods.
- */
+    */
 export class Sound {
     private readonly ref: string;
     private readonly readyPromise: Promise<void>;
-    private active: AudioPlaybackHandle[] = [];
+    private active: AudioPlaybackHandle | null = null;
 
     public constructor(ref: string);
     public constructor(url: URL);
@@ -58,21 +58,32 @@ export class Sound {
     /** Java Slick2D counterpart: Sound.play(float, float). */
     public play(pitch: number, volume: number): void;
     public play(pitch: number = 1, volume: number = 1): void {
-        if (!SoundStore.get().soundsOn()) {
-            return;
-        }
-        const handle = SoundStore.get().playSound(this.ref, pitch, volume, false, () => {
-            this.active = this.active.filter((item) => item !== handle);
+        const effectiveVolume = volume * SoundStore.get().getSoundVolume();
+        const handle = SoundStore.get().playSound(this.ref, pitch, effectiveVolume, false, () => {
+            if (this.active === handle) {
+                this.active = null;
+            }
         });
         if (!handle) {
+            this.active = null;
             return;
         }
-        this.active.push(handle);
+        this.active = handle;
     }
 
     /** Java Slick2D counterpart: Sound.playAt(float, float, float, float, float). */
-    public playAt(pitch: number, volume: number, _x: number, _y: number, _z: number): void {
-        this.play(pitch, volume);
+    public playAt(pitch: number, volume: number, x: number, y: number, z: number): void {
+        const effectiveVolume = volume * SoundStore.get().getSoundVolume();
+        const handle = SoundStore.get().playSound(this.ref, pitch, effectiveVolume, false, () => {
+            if (this.active === handle) {
+                this.active = null;
+            }
+        }, { x, y, z });
+        if (!handle) {
+            this.active = null;
+            return;
+        }
+        this.active = handle;
     }
 
     /** Java Slick2D counterpart: Sound.loop(). */
@@ -80,24 +91,29 @@ export class Sound {
     /** Java Slick2D counterpart: Sound.loop(float, float). */
     public loop(pitch: number, volume: number): void;
     public loop(pitch: number = 1, volume: number = 1): void {
-        const handle = SoundStore.get().playSound(this.ref, pitch, volume, true);
+        const effectiveVolume = volume * SoundStore.get().getSoundVolume();
+        const handle = SoundStore.get().playSound(this.ref, pitch, effectiveVolume, true);
         if (!handle) {
+            this.active = null;
             return;
         }
-        this.active.push(handle);
+        this.active = handle;
     }
 
     /** Java Slick2D counterpart: Sound.playing(). */
     public playing(): boolean {
-        this.active = this.active.filter((handle) => handle.playing());
-        return this.active.length > 0;
+        if (!this.active?.playing()) {
+            this.active = null;
+            return false;
+        }
+        return true;
     }
 
     /** Java Slick2D counterpart: Sound.stop(). */
     public stop(): void {
-        for (const handle of this.active) {
-            handle.stop();
+        if (this.active) {
+            this.active.stop();
+            this.active = null;
         }
-        this.active = [];
     }
 }

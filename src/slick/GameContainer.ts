@@ -11,6 +11,7 @@ import { SoundStore } from "./openal/SoundStore.js";
 import type { ImageData as SlickImageData } from "./opengl/ImageData.js";
 import { Renderer } from "./opengl/renderer/Renderer.js";
 import { SlickException } from "./SlickException.js";
+import { CanvasFont } from "./support/CanvasFont.js";
 import { Log } from "./util/Log.js";
 import { ResourceLoader } from "./util/ResourceLoader.js";
 
@@ -22,27 +23,6 @@ function isSlickImageData(value: unknown): value is SlickImageData {
         && typeof candidate.getWidth === "function"
         && typeof candidate.getHeight === "function"
         && typeof candidate.getImageBufferData === "function";
-}
-
-class ContainerFont implements Font {
-    /** Java Slick2D counterpart: Font.getWidth(String). */
-    public getWidth(text: string): number {
-        return text.length * 8;
-    }
-
-    /** Java Slick2D counterpart: Font.getHeight(String). */
-    public getHeight(_text: string): number {
-        return 16;
-    }
-
-    /** Java Slick2D counterpart: Font.getLineHeight(). */
-    public getLineHeight(): number {
-        return 16;
-    }
-
-    /** Java Slick2D counterpart: Font.drawString(...). */
-    public drawString(_x: number, _y: number, _text: string): void {
-    }
 }
 
 /**
@@ -77,7 +57,7 @@ export abstract class GameContainer {
     protected paused = false;
     protected forceExit = true;
     protected multiSample = 0;
-    protected defaultFont: Font = new ContainerFont();
+    protected defaultFont: Font = new CanvasFont();
     protected iconRefs: string[] = [];
     protected animatedCursorDelays: number[] = [];
 

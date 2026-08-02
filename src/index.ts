@@ -36,6 +36,7 @@ export * from "./slick/opengl/renderer/SGL.js";
 export * from "./slick/support/BinaryReader.js";
 export * from "./slick/support/BitmapText.js";
 export * from "./slick/support/ButtonMapping.js";
+export * from "./slick/support/CanvasFont.js";
 export * from "./slick/support/GeometryMath.js";
 export * from "./slick/support/HumanInput.js";
 export * from "./slick/support/IInput.js";

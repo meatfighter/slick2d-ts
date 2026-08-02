@@ -16,7 +16,7 @@ export class AL {
 
     /** Java LWJGL counterpart: AL.destroy(). */
     public static destroy(): void {
-        SoundStore.get().clear();
+        SoundStore.get().destroy();
         AL.created = false;
     }
 

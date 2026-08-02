@@ -320,9 +320,20 @@ export class Image implements Renderable {
         this.draw(x, y, width, height);
     }
 
-    /** Java Slick2D counterpart: Image.drawSheared(...). */
-    public drawSheared(_x: number, _y: number, _hshear: number, _vshear: number, _filter?: Color): void {
-        throw new SlickException("Unsupported phase-one Image.drawSheared");
+    /** Java Slick2D counterpart: Image.drawSheared(float, float, float, float). */
+    public drawSheared(x: number, y: number, hshear: number, vshear: number): void;
+    /** Java Slick2D counterpart: Image.drawSheared(float, float, float, float, Color). */
+    public drawSheared(x: number, y: number, hshear: number, vshear: number, filter: Color): void;
+    public drawSheared(x: number, y: number, hshear: number, vshear: number, filter: Color | null = Color.white): void {
+        const width = this.getWidth();
+        const height = this.getHeight();
+        this.drawWarpedInternal(
+            x, y,
+            x + width, y + vshear,
+            x + width + hshear, y + height + vshear,
+            x + hshear, y + height,
+            filter
+        );
     }
 
     /** Java Slick2D counterpart: Image.drawFlash(float, float). */
@@ -390,8 +401,8 @@ export class Image implements Renderable {
     }
 
     /** Java Slick2D counterpart: Image.drawWarped(...). */
-    public drawWarped(_topLeftX: number, _topLeftY: number, _topRightX: number, _topRightY: number, _bottomRightX: number, _bottomRightY: number, _bottomLeftX: number, _bottomLeftY: number): void {
-        throw new SlickException("Unsupported phase-one Image.drawWarped");
+    public drawWarped(topLeftX: number, topLeftY: number, topRightX: number, topRightY: number, bottomRightX: number, bottomRightY: number, bottomLeftX: number, bottomLeftY: number): void {
+        this.drawWarpedInternal(topLeftX, topLeftY, topRightX, topRightY, bottomRightX, bottomRightY, bottomLeftX, bottomLeftY, Color.white);
     }
 
     /** Java Slick2D counterpart: Image.getWidth(). */
@@ -552,6 +563,23 @@ export class Image implements Renderable {
         const effectiveSrcW = this.flipHorizontal ? -srcWidth : srcWidth;
         const effectiveSrcH = this.flipVertical ? -srcHeight : srcHeight;
         renderer.drawImage(this, x, y, width, height, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, identityMatrix3());
+        renderer.popTransform();
+    }
+
+    private drawWarpedInternal(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, tint: Color | null): void {
+        this.throwIfDestroyed();
+        const renderer = Renderer.getBackend();
+        renderer.pushTransform();
+        if (this.rotation !== 0) {
+            renderer.rotate(x1 + this.getCenterOfRotationX(), y1 + this.getCenterOfRotationY(), this.rotation);
+        }
+        const srcWidth = this.getSourceWidth();
+        const srcHeight = this.getSourceHeight();
+        const effectiveSrcX = this.flipHorizontal ? this.sourceX + srcWidth : this.sourceX;
+        const effectiveSrcY = this.flipVertical ? this.sourceY + srcHeight : this.sourceY;
+        const effectiveSrcW = this.flipHorizontal ? -srcWidth : srcWidth;
+        const effectiveSrcH = this.flipVertical ? -srcHeight : srcHeight;
+        renderer.drawImageWarped(this, x1, y1, x2, y2, x3, y3, x4, y4, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, identityMatrix3());
         renderer.popTransform();
     }
 

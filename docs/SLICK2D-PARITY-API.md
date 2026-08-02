@@ -541,7 +541,14 @@ Implement these rules:
 - `Sound` and `Music` constructors preserve Java call shape, but they must immediately queue fetch plus Web Audio decode through `SoundStore.preloadAudioBuffer(ref)` and `ResourceLoader.track()`.
 - `Sound.ready()` / `Sound.load()` and `Music.ready()` / `Music.load()` are browser parity helpers that return the constructor-queued decode promise. They do not replace Java-style `play()` call sites; they exist so loading screens and host bootstraps can await browser work explicitly.
 - `Sound.play(pitch, volume)` maps pitch to playback rate. Clamp or reject values the browser backend cannot play, and document that decision in the method comment.
-- `Music.setVolume` persists across future `play` and `loop` calls.
+- `Sound.play(pitch, volume)`, `Sound.playAt(...)`, and `Sound.loop(pitch, volume)` must apply `SoundStore.get().getSoundVolume()` before delegating to `SoundStore.playSound(...)`, and `SoundStore.playSound(...)` must apply sound volume again when assigning the source gain. This matches the checked Slick2D Java source.
+- `Sound.playAt(pitch, volume, x, y, z)` must pass coordinates to a Web Audio `PannerNode` when the browser backend provides one. If `createPanner()` is unavailable or fails, fall back to non-positioned playback while preserving Java-visible play/drop/latest-source behavior.
+- `Sound.playing()` and `Sound.stop()` must observe only the latest logical source started by that `Sound`, not every overlapping source previously spawned by the same instance.
+- If `SoundStore.playSound(...)` returns `null` for a `Sound.play(...)`, `playAt(...)`, or `loop(...)` attempt, that failed attempt must replace the remembered source with "none"; later `Sound.playing()` returns false and `Sound.stop()` does not stop the older source.
+- `SoundStore` must model Java's audio initialization gate. Pre-init `setSoundsOn(...)` and `setMusicOn(...)` are no-ops; the first successful `init()` sets `soundWorks=true`, `sounds=true`, and `music=true`.
+- Sound effects must use a finite logical source pool. Source 0 is reserved for music and the final logical source is also unavailable to effects, matching Java's `i < sourceCount - 1` search bound. Drop the play request when no searched source is free.
+- `setSoundVolume(...)` affects future sound-effect source gain only. It must not update already-playing sound-effect gain through a global bus.
+- `Music.setVolume` stores the individual music volume. Java no-argument `play()` and `loop()` overwrite it with `1`; explicit-volume overloads overwrite it with the supplied clamped value.
 - `Music` must preserve Java Slick2D's single global current music channel. Starting one `Music` stops/swaps the previous current instance, updates listener state, and makes `oldMusic.playing()` return false immediately.
 - `Music.stop()` and `pause()` must invalidate pending async starts so a decoded buffer cannot start after the game has stopped or changed modes.
 - `GameContainer.setMusicOn(false)` / `SoundStore.setMusicOn(false)` suspends audible active music, not just mutes it. It must not call public `Music.pause()` semantics, and it must preserve the current music instance and `Music.playing()` state. Setting music on again resumes from the stored position when possible.
@@ -556,6 +563,7 @@ Implement these rules:
 - `setFullscreen` maps to the browser Fullscreen API.
 - `setDisplayMode` and `setFullscreen` may return `Promise<void>` because browser fullscreen changes are asynchronous. When a promise is returned, dimensions and the WebGL display must be refreshed after it settles.
 - `AppGameContainer` must listen to `fullscreenchange` and `resize`, update canvas backing size and CSS size, then reinitialize the WebGL display dimensions.
+- `AppGameContainer` must default to Java's `updateOnlyWhenVisible=true` behavior. Hidden frames skip update/render unless `setUpdateOnlyWhenVisible(false)` is called, and hidden time must not accumulate into the first visible update delta.
 - Fullscreen entry/exit failures must reject with `SlickException`. Display-mode requests that resized the canvas before a failed fullscreen request must restore the previous logical and canvas dimensions.
 - After browser-applied display size changes, the container must mark `Display.wasResized()` and call `containerSizeChanged(container)` when the active game exposes that Java-style helper.
 - `AppGameContainer` must track the last successful non-fullscreen display mode separately from the requested fullscreen mode. Browser-forced fullscreen exit must restore that windowed mode, clear fullscreen CSS sizing, mark `Display.wasResized()`, and notify `containerSizeChanged(container)` when present.
@@ -869,6 +877,7 @@ export class Image implements Renderable {
     public drawCentered(x: number, y: number): void;
     public drawEmbedded(x: number, y: number, width: number, height: number): void;
     public drawSheared(x: number, y: number, hshear: number, vshear: number): void;
+    public drawSheared(x: number, y: number, hshear: number, vshear: number, filter: Color): void;
     public drawFlash(x: number, y: number): void;
     public drawFlash(x: number, y: number, width: number, height: number): void;
     public drawFlash(x: number, y: number, width: number, height: number, col: Color): void;
@@ -920,7 +929,8 @@ Implementation instructions:
 - `getGraphics()` returns a `Graphics` instance drawing into the image's framebuffer-backed render target. Throw `SlickException` when the image is not writable.
 - Texture/OpenGL methods such as `bind`, `startUse`, `endUse`, and `clampTexture` map to WebGL texture and batch state; they must exist even when a browser backend can collapse some state changes.
 - `flushPixelData()` drops cached CPU pixel data. When no CPU-side pixel cache exists, it returns immediately and records no state change.
-- `drawWarped` and `drawSheared` are phase-one browser-adapted unsupported methods because the three source games do not call them. They must exist and throw `SlickException` with a message naming the unsupported method. If later implemented, update this document with the exact WebGL quad math before changing behavior.
+- `drawSheared` draws a textured WebGL quad with corners `(x,y)`, `(x + width,y + vshear)`, `(x + width + hshear,y + height + vshear)`, and `(x + hshear,y + height)`, preserving source rectangle, flips, tint, alpha, corner colors, and image rotation.
+- `drawWarped` draws the image as one textured WebGL quad using the Java argument order: top-left, top-right, bottom-right, bottom-left. It must preserve source rectangle, flips, alpha, corner colors, and image rotation.
 
 ### `slick.Graphics`
 
@@ -960,11 +970,17 @@ export class Graphics {
     public clearWorldClip(): void;
     public setWorldClip(x: number, y: number, width: number, height: number): void;
     public drawOval(x: number, y: number, width: number, height: number): void;
+    public drawOval(x: number, y: number, width: number, height: number, segments: number): void;
     public drawArc(x: number, y: number, width: number, height: number, start: number, end: number): void;
+    public drawArc(x: number, y: number, width: number, height: number, segments: number, start: number, end: number): void;
     public fillOval(x: number, y: number, width: number, height: number): void;
+    public fillOval(x: number, y: number, width: number, height: number, segments: number): void;
     public fillArc(x: number, y: number, width: number, height: number, start: number, end: number): void;
+    public fillArc(x: number, y: number, width: number, height: number, segments: number, start: number, end: number): void;
     public drawRoundRect(x: number, y: number, width: number, height: number, radius: number): void;
+    public drawRoundRect(x: number, y: number, width: number, height: number, radius: number, segments: number): void;
     public fillRoundRect(x: number, y: number, width: number, height: number, radius: number): void;
+    public fillRoundRect(x: number, y: number, width: number, height: number, radius: number, segments: number): void;
     public setLineWidth(width: number): void;
     public getLineWidth(): number;
     public resetLineWidth(): void;
@@ -980,6 +996,7 @@ export class Graphics {
     public getArea(x: number, y: number, width: number, height: number): Image;
     public getArea(x: number, y: number, width: number, height: number, target: Uint8Array): void;
     public drawGradientLine(x1: number, y1: number, r1: number, g1: number, b1: number, a1: number, x2: number, y2: number, r2: number, g2: number, b2: number, a2: number): void;
+    public drawGradientLine(x1: number, y1: number, color1: Color, x2: number, y2: number, color2: Color): void;
     public pushTransform(): void;
     public popTransform(): void;
     public destroy(): void;
@@ -998,8 +1015,12 @@ Implementation instructions:
 - `clearWorldClip` removes the world clip.
 - `getArea` returns an offscreen `Image` containing pixels copied from the current render target.
 - `getArea(..., target)` writes RGBA bytes into the supplied buffer for cursor compatibility code.
+- `copyArea(target, x, y)` copies from the active framebuffer into a writable `Image(width,height)` render-target texture using `gl.copyTexSubImage2D`, then calls `target.ensureInverted()`, matching Slick's copied texture orientation behavior.
 - `flush` must submit the current WebGL batch and synchronize deferred state before readback, cursor extraction, framebuffer switches, or `SlickCallable` safe blocks.
-- Shape and `ShapeFill` overloads are phase-one browser-adapted unsupported methods because the three source games do not call them. Their overload signatures must exist and throw `SlickException` with a message naming the unsupported overload. If later implemented, update this document with exact shape tessellation rules before changing behavior.
+- Ovals and arcs use Slick's default `50` segments unless an explicit segment count is supplied. Arc point generation follows Slick's `while (end < start) end += 360`, integer-degree stepping, and `FastTrig` sine/cosine calls.
+- Filled arcs are triangulated as a center-origin fan. Rounded rectangles follow Slick's straight-edge plus quarter-arc composition and clamp the corner radius to half the smaller dimension.
+- `drawGradientLine` uses WebGL per-vertex colors on the thick-line quad so colors interpolate from the first endpoint to the second endpoint.
+- The `fillRect(..., ShapeFill)` overload remains explicitly unsupported because the library does not yet include Slick's shape/gradient-fill hierarchy and the three audited games do not call that overload.
 
 ### `slick.Input`
 
@@ -1209,8 +1230,10 @@ Implementation instructions:
 - Constructors queue byte fetch and Web Audio decode immediately, matching Java's observable "loaded after construction" behavior through an async browser barrier.
 - `ready()` and `load()` return the decode readiness promise and reject with `SlickException` on missing/corrupt audio. Java-style game code may keep `play()` synchronous as long as the port's loading flow awaits the shared resource barrier.
 - `play()` uses pitch `1` and volume `1`.
-- `play(pitch, volume)` clamps volume to `0..1` and maps pitch to playback rate.
-- `playing()` returns true for handles that have been requested and have not ended, stopped, or failed, including a first play that is waiting for an already-queued browser decode to settle.
+- `play(pitch, volume)` maps pitch to playback rate and passes `volume * SoundStore.get().getSoundVolume()` into `SoundStore.playSound(...)`, matching Java `Sound.play(float, float)`.
+- `playing()` returns true only for the latest logical source started by this `Sound`, including a latest play that is waiting for an already-queued browser decode to settle.
+- `stop()` stops only the latest logical source started by this `Sound`. Earlier overlapping sources from the same `Sound` continue until they end, their source is reused/stopped through lower-level store behavior, or global cleanup stops them.
+- A failed play/loop attempt from disabled sounds, exhausted source slots, or unavailable audio must clear this latest-source reference, matching Java `AudioImpl` overwriting its source index with `-1`.
 - `playAt` is a browser-adapted parity method: ignore positional coordinates and behave exactly like `play(pitch, volume)`.
 - `loop` repeats until `stop`.
 
@@ -1249,8 +1272,10 @@ Implementation instructions:
 - Required by the games: `constructor(ref)`, `constructor(ref, streamingHint)`, `loop`, `play`, `playing`, `setVolume`, and `stop`.
 - `streamingHint` is accepted for Java constructor parity. Phase one uses decoded Web Audio buffers for both streaming-hint values; do not introduce `HTMLAudioElement` streaming unless a later audit documents exact handoff semantics.
 - Constructors queue byte fetch and Web Audio decode immediately. `ready()` and `load()` expose that browser readiness promise and reject with `SlickException` when the track cannot be fetched or decoded.
-- `play()` uses pitch `1` and the instance's current volume.
-- `loop()` loops indefinitely.
+- `play()` uses pitch `1` and volume `1`, matching Java `play(1.0f, 1.0f)`, and updates `getVolume()` to `1`.
+- `play(pitch, volume)` uses the supplied pitch and clamped supplied volume, and updates `getVolume()` to that volume.
+- `loop()` loops indefinitely with pitch `1` and volume `1`, matching Java `loop(1.0f, 1.0f)`, and updates `getVolume()` to `1`.
+- `loop(pitch, volume)` loops indefinitely with the supplied pitch and clamped supplied volume, and updates `getVolume()` to that volume.
 - Starting a track makes it the single current music instance, stops any previous current music, and fires `musicSwapped(oldMusic, this)` on the old music's listeners.
 - `playing()` returns true only while this instance is the current music and has not ended, stopped, paused, or been swapped out.
 - `pause()` is the public Java `Music.pause()` equivalent: it stores the current position, stops the active `AudioBufferSourceNode`, and makes `playing()` false.
@@ -1487,6 +1512,7 @@ Implementation instructions:
 - Required by the games: constructor, `setAlwaysRender`, `setClearEachFrame`, `setDisplayMode`, `setShowFPS`, `setSmoothDeltas`, `setSoundOn`, `setVSync`, and `start`.
 - `start` creates or binds the canvas, initializes input/audio/rendering, calls `game.init`, resolves resources queued during init, and begins the browser loop.
 - The RAF loop must match Java close behavior: check `Display.isCloseRequested()` first, and call `game.closeRequested()` only inside that branch.
+- The container default must match Java `AppGameContainer`: `isUpdatingOnlyWhenVisible()` returns true before any setter call. When hidden and that flag is true, skip update/render and reset frame timing so hidden elapsed time is not delivered to the next visible update.
 - `start` focuses the canvas, routes input through `Input.bindToElement(window)`, and calls `Input.setPreventDefaultElement(canvas)` so game keys suppress browser defaults only during canvas-owned play.
 - If resources are queued during a later `update`, the loop must finish rendering the current progress frame, wait for `ResourceLoader.waitForAll()`, reset `lastFrameTime`, and then resume. Rejections destroy the container and throw a `SlickException` or the original `Error`.
 - `start()` must wrap canvas setup, renderer/audio initialization, `game.init()`, and the initial `ResourceLoader.waitForAll()` in cleanup/error handling. Startup failure must unbind input, remove browser listeners, dispose renderer state, reset `Display`, set `started=false`, and leave the same container retryable.
@@ -1585,7 +1611,9 @@ export class FastTrig {
 Implementation instructions:
 
 - Required by the games: `sin` and `cos`.
-- Delegate to `Math.sin` and `Math.cos`.
+- Port Java Slick2D's `reduceSinAngle(double)` helper exactly before calculating sine.
+- `sin(radians)` must reduce into Slick's safe range, return `Math.sin(reduced)` when `Math.abs(reduced) <= Math.PI / 4`, and otherwise return `Math.cos(Math.PI / 2 - reduced)`.
+- `cos(radians)` must return `FastTrig.sin(radians + Math.PI / 2)`, not direct `Math.cos(radians)`.
 - Keep arguments in radians.
 
 ### `slick.util.Log`
@@ -1938,7 +1966,9 @@ Implementation instructions:
 - `enterOrtho(width, height)` sets Slick's top-left 2D projection for the active render target.
 - `glTranslatef`, `glScalef`, and `glRotatef` ignore `z` except for preserving Java call shape.
 - Immediate-mode calls `glBegin`, `glTexCoord2f`, `glVertex2f`, `glVertex3f`, and `glEnd` must accumulate a transient batch, then emit equivalent WebGL primitives.
-- Display-list calls `glGenLists`, `glNewList`, `glEndList`, `glCallList`, and `glDeleteLists` must record and replay the same transient command stream.
+- Display-list calls `glGenLists`, `glNewList`, `glEndList`, `glCallList`, and `glDeleteLists` record and replay the exposed immediate-mode, transform, texture-bind, line-width, enable/disable, and blend commands. `GL_COMPILE` records only; `GL_COMPILE_AND_EXECUTE` records and executes immediately.
+- Raw texture ID calls `glGenTextures`, `glBindTexture`, `glDeleteTextures`, `glTexImage2D`, `glCopyTexImage2D`, and `glGetTexImage` maintain a WebGL texture-name map for simple compatibility code. This is separate from Slick `Image` texture resources.
+- Fixed-function calls with no WebGL2 equivalent remain browser-adapted compatibility shims: `glClipPlane`, `glTexEnvi`, `glPointSize`, `canTextureMirrorClamp`, `canSecondaryColor`, and `glSecondaryColor3ubEXT`. These are not used by the three audited game ports.
 
 ### `slick.opengl.renderer.Renderer`
 
@@ -1968,16 +1998,19 @@ Implementation instructions:
 
 ```ts
 export interface AudioPlaybackHandle {
+    readonly sourceId?: number;
     stop(): void;
     pause?(): void;
     suspend?(): void;
     resume?(): void;
     playing(): boolean;
+    getGain?(): number;
 }
 
 export class SoundStore {
     public static get(): SoundStore;
     public clear(): void;
+    public destroy(): void;
     public disable(): void;
     public setDeferredLoading(deferred: boolean): void;
     public isDeferredLoading(): boolean;
@@ -1996,6 +2029,7 @@ export class SoundStore {
     public isMusicPlaying(): boolean;
     public stopSoundEffect(id: number): void;
     public getSourceCount(): number;
+    public setMaxSources(max: number): void;
     public getAudioContext(): AudioContext | null;
     public getSoundBus(): GainNode | null;
     public getMusicBus(): GainNode | null;
@@ -2013,13 +2047,20 @@ Implementation instructions:
 - The broader methods must delegate to the same audio subsystem used by `Sound` and `Music`.
 - `get()` returns a singleton, matching Java.
 - `clear` stops active audio and releases cached audio resources owned by the active container scope.
-- `setMusicOn(false)` calls `suspend()` on tracked music handles when available and stores enough state for `setMusicOn(true)` to resume. This mirrors Java `pauseLoop()`/`restartLoop()` behavior, must not call public `Music.pause()` semantics for `Music` handles, and must not be implemented as volume-only muting.
-- `setSoundsOn(false)` prevents future sound effects from starting; active effect handles may continue unless `clear()` or `stop()` is called, matching the narrower Java sound toggle behavior used by the games.
+- `destroy` is the browser/OpenAL lifecycle reset used by `AL.destroy()`: it stops active handles, clears decoded buffers, drops the `AudioContext`/buses, and returns the store to Java's pre-init observable state.
+- `init` is guarded like Java. Before successful init, `soundWorks()`, `soundsOn()`, and `musicOn()` are false, and `setMusicOn(...)` / `setSoundsOn(...)` do nothing. First successful init sets sound effects and music on.
+- `setMusicOn(false)` after init calls `suspend()` on tracked music handles when available and stores enough state for `setMusicOn(true)` to resume. This mirrors Java `pauseLoop()`/`restartLoop()` behavior, must not call public `Music.pause()` semantics for `Music` handles, and must not be implemented as volume-only muting.
+- `setSoundsOn(false)` after init prevents future sound effects from starting; active effect handles may continue unless `clear()` or `stop()` is called, matching the narrower Java sound toggle behavior used by the games.
+- `setSoundVolume(volume)` stores the Java Slick sound-effect volume for future source setup. Do not implement it as a sound bus gain that changes active sound effects.
 - `loadAudioBuffer(ref)` loads bytes through `ResourceLoader.loadResource(ref)`, decodes them through the shared `AudioContext`, caches the in-flight/completed decode promise, deletes failed cache entries, and rejects with `SlickException`.
 - `preloadAudioBuffer(ref)` tracks `loadAudioBuffer(ref)` through `ResourceLoader.track()` and is what `Sound` and `Music` constructors must call.
-- `playSound(ref, pitch, volume, loop, onEnded)` is the shared effect playback helper. It keeps `Sound.play()` non-async, starts after the decode promise resolves, clamps playback rate and gain to supported ranges, and logs load/playback errors.
+- `playSound(ref, pitch, volume, loop, onEnded)` is the shared effect playback helper. It keeps `Sound.play()` non-async, reserves a logical source immediately, starts after the decode promise resolves, clamps playback rate to the supported browser range, applies `volume * soundVolume` to the source gain, and logs load/playback errors.
 - `track(handle)` and `untrack(handle)` register externally-created music handles so `clear`, `isMusicPlaying`, and music toggles can operate over both effects and music.
-- Source IDs are compatibility-only numbers. `getSourceCount()` returns the number of currently tracked browser audio voices.
+- Source IDs are compatibility-only numbers. Source 0 is reserved for music; sound effects use logical sources `1..getSourceCount()-2`.
+- `setMaxSources(max)` configures the total logical source capacity, including the reserved music source. If all effect slots are active, `playSound(...)` returns `null` without creating a Web Audio source.
+- `setMaxSources(max)` must stop and drop any handle that would occupy the newly unavailable final source after a resize.
+- `getSourceCount()` returns configured logical capacity, not the number of currently active browser audio handles.
+- `stopSoundEffect(id)` stops the handle currently assigned to that logical source ID when one exists.
 
 ### `lwjgl.openal.AL`
 
@@ -2036,7 +2077,7 @@ Implementation instructions:
 - Java counterpart: `org.lwjgl.openal.AL`.
 - Required by copied Slick2D `AppGameContainer.destroy()` and `SoundStore.init()` paths.
 - `create()` marks the browser audio subsystem as requested and initializes the shared `AudioContext` when possible. If autoplay rules prevent immediate resume, keep the context in a suspended/unlocked-pending state and let `Sound`/`Music` complete unlock on the next user gesture.
-- `destroy()` stops active sounds/music, releases audio nodes owned by the active container scope, and marks AL as not created.
+- `destroy()` calls `SoundStore.destroy()`, stops active sounds/music, releases browser audio nodes owned by the active container scope, resets the Java pre-init sound flags, and marks AL as not created.
 - `AppGameContainer.destroy()` must call `AL.destroy()` so host teardown paths that bypass `game.closeRequested()` still stop audio.
 - `isCreated()` returns the state set by `create()` and `destroy()`.
 
@@ -2704,7 +2745,7 @@ Implementation instructions:
 
 - Java counterpart: source `Main.createUnitVector2`, `Main.createUnitVector`, and static `Main.rotate`.
 - `ISQRT2` is `1 / Math.sqrt(2)`.
-- `createUnitVector2(angle)` treats `angle` as radians and returns `[Math.cos(angle), Math.sin(angle)]`, matching the helper that uses `FastTrig`.
+- `createUnitVector2(angle)` treats `angle` as radians and returns `[FastTrig.cos(angle), FastTrig.sin(angle)]`, matching the helper that uses Slick2D's reduced-angle trig.
 - `createUnitVector(angle)` is a discrete direction helper. It must recognize exactly `0`, `360`, `45`, `405`, `90`, `135`, `180`, `225`, `270`, `315`, and `-45`.
 - Discrete vector results are `[1, 0]`, `[ISQRT2, ISQRT2]`, `[0, 1]`, `[-ISQRT2, ISQRT2]`, `[-1, 0]`, `[-ISQRT2, -ISQRT2]`, `[0, -1]`, and `[ISQRT2, -ISQRT2]` for the corresponding angles.
 - For an unrecognized angle with a provided `target`, leave `target` unchanged, matching the Java switch with no `default`.

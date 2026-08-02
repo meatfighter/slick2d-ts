@@ -5,27 +5,8 @@ import { SlickException } from "./SlickException.js";
 import { identityMatrix3, Matrix3 } from "./rendering/RenderBackend.js";
 import type { WebGLRenderTarget } from "./rendering/WebGLRenderTarget.js";
 import { Renderer } from "./opengl/renderer/Renderer.js";
-
-class DefaultFont implements Font {
-    /** Java Slick2D counterpart: Font.getWidth(String). */
-    public getWidth(text: string): number {
-        return text.length * 8;
-    }
-
-    /** Java Slick2D counterpart: Font.getHeight(String). */
-    public getHeight(_text: string): number {
-        return 16;
-    }
-
-    /** Java Slick2D counterpart: Font.getLineHeight(). */
-    public getLineHeight(): number {
-        return 16;
-    }
-
-    /** Java Slick2D counterpart: Font.drawString(...). */
-    public drawString(_x: number, _y: number, _text: string, _col?: Color, _startIndex?: number, _endIndex?: number): void {
-    }
-}
+import { FastTrig } from "./util/FastTrig.js";
+import { CanvasFont } from "./support/CanvasFont.js";
 
 /**
  * Java Slick2D counterpart: org.newdawn.slick.Graphics.
@@ -33,6 +14,7 @@ class DefaultFont implements Font {
  * Drawing context facade that delegates to the active WebGL renderer.
  */
 export class Graphics {
+    private static readonly DEFAULT_SEGMENTS = 50;
     public static readonly MODE_NORMAL = 1;
     public static readonly MODE_ALPHA_MAP = 2;
     public static readonly MODE_ALPHA_BLEND = 3;
@@ -43,7 +25,7 @@ export class Graphics {
     private static current: Graphics | null = null;
     private color = Color.white.copy();
     private background = Color.black.copy();
-    private font: Font = new DefaultFont();
+    private font: Font = new CanvasFont();
     private defaultFont: Font = this.font;
     private lineWidth = 1;
     private antiAlias = false;
@@ -207,33 +189,92 @@ export class Graphics {
     }
 
     /** Java Slick2D counterpart: Graphics.drawOval(float, float, float, float). */
-    public drawOval(_x: number, _y: number, _width: number, _height: number): void {
-        throw new SlickException("Unsupported phase-one Graphics.drawOval");
+    public drawOval(x: number, y: number, width: number, height: number): void;
+    /** Java Slick2D counterpart: Graphics.drawOval(float, float, float, float, int). */
+    public drawOval(x: number, y: number, width: number, height: number, segments: number): void;
+    public drawOval(x: number, y: number, width: number, height: number, segments: number = Graphics.DEFAULT_SEGMENTS): void {
+        this.drawArc(x, y, width, height, segments, 0, 360);
     }
 
     /** Java Slick2D counterpart: Graphics.drawArc(float, float, float, float, float, float). */
-    public drawArc(_x: number, _y: number, _width: number, _height: number, _start: number, _end: number): void {
-        throw new SlickException("Unsupported phase-one Graphics.drawArc");
+    public drawArc(x: number, y: number, width: number, height: number, start: number, end: number): void;
+    /** Java Slick2D counterpart: Graphics.drawArc(float, float, float, float, int, float, float). */
+    public drawArc(x: number, y: number, width: number, height: number, segments: number, start: number, end: number): void;
+    public drawArc(x: number, y: number, width: number, height: number, a: number, b: number, c?: number): void {
+        const segments = c === undefined ? Graphics.DEFAULT_SEGMENTS : a;
+        const start = c === undefined ? a : b;
+        const end = c === undefined ? b : c;
+        const points = Graphics.arcPoints(x, y, width, height, segments, start, end);
+        this.withRenderTarget(() => Renderer.getBackend().drawLineStrip(points, this.color, this.lineWidth, identityMatrix3()));
     }
 
     /** Java Slick2D counterpart: Graphics.fillOval(float, float, float, float). */
-    public fillOval(_x: number, _y: number, _width: number, _height: number): void {
-        throw new SlickException("Unsupported phase-one Graphics.fillOval");
+    public fillOval(x: number, y: number, width: number, height: number): void;
+    /** Java Slick2D counterpart: Graphics.fillOval(float, float, float, float, int). */
+    public fillOval(x: number, y: number, width: number, height: number, segments: number): void;
+    public fillOval(x: number, y: number, width: number, height: number, segments: number = Graphics.DEFAULT_SEGMENTS): void {
+        this.fillArc(x, y, width, height, segments, 0, 360);
     }
 
     /** Java Slick2D counterpart: Graphics.fillArc(float, float, float, float, float, float). */
-    public fillArc(_x: number, _y: number, _width: number, _height: number, _start: number, _end: number): void {
-        throw new SlickException("Unsupported phase-one Graphics.fillArc");
+    public fillArc(x: number, y: number, width: number, height: number, start: number, end: number): void;
+    /** Java Slick2D counterpart: Graphics.fillArc(float, float, float, float, int, float, float). */
+    public fillArc(x: number, y: number, width: number, height: number, segments: number, start: number, end: number): void;
+    public fillArc(x: number, y: number, width: number, height: number, a: number, b: number, c?: number): void {
+        const segments = c === undefined ? Graphics.DEFAULT_SEGMENTS : a;
+        const start = c === undefined ? a : b;
+        const end = c === undefined ? b : c;
+        const boundary = Graphics.arcPoints(x, y, width, height, segments, start, end);
+        const cx = x + width / 2;
+        const cy = y + height / 2;
+        const triangles: Array<[number, number]> = [];
+        for (let i = 0; i + 1 < boundary.length; i++) {
+            triangles.push([cx, cy], boundary[i], boundary[i + 1]);
+        }
+        this.withRenderTarget(() => Renderer.getBackend().fillTriangles(triangles, this.color, identityMatrix3()));
     }
 
     /** Java Slick2D counterpart: Graphics.drawRoundRect(float, float, float, float, int). */
-    public drawRoundRect(_x: number, _y: number, _width: number, _height: number, _radius: number): void {
-        throw new SlickException("Unsupported phase-one Graphics.drawRoundRect");
+    public drawRoundRect(x: number, y: number, width: number, height: number, radius: number): void;
+    /** Java Slick2D counterpart: Graphics.drawRoundRect(float, float, float, float, int, int). */
+    public drawRoundRect(x: number, y: number, width: number, height: number, radius: number, segments: number): void;
+    public drawRoundRect(x: number, y: number, width: number, height: number, radius: number, segments: number = Graphics.DEFAULT_SEGMENTS): void {
+        const cornerRadius = Graphics.normalizeCornerRadius(width, height, radius);
+        if (cornerRadius === 0) {
+            this.drawRect(x, y, width, height);
+            return;
+        }
+        const d = cornerRadius * 2;
+        this.drawLine(x + cornerRadius, y, x + width - cornerRadius, y);
+        this.drawLine(x, y + cornerRadius, x, y + height - cornerRadius);
+        this.drawLine(x + width, y + cornerRadius, x + width, y + height - cornerRadius);
+        this.drawLine(x + cornerRadius, y + height, x + width - cornerRadius, y + height);
+        this.drawArc(x + width - d, y + height - d, d, d, segments, 0, 90);
+        this.drawArc(x, y + height - d, d, d, segments, 90, 180);
+        this.drawArc(x + width - d, y, d, d, segments, 270, 360);
+        this.drawArc(x, y, d, d, segments, 180, 270);
     }
 
     /** Java Slick2D counterpart: Graphics.fillRoundRect(float, float, float, float, int). */
-    public fillRoundRect(_x: number, _y: number, _width: number, _height: number, _radius: number): void {
-        throw new SlickException("Unsupported phase-one Graphics.fillRoundRect");
+    public fillRoundRect(x: number, y: number, width: number, height: number, radius: number): void;
+    /** Java Slick2D counterpart: Graphics.fillRoundRect(float, float, float, float, int, int). */
+    public fillRoundRect(x: number, y: number, width: number, height: number, radius: number, segments: number): void;
+    public fillRoundRect(x: number, y: number, width: number, height: number, radius: number, segments: number = Graphics.DEFAULT_SEGMENTS): void {
+        const cornerRadius = Graphics.normalizeCornerRadius(width, height, radius);
+        if (cornerRadius === 0) {
+            this.fillRect(x, y, width, height);
+            return;
+        }
+        const d = cornerRadius * 2;
+        this.fillRect(x + cornerRadius, y, width - d, cornerRadius);
+        this.fillRect(x, y + cornerRadius, cornerRadius, height - d);
+        this.fillRect(x + width - cornerRadius, y + cornerRadius, cornerRadius, height - d);
+        this.fillRect(x + cornerRadius, y + height - cornerRadius, width - d, cornerRadius);
+        this.fillRect(x + cornerRadius, y + cornerRadius, width - d, height - d);
+        this.fillArc(x + width - d, y + height - d, d, d, segments, 0, 90);
+        this.fillArc(x, y + height - d, d, d, segments, 90, 180);
+        this.fillArc(x + width - d, y, d, d, segments, 270, 360);
+        this.fillArc(x, y, d, d, segments, 180, 270);
     }
 
     /** Java Slick2D counterpart: Graphics.setLineWidth(float). */
@@ -288,8 +329,12 @@ export class Graphics {
 
     /** Java Slick2D counterpart: Graphics.copyArea(Image, int, int). */
     public copyArea(target: Image, x: number, y: number): void {
-        const bytes = new Uint8Array(target.getWidth() * target.getHeight() * 4);
-        this.getArea(x, y, target.getWidth(), target.getHeight(), bytes);
+        const renderTarget = target.__getRenderTarget();
+        if (!renderTarget) {
+            throw new SlickException("Graphics.copyArea requires a writable Image target");
+        }
+        this.withRenderTarget(() => Renderer.getBackend().copyAreaToRenderTarget(renderTarget, x, y));
+        target.ensureInverted();
     }
 
     /** Java Slick2D counterpart: Graphics.getPixel(int, int). */
@@ -305,16 +350,40 @@ export class Graphics {
     public getArea(x: number, y: number, width: number, height: number, target: Uint8Array): void;
     public getArea(x: number, y: number, width: number, height: number, target?: Uint8Array): Image | void {
         if (target) {
+            if (target.byteLength < width * height * 4) {
+                throw new RangeError("Byte buffer provided to get area is not big enough");
+            }
             this.withRenderTarget(() => Renderer.getBackend().readPixels(x, y, width, height, target));
             return;
         }
         const image = new Image(width, height);
+        this.copyArea(image, x, y);
         return image;
     }
 
     /** Java Slick2D counterpart: Graphics.drawGradientLine(...). */
-    public drawGradientLine(x1: number, y1: number, _r1: number, _g1: number, _b1: number, _a1: number, x2: number, y2: number, _r2: number, _g2: number, _b2: number, _a2: number): void {
-        this.drawLine(x1, y1, x2, y2);
+    public drawGradientLine(x1: number, y1: number, r1: number, g1: number, b1: number, a1: number, x2: number, y2: number, r2: number, g2: number, b2: number, a2: number): void;
+    /** Java Slick2D counterpart: Graphics.drawGradientLine(float, float, Color, float, float, Color). */
+    public drawGradientLine(x1: number, y1: number, color1: Color, x2: number, y2: number, color2: Color): void;
+    public drawGradientLine(x1: number, y1: number, a: number | Color, b: number, c: number | Color, d: number | Color, e?: number, f?: number, g?: number, h?: number, i?: number, j?: number): void {
+        let color1: Color;
+        let x2: number;
+        let y2: number;
+        let color2: Color;
+        if (a instanceof Color && typeof c === "number" && d instanceof Color) {
+            color1 = a;
+            x2 = b;
+            y2 = c;
+            color2 = d;
+        } else if (typeof a === "number" && typeof c === "number" && e !== undefined && f !== undefined && g !== undefined && h !== undefined && i !== undefined && j !== undefined) {
+            color1 = new Color(a, b, c, Number(d));
+            x2 = e;
+            y2 = f;
+            color2 = new Color(g, h, i, j);
+        } else {
+            throw new SlickException("Invalid Graphics.drawGradientLine overload");
+        }
+        this.withRenderTarget(() => Renderer.getBackend().drawGradientLine(x1, y1, color1, x2, y2, color2, this.lineWidth, identityMatrix3()));
     }
 
     /** Java Slick2D counterpart: Graphics.pushTransform(). */
@@ -340,6 +409,38 @@ export class Graphics {
     /** Browser parity helper: returns current draw mode. */
     public getDrawMode(): number {
         return this.drawMode;
+    }
+
+    private static arcPoints(x: number, y: number, width: number, height: number, segments: number, start: number, end: number): Array<[number, number]> {
+        const normalizedSegments = Math.trunc(segments);
+        if (normalizedSegments <= 0) {
+            throw new RangeError("segments must be > 0");
+        }
+        let normalizedEnd = end;
+        while (normalizedEnd < start) {
+            normalizedEnd += 360;
+        }
+        const step = Math.max(1, Math.trunc(360 / normalizedSegments));
+        const cx = x + width / 2;
+        const cy = y + height / 2;
+        const points: Array<[number, number]> = [];
+        for (let a = Math.trunc(start); a < Math.trunc(normalizedEnd + step); a += step) {
+            const angle = a > normalizedEnd ? normalizedEnd : a;
+            const radians = angle * Math.PI / 180;
+            points.push([
+                cx + FastTrig.cos(radians) * width / 2,
+                cy + FastTrig.sin(radians) * height / 2
+            ]);
+        }
+        return points;
+    }
+
+    private static normalizeCornerRadius(width: number, height: number, radius: number): number {
+        if (radius < 0) {
+            throw new RangeError("corner radius must be > 0");
+        }
+        const maxRadius = Math.trunc(Math.trunc(Math.min(width, height)) / 2);
+        return Math.min(Math.trunc(radius), maxRadius);
     }
 
     private withRenderTarget<T>(callback: () => T): T {
