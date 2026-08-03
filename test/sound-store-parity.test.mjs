@@ -48,14 +48,18 @@ class FakePanner {
 }
 
 class FakeAudioContext {
+    static decodeError = null;
     static lastPanner = null;
+    static resumeCalls = 0;
 
     constructor() {
         this.currentTime = 0;
         this.destination = {};
+        this.state = "suspended";
     }
 
     close() {
+        this.state = "closed";
         return Promise.resolve();
     }
 
@@ -76,10 +80,15 @@ class FakeAudioContext {
     }
 
     decodeAudioData() {
+        if (FakeAudioContext.decodeError) {
+            return Promise.reject(FakeAudioContext.decodeError);
+        }
         return Promise.resolve(new FakeAudioBuffer());
     }
 
     resume() {
+        FakeAudioContext.resumeCalls += 1;
+        this.state = "running";
         return Promise.resolve();
     }
 }
@@ -103,7 +112,9 @@ async function settleAudioStart() {
 
 afterEach(() => {
     AL.destroy();
+    FakeAudioContext.decodeError = null;
     FakeAudioContext.lastPanner = null;
+    FakeAudioContext.resumeCalls = 0;
     SoundStore.get().setMaxSources(64);
     ResourceLoader.clearCache();
     delete globalThis.AudioContext;
@@ -298,6 +309,50 @@ test("sound-effect gain matches Java's double sound-volume application and is no
     assert.equal(handle.getGain(), 0.25);
 });
 
+test("sound effects can be muted with zero global or per-sound volume", async () => {
+    installAudioGlobals();
+    registerTone();
+    const store = SoundStore.get();
+    store.setMaxSources(4);
+    AL.create();
+    const sound = new Sound("tone.ogg");
+    await sound.ready();
+
+    store.setSoundVolume(0);
+    sound.play(1, 1);
+    const globalMuteHandle = sound.active;
+    await settleAudioStart();
+
+    assert.notEqual(globalMuteHandle, null);
+    assert.equal(globalMuteHandle.getGain(), 0);
+
+    globalMuteHandle.stop();
+    store.setSoundVolume(1);
+    sound.play(1, 0);
+    const localMuteHandle = sound.active;
+    await settleAudioStart();
+
+    assert.notEqual(localMuteHandle, null);
+    assert.equal(localMuteHandle.getGain(), 0);
+});
+
+test("audio decode failures remain visible after tracked preload promises settle", async () => {
+    installAudioGlobals();
+    registerTone();
+    FakeAudioContext.decodeError = new Error("decode failed");
+    AL.create();
+
+    await assert.rejects(
+        SoundStore.get().preloadAudioBuffer("tone.ogg"),
+        /Failed to load audio: tone\.ogg/
+    );
+
+    assert.equal(ResourceLoader.hasPending(), false);
+    assert.equal(ResourceLoader.hasFailed(), true);
+    assert.equal(ResourceLoader.getTrackedErrors()[0].label, "tone.ogg");
+    await assert.rejects(ResourceLoader.waitForAll(), /tone\.ogg/);
+});
+
 test("Sound.playAt routes coordinates to a Web Audio panner when available", async () => {
     installAudioGlobals();
     registerTone();
@@ -346,4 +401,33 @@ test("Music explicit-volume play and loop preserve the supplied volume", async (
     music.loop(1, 0.5);
 
     assert.equal(music.getVolume(), 0.5);
+});
+
+test("SoundStore.unlock resumes audio from a user gesture and supports restart after destroy", async () => {
+    installAudioGlobals();
+    const store = SoundStore.get();
+
+    assert.equal(await store.unlock(), true);
+    const firstContext = store.getAudioContext();
+
+    assert.equal(store.soundWorks(), true);
+    assert.equal(store.soundsOn(), true);
+    assert.equal(store.musicOn(), true);
+    assert.equal(firstContext.state, "running");
+    assert.equal(FakeAudioContext.resumeCalls, 1);
+
+    store.setSoundsOn(false);
+
+    assert.equal(await store.unlock(), true);
+    assert.equal(store.soundsOn(), false);
+    assert.equal(FakeAudioContext.resumeCalls, 2);
+
+    AL.destroy();
+
+    assert.equal(firstContext.state, "closed");
+    assert.equal(await store.unlock(), true);
+    assert.notEqual(store.getAudioContext(), firstContext);
+    assert.equal(store.soundWorks(), true);
+    assert.equal(store.soundsOn(), true);
+    assert.equal(store.musicOn(), true);
 });

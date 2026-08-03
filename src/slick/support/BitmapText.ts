@@ -54,10 +54,12 @@ export class BitmapText {
             if (!glyph || !this.shouldDraw(y)) {
                 continue;
             }
-            const oldAlpha = glyph.getAlpha();
             glyph.setAlpha(alpha);
-            glyph.draw(x + i * this.xAdvance, y);
-            glyph.setAlpha(oldAlpha);
+            try {
+                glyph.draw(x + i * this.xAdvance, y);
+            } finally {
+                glyph.setAlpha(1);
+            }
         }
     }
 

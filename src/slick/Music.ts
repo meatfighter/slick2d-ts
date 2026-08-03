@@ -67,7 +67,7 @@ export class Music {
                 });
                 this.readyPromise = ResourceLoader.track(registered
                     .then(() => SoundStore.get().loadAudioBuffer(this.ref))
-                    .then(() => undefined));
+                    .then(() => undefined), this.ref);
                 void this.readyPromise.catch(() => undefined);
             }
         }

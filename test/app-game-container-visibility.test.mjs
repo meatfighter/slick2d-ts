@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { AppGameContainer, Display, Mouse } from "../dist/index.js";
+import {
+    AL,
+    AppGameContainer,
+    Display,
+    InternalTextureLoader,
+    Mouse,
+    Music,
+    Renderer,
+    ResourceLoader,
+    SoundStore
+} from "../dist/index.js";
 
 class FakeCanvas {
     constructor(width = 800, height = 600) {
@@ -125,4 +135,269 @@ test("hidden time is not accumulated into the next visible update", () => {
     container.loopFrame(10016);
 
     assert.deepEqual(calls.deltas, [16]);
+});
+
+test("minimum logic interval accumulates small frame deltas", () => {
+    installBrowserGlobals();
+    const { calls, container } = createContainer();
+    container.setMinimumLogicUpdateInterval(50);
+
+    container.loopFrame(16);
+    container.loopFrame(32);
+    container.loopFrame(48);
+
+    assert.deepEqual(calls.deltas, []);
+
+    container.loopFrame(64);
+
+    assert.deepEqual(calls.deltas, [64]);
+});
+
+test("maximum logic interval splits large deltas into Java catch-up updates", () => {
+    installBrowserGlobals();
+    const { calls, container } = createContainer();
+    container.setMinimumLogicUpdateInterval(1);
+    container.setMaximumLogicUpdateInterval(20);
+
+    container.loopFrame(55);
+
+    assert.deepEqual(calls.deltas, [20, 20, 15]);
+});
+
+test("maximum logic interval retains small remainders", () => {
+    installBrowserGlobals();
+    const { calls, container } = createContainer();
+    container.setMinimumLogicUpdateInterval(16);
+    container.setMaximumLogicUpdateInterval(20);
+
+    container.loopFrame(55);
+    container.loopFrame(56);
+
+    assert.deepEqual(calls.deltas, [20, 20]);
+
+    container.loopFrame(57);
+
+    assert.deepEqual(calls.deltas, [20, 20, 17]);
+});
+
+test("paused containers still receive a zero-delta update", () => {
+    installBrowserGlobals();
+    const { calls, container } = createContainer();
+    container.setPaused(true);
+
+    container.loopFrame(100);
+
+    assert.deepEqual(calls.deltas, [0]);
+});
+
+test("paused containers still poll music and browser audio", () => {
+    installBrowserGlobals();
+    const { container } = createContainer();
+    const musicPoll = Music.poll;
+    const store = SoundStore.get();
+    const soundPoll = store.poll;
+    const musicDeltas = [];
+    const soundDeltas = [];
+
+    Music.poll = (delta) => {
+        musicDeltas.push(delta);
+    };
+    store.poll = (delta) => {
+        soundDeltas.push(delta);
+    };
+    try {
+        container.setPaused(true);
+        container.loopFrame(25);
+
+        assert.deepEqual(musicDeltas, [25]);
+        assert.deepEqual(soundDeltas, [25]);
+    } finally {
+        Music.poll = musicPoll;
+        store.poll = soundPoll;
+    }
+});
+
+test("target frame rate paces RAF frames and syncs processed frames", () => {
+    installBrowserGlobals();
+    const { calls, container } = createContainer();
+    container.setTargetFrameRate(30);
+
+    container.loopFrame(16);
+
+    assert.deepEqual(calls.deltas, []);
+    assert.equal(calls.renders, 0);
+
+    container.loopFrame(34);
+
+    assert.deepEqual(calls.deltas, [34]);
+    assert.equal(calls.renders, 1);
+    assert.equal(Display.getSyncFrameRate(), 30);
+});
+
+test("smooth deltas use Java FPS-derived timing when FPS is known", () => {
+    installBrowserGlobals();
+    const { calls, container } = createContainer();
+    container.setSmoothDeltas(true);
+    container.fps = 50;
+
+    container.loopFrame(100);
+
+    assert.deepEqual(calls.deltas, [20]);
+});
+
+test("default Jackal path updates once with the raw frame delta", () => {
+    installBrowserGlobals();
+    const { calls, container } = createContainer();
+
+    container.loopFrame(17);
+
+    assert.deepEqual(calls.deltas, [17]);
+});
+
+test("InternalTextureLoader.clear disposes registered texture resources", () => {
+    installBrowserGlobals();
+    const loader = InternalTextureLoader.get();
+    const backend = Renderer.getBackend();
+    const oldGetContext = backend.getContext;
+    const fakeGl = { tag: "gl" };
+    const disposed = [];
+    const resource = {
+        dispose: (gl) => {
+            disposed.push(gl);
+        },
+        ref: "images/thing.png"
+    };
+
+    backend.getContext = () => fakeGl;
+    try {
+        loader.register(resource);
+        loader.clear("images/thing.png");
+        loader.clear("images/thing.png");
+
+        assert.deepEqual(disposed, [fakeGl]);
+
+        loader.register(resource);
+        loader.clear();
+
+        assert.deepEqual(disposed, [fakeGl, fakeGl]);
+    } finally {
+        loader.unregister(resource);
+        backend.getContext = oldGetContext;
+    }
+});
+
+test("AppGameContainer.reinit rebuilds Java container state before game init", async () => {
+    installBrowserGlobals();
+    const { calls, container } = createContainer();
+    const events = [];
+    const backend = Renderer.getBackend();
+    const oldBackendDispose = backend.dispose;
+    const oldBackendInitialize = backend.initialize;
+    const oldBackendInitDisplay = backend.initDisplay;
+    const oldEnterOrtho = backend.enterOrtho;
+    const oldTextureClear = InternalTextureLoader.get().clear;
+    const store = SoundStore.get();
+    const oldSoundClear = store.clear;
+    const oldAlCreate = AL.create;
+    const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
+    const oldCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    const handleStops = [];
+    const fakeHandle = {
+        pause: () => undefined,
+        playing: () => true,
+        stop: () => {
+            handleStops.push("stop");
+        }
+    };
+    let nextFrame = 40;
+
+    container.started = true;
+    container.animationFrame = 9;
+    container.storedDelta = 44;
+    container.framesThisSecond = 7;
+    container.fps = 12;
+    container.fpsWindowStart = 123;
+    container.waitingForResources = true;
+    container.resourceError = new Error("old resource error");
+    container.setMusicVolume(0.25);
+    container.setSoundVolume(0.5);
+    store.track(fakeHandle);
+    const oldGraphics = container.getGraphics();
+    await assert.rejects(ResourceLoader.track(Promise.reject(new Error("decode failed")), "images/bad.png"));
+    assert.equal(ResourceLoader.hasFailed(), true);
+
+    calls.deltas.length = 0;
+    container.game.init = () => {
+        events.push("game.init");
+        assert.deepEqual(handleStops, ["stop"]);
+        assert.equal(ResourceLoader.hasFailed(), false);
+        assert.equal(container.storedDelta, 0);
+        assert.equal(container.waitingForResources, false);
+        assert.equal(container.resourceError, null);
+        assert.equal(container.getMusicVolume(), 1);
+        assert.equal(container.getSoundVolume(), 1);
+        assert.notEqual(container.getGraphics(), oldGraphics);
+        assert.equal(container.getDefaultFont(), container.getGraphics().getFont());
+    };
+    backend.dispose = () => {
+        events.push("renderer.dispose");
+    };
+    backend.initialize = () => {
+        events.push("renderer.initialize");
+    };
+    backend.initDisplay = (width, height) => {
+        events.push(`renderer.initDisplay:${width}x${height}`);
+    };
+    backend.enterOrtho = (width, height) => {
+        events.push(`renderer.enterOrtho:${width}x${height}`);
+    };
+    InternalTextureLoader.get().clear = () => {
+        events.push("texture.clear");
+    };
+    store.clear = () => {
+        events.push("sound.clear");
+        oldSoundClear.call(store);
+    };
+    AL.create = () => {
+        events.push("al.create");
+    };
+    globalThis.cancelAnimationFrame = (id) => {
+        events.push(`cancel:${id}`);
+    };
+    globalThis.requestAnimationFrame = () => {
+        events.push(`raf:${nextFrame}`);
+        return nextFrame++;
+    };
+
+    try {
+        await container.reinit();
+
+        assert.deepEqual(events, [
+            "cancel:9",
+            "texture.clear",
+            "sound.clear",
+            "renderer.dispose",
+            "renderer.initialize",
+            "al.create",
+            "renderer.enterOrtho:800x600",
+            "game.init",
+            "raf:40"
+        ]);
+        assert.equal(container.animationFrame, 40);
+        assert.equal(container.fps, 0);
+        assert.equal(container.framesThisSecond, 0);
+        assert.equal(calls.deltas.length, 0);
+    } finally {
+        backend.dispose = oldBackendDispose;
+        backend.initialize = oldBackendInitialize;
+        backend.initDisplay = oldBackendInitDisplay;
+        backend.enterOrtho = oldEnterOrtho;
+        InternalTextureLoader.get().clear = oldTextureClear;
+        store.clear = oldSoundClear;
+        AL.create = oldAlCreate;
+        globalThis.requestAnimationFrame = oldRequestAnimationFrame;
+        globalThis.cancelAnimationFrame = oldCancelAnimationFrame;
+        ResourceLoader.clearCache();
+        store.clear();
+    }
 });

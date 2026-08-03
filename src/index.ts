@@ -42,6 +42,7 @@ export * from "./slick/support/HumanInput.js";
 export * from "./slick/support/IInput.js";
 export * from "./slick/support/IMode.js";
 export * from "./slick/support/JavaRandom.js";
+export * from "./slick/support/JavaNumbers.js";
 export * from "./slick/support/RecordedInput.js";
 export * from "./slick/support/Song.js";
 export * from "./slick/support/SpriteDrawing.js";

@@ -30,7 +30,7 @@ The implementation covers the direct Slick2D/LWJGL calls observed in the game so
 - Audio: `Sound.play`, `play(pitch, volume)`, `playing`, `stop`; `Music.play`, `loop`, `playing`, `setVolume`, `stop`; neutral `Song` helper sequencing.
 - Atlases/resources: `PackedSpriteSheet(def, filter)`, `XMLPackedSheet(imageRef, xmlRef)`, `getSprite`, and Java-style `ResourceLoader.getResourceAsStream`.
 - LWJGL shims: direct game/copy usage of `Display`, `DisplayMode`, `PixelFormat`, `GL11`, `Mouse`, `Cursor`, `BufferUtils`, `Sys`, and `AL`.
-- Reusable helpers: neutral `ButtonMapping`, `HumanInput`, `IInput`, `BitmapText`, `BinaryReader`, `JavaRandom`, `GeometryMath`, and `SpriteDrawing`.
+- Reusable helpers: neutral `ButtonMapping`, `HumanInput`, `IInput`, `BitmapText`, `BinaryReader`, `JavaRandom`, `JavaNumbers`, `GeometryMath`, and `SpriteDrawing`.
 
 No game-title-specific modules are exported. The project names appear only as audited source references in docs.
 
@@ -45,6 +45,9 @@ No game-title-specific modules are exported. The project names appear only as au
 - Changed packed atlas loader failures to `SlickException`.
 - Added `ResourceLoader.track()` and connected image decode promises to `ResourceLoader.waitForAll()` so browser decode work participates in the preload barrier.
 - Added `ResourceLoader.setCacheBust`, retry configuration, and pending-work counters so PWA fetch behavior can be configured without changing Java ref strings.
+- Added `ResourceLoader.preloadResources(...)` as the manifest-style pre-init barrier for browser ports that must fetch/register Java resource refs before synchronous XML/DEF/binary parsing in `init`.
+- Added `JavaNumbers` for shared Java primitive numeric semantics in converted game logic: int wrapping, double-to-int saturation, int division/remainder, byte/short/char narrowing, float narrowing, and Java round behavior.
+- Added `SoundStore.unlock()` so PWA Start-button handlers can create/resume Web Audio explicitly before gameplay playback, while preserving already-initialized sound/music toggles.
 - Added eager Web Audio decode readiness for `Sound` and `Music` constructors through `ready()`/`load()` promises while preserving synchronous Java call sites.
 - Restored Java `Music.currentMusic` semantics: starting one track stops/swaps the previous current track, `playing()` is tied to the current channel, and pending async starts are invalidated by `stop()`/`pause()`.
 - Fixed `GameContainer.setMusicOn(false)` / `SoundStore.setMusicOn(false)` to pause active music and resume it from the stored position when music is enabled again.
@@ -62,6 +65,8 @@ No game-title-specific modules are exported. The project names appear only as au
 - Wrapped initial `AppGameContainer.start()` init/preload work in cleanup/error handling so failed starts unbind listeners, reset Display/renderer state, and can be retried.
 - Fixed `ResourceLoader` location handling to try ordered browser locations, preserve root-relative paths like `/assets`, clear all locations on `removeAllResourceLocations()`, and refetch failed records on retry.
 - Fixed fullscreen/display-mode failures to reject with `SlickException`, restore previous canvas/container dimensions on denied fullscreen, and notify resize-aware games after browser-applied size changes.
+- Added internal observation for returned fullscreen/display-mode promises so Java-style callers that ignore `setDisplayMode(..., true)` or `setFullscreen(true)` do not create unhandled promise rejections; denied fullscreen is routed to `AppGameContainer.setErrorHandler()` or `Log.error` after state restoration.
+- Restored transparent/native cursors when fullscreen entry is denied after game code has already hidden the cursor, covering Java-style update paths that hide first and request fullscreen second.
 - Added a Java-style resize compatibility hook: if the wrapped game exposes `containerSizeChanged(container)`, `AppGameContainer` calls it after canvas/fullscreen/browser resize changes and marks `Display.wasResized()`.
 - Made `AppGameContainer.destroy()` call `AL.destroy()` so active Web Audio handles are stopped/cleared on host teardown, load failure, retry, or menu return paths.
 - Implemented transparent/native cursor parity for byte-buffer cursors: all-zero/transparent cursor data maps to CSS `cursor: none`, and non-transparent RGBA cursor bytes become a CSS cursor data URL.
@@ -182,13 +187,74 @@ The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_9
 
 The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_10.md` was checked after the follow-up placeholder audit. It reported no new game-relevant Slick2D TypeScript repair items for the `SlickMsPacMan` browser port. Its remaining cautions are game-port concerns, not library defects: preserve Java integer division/truncation when porting game arithmetic, and keep the browser PWA shell/start-menu/audio-unlock behavior outside the Slick compatibility library.
 
+The Stickvania follow-up audit in `C:\js-projects\stickvania-js\SLICK2D_TS_STICKVANIA_REAUDIT_2026-08-03.md` was checked against the current library. Confirmed browser-relevant bug fixed in this pass:
+
+- Failed fullscreen entry now restores any transparent cursor hide when the final state is not fullscreen, so a Java-style Stickvania port that hides the cursor before calling `setDisplayMode(..., true)` does not leave the windowed canvas at CSS `cursor: none` if the browser denies fullscreen.
+
+The same Stickvania follow-up audit also calls for real-browser proof that a trusted Space key press can drive `Input.isKeyPressed(Input.KEY_SPACE)` in the RAF update path and still satisfy transient activation for `requestFullscreen()`. The current Node fake-DOM suite cannot prove that browser security condition. No game-specific fullscreen shortcut was added to `slick2d-ts`; the correct verification is a Chromium/Playwright or equivalent browser test in the app/test harness.
+
+The Jackal handoff in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_FIX_HANDOFF.md` was checked against the current library. Confirmed browser-relevant library work added in this pass:
+
+- `ResourceLoader.preloadResources(...)` now provides the neutral manifest pre-init barrier the Jackal bootstrap can call before `AppGameContainer.start()`, with retry/cache-bust behavior inherited from `loadResource` and progress over original Java refs.
+- `JavaNumbers` now provides the shared Java numeric helper set needed by Jackal's converted collision, timer, map, projectile, and packed-value logic.
+- `SoundStore.unlock()` now provides the explicit Start-button Web Audio unlock/restart hook; `AL.destroy()`/`SoundStore.destroy()` still own return-to-menu teardown.
+- WebGL world-clip regression coverage now verifies transformed scissor conversion under camera translation and scalable-game-style scale.
+
+The same Jackal handoff includes app-port responsibilities that are intentionally not added to `slick2d-ts`: PWA splash UI, user-facing loader screens, a 126-file Jackal asset manifest, game-source numeric-cast auditing, and real-browser menu/start/restart automation. `CursorLoader.getCursor(String, ...)` remains async because browser image decode is async; Jackal's observed hide-cursor path uses the synchronous byte-buffer overload. The `ScalableGame2` z-scale remains `0` because the copied Java `ScalableGame2` classes use `GL.glScalef(..., ..., 0)`.
+
+The Jackal re-audit in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDIT_2026-08-03.md` was checked against the current library and the Java Slick2D behavior. Confirmed browser-relevant library fixes added in this pass:
+
+- `WebGLRenderer` now keeps separate screen and world clip state, applies their intersection to WebGL scissor, and lets `clearWorldClip()` preserve an outer `ScalableGame` clip while `clearClip()` preserves an active world clip.
+- Sound-effect gain now clamps only to `>= 0`, so global sound volume `0` or per-sound volume `0` produces exact Web Audio gain `0` while preserving Java's double global-volume multiplication for nonzero values.
+- Controller polling now treats standard Gamepad D-pad buttons `12..15` as Slick POV equivalents, suppresses duplicate button listener edges for those POV stand-ins, and tracks down state separately from one-shot `isControlPressed(...)` records so release and repeat press callbacks are delivered.
+- `ResourceLoader.track(promise, refOrLabel)` now retains failed image/audio decode or other browser preparation errors until `clearCache()`. `getTrackedErrors()`, `hasFailed()`, and `waitForAll()` expose those failures even after the failed promise has settled.
+- `Color.fromInts(...)` and `Color.fromFloats(...)` provide explicit Java overload mappings for ports. Internal framebuffer/image byte reads now use the int path so byte channel `1` means `1 / 255`.
+
+The same re-audit's pre-init resource barrier concern remains a documented port/bootstrap contract rather than an automatic container rewrite: when a port synchronously parses XML, DEF, text, or binary bytes inside `game.init(...)`, the browser bootstrap must call `ResourceLoader.preloadResources(...)` before `AppGameContainer.start()`. The container's post-init `waitForAll()` still covers image/audio decode work queued during Java-shaped constructors, but it cannot retroactively satisfy synchronous parsers that never received preloaded bytes.
+
+The Jackal re-audit pass 2 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS2.md` was checked against `C:\NetBeansProjects\SlickJackal\src\jackal\Main.java`. Confirmed browser-relevant helper bug fixed in this pass:
+
+- `SpriteDrawing.drawRotated(...)`, `drawRotatedScaled(...)`, `drawCentered(...)`, and Jackal-style `drawScaled(...)` now use the renderer/graphics transform stack to match Java's `glPushMatrix -> glTranslatef -> glRotatef -> glScalef -> image.draw(localOffset) -> glPopMatrix` sequence. Explicit center arguments are treated as local draw offsets, not `Image` rotation pivots.
+- These helpers no longer mutate image rotation or center-of-rotation state, and alpha overloads reset image alpha to exactly `1`, matching Jackal's helper methods.
+- `SpriteDrawing.withRotation(...)` now matches Jackal's `rotateGraphics(...)` helper by translating to the local origin before rotation instead of performing a screen-space pivot rotation, and transform wrappers pop in `finally`.
+- Regression tests now cover centered rotation, explicit negative offsets, 90-degree rotation, non-uniform scaled rotation, Jackal centered scaling, nested outer transforms, alpha reset, and non-mutation of image rotation/center state.
+
+The same pass noted that Ms. Pac-Man's `drawScaled` helper uses a different top-left-anchored translate-to-center convention. That remains a game-local wrapper concern; the shared `SpriteDrawing.drawScaled(...)` is documented as the Jackal-style centered-origin helper.
+
+The Jackal re-audit pass 3 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS3.md` was checked against the support helpers and parity docs. Confirmed browser-relevant helper bugs fixed in this pass:
+
+- `SpriteDrawing.drawScaled(image, x, y, scale, alpha)` is now unambiguously the Jackal centered scale/alpha helper for all scale values, including `scale > 1`; explicit top-left width/height drawing moved to `drawSized(...)`.
+- `SpriteDrawing.drawOffset(...)` now matches Jackal's local-coordinate helper, including the alpha overload's reset-to-`1` behavior. The old camera-subtraction behavior is available only through the explicitly named `drawCameraOffset(...)`.
+- `GeometryMath.ISQRT2`, `createUnitVector2(...)`, and `rotate(...)` now mirror Jackal's `Math.cos`/`Math.sin` plus Java `float` narrowing instead of Slick `FastTrig` double-precision behavior.
+- `Song.play()`, `Song.update()`, and `Song.stop()` now preserve Jackal `Song.java` ordering, including `play()` calling `stop()` first, `playing = true` after the start call, no `playedIntro2` change in `play()`, and stopping only currently playing parts.
+- `BitmapText.drawStringAlpha(...)` now resets glyph alpha to exactly `1` after each draw, matching Jackal's helper instead of restoring a prior non-`1` alpha.
+- Regression tests were added for the scale/alpha overload trap, local-offset drawing, explicit camera-offset drawing, Java-float geometry, Song sequencing, and bitmap text alpha reset.
+
+The Jackal re-audit pass 4 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS4.md` was checked against Java Slick2D `GameContainer.updateAndRender(...)` and the browser RAF loop. Confirmed browser-relevant container timing bug fixed in this pass:
+
+- `AppGameContainer` now keeps Java-style `storedDelta` state and treats `minimumLogicUpdateInterval` as an accumulation threshold, not a per-frame delta floor.
+- `maximumLogicUpdateInterval` now splits large accumulated deltas into repeated fixed-size `game.update(...)` calls and handles the Java remainder rule exactly: update and clear only when `remainder > minimumLogicUpdateInterval`; otherwise retain the remainder.
+- Paused containers now still poll input, call `Music.poll(delta)` and `SoundStore.get().poll(delta)`, and call `game.update(container, 0)` on processed frames.
+- Smooth deltas now use Java's `1000 / getFPS()` integer timing when FPS is nonzero, instead of averaging browser timestamps.
+- `targetFrameRate` is no longer inert: positive values pace the RAF loop without blocking the browser thread, and processed frames still call `Display.sync(targetFrameRate)` as the Slick/LWJGL compatibility record.
+- Rendering now follows Java's `hasFocus() || getAlwaysRender()` condition instead of using paused state as the render gate.
+- Regression tests now cover minimum accumulation, maximum catch-up splitting, retained remainders, paused zero-delta updates, paused audio polling, target-FPS pacing, smooth deltas, and the default Jackal raw-delta path.
+
+The Jackal re-audit pass 5 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS5.md` was checked against Java Slick2D `AppGameContainer.reinit()`, Java `GameContainer.initSystem()`, and Jackal's local `ApplicationGameContainer.reinit()`. Confirmed browser-relevant lifecycle bug fixed in this pass:
+
+- `AppGameContainer.reinit()` now performs a Java-parity browser rebuild instead of only calling `game.init(...)`.
+- Reinit cancels the active RAF callback, clears retained resource failures while preserving successful preloaded bytes, clears `InternalTextureLoader` texture resources, clears active audio through `SoundStore.clear()`, rebuilds renderer/display/audio state, resets music and sound volume to `1`, recreates `Graphics` and the default font, enters ortho mode, resets frame bookkeeping and resource-error state, then calls `game.init(...)` and awaits `ResourceLoader.waitForAll()`.
+- `InternalTextureLoader.clear()` is no longer a no-op. `WebGLTextureResource` instances register with the texture loader, and `clear()` / `clear(name)` dispose the matching WebGL texture resources.
+- `ResourceLoader.clearFailures()` now clears failed fetch records, tracked pending handles, and retained tracked decode/preparation errors without removing successfully preloaded bytes, so a PWA reinit can recover from stale failures without discarding the manifest preload cache.
+- Regression tests now cover texture-loader disposal and the `reinit()` cleanup-before-init ordering, stale failure clearing, audio-handle clearing, volume reset, graphics/default-font recreation, frame-state reset, and RAF rescheduling.
+
 Claims intentionally not converted into desktop-exact behavior:
 
 - Native applet, AWT/Swing, LWJGL Display, filesystem, classpath, native OpenAL buffers/sources, and blocking timing behavior remain browser shims.
 - `Music` accepts the Java streaming hint but uses Web Audio buffers. This is deliberate for the web desktop browser target and the three games' music handoff code.
 - `PackedSpriteSheet` and `XMLPackedSheet` still require metadata bytes to be preloaded before their constructors when those constructors synchronously parse `.def` or XML text. This is an explicit browser contract, not a place to fake Java classpath I/O.
 - `ResourceLoader` retry/cache-bust support does not replace a game PWA manifest or splash-screen loader; it gives the Slick parity layer the same hooks so assets loaded through Slick do not bypass those requirements.
-- Fullscreen and pointer lock remain asynchronous browser APIs. The library updates its canvas and WebGL dimensions when the promise/events settle; game ports that immediately call scale recalculation after `setDisplayMode` should either await the returned promise or also recalculate from `resize`/`fullscreenchange`.
+- Fullscreen and pointer lock remain asynchronous browser APIs. The library updates its canvas and WebGL dimensions when the promise/events settle; game ports that immediately call scale recalculation after `setDisplayMode` should either await the returned promise or also recalculate from `resize`/`fullscreenchange`. Java-style ignored fullscreen calls are supported because the container observes and reports rejected fullscreen promises internally.
 - Browser-forced fullscreen exits are handled by the library by restoring the last known non-fullscreen Slick mode. A port may still add game-local UI reactions, but it must not compensate by adding title-specific fullscreen state fixes to `slick2d-ts`.
 - Shape rendering, warped/sheared image rendering, `Graphics.copyArea`, `Graphics.getArea(...): Image`, and gradient-line color interpolation are now implemented through the WebGL2 renderer even though the three audited game rendering paths do not call most of those APIs.
 - `Graphics.fillRect(..., ShapeFill)` remains explicitly unsupported because the library does not include Slick's shape-fill hierarchy and none of the three audited games call it.
@@ -205,10 +271,11 @@ These differences are intentional and must be kept during game ports:
 - Gamepad API backs controller polling and callbacks. Listener button callbacks stay one-based; stored polling mappings stay zero-based.
 - Browser resource fetch/decode is asynchronous. Any Java code that synchronously parses resource bytes must preload those refs before construction, then read through `ResourceLoader.getResourceAsStream`.
 - Dynamic Java-style loading screens may construct resources during `update`; `AppGameContainer` renders that progress frame, then waits for `ResourceLoader.hasPending()` work before the next update.
-- Browser autoplay policy still requires a user gesture before reliable audio decode/playback. The host page should focus the canvas and initialize or resume audio from the Start button handler before entering the game loop.
+- `Display.sync(...)` remains nonblocking in the browser. `GameContainer.setTargetFrameRate(...)` is honored by RAF pacing in `AppGameContainer`, while `Display.sync(targetFPS)` records the processed-frame cap request for compatibility.
+- Browser autoplay policy still requires a user gesture before reliable audio decode/playback. The host page should focus the canvas and call `SoundStore.get().unlock()` from the Start button handler before entering the game loop.
 - Host pages should install `AppGameContainer.setErrorHandler()` when they need a splash/loading UI to display queued resource failures. The library still surfaces unhandled errors if no handler is installed.
 - DOM controls used for a browser menu should live outside the active canvas focus path or pause the container; either way, Slick input now ignores their keyboard and pointer events.
-- Cursor hiding now works at the canvas/native-cursor shim level, and forced fullscreen exit restores the visible cursor saved before the transparent hide. A PWA menu or hamburger overlay can still override cursor visibility with ordinary DOM/CSS outside the canvas.
+- Cursor hiding now works at the canvas/native-cursor shim level, and forced fullscreen exit or denied fullscreen entry restores the visible cursor saved before the transparent hide. A PWA menu or hamburger overlay can still override cursor visibility with ordinary DOM/CSS outside the canvas.
 - `ResourceLoader.getResource(ref)` remains a syntactic best-effort URL helper. Actual load success is determined by `loadResource(ref)`, which tries every configured location.
 - `removeAllResourceLocations()` now matches Java and leaves no default browser location. Use `addResourceLocation("")` when a port intentionally wants relative-to-page lookup after clearing.
 - Applets/AWT/Swing/native window concepts are not library APIs. Use `AppGameContainer`/`ApplicationGameContainer`, DOM canvas, Fullscreen API, and Pointer Lock API.
@@ -218,8 +285,11 @@ These differences are intentional and must be kept during game ports:
 The library is ready as a parity base for TS ports of the three games, provided each game port:
 
 - preloads atlas XML/DEF files, image files, binary map files, and audio refs before Java-style synchronous constructors/readers need them;
+- uses `ResourceLoader.preloadResources(manifest, onProgress)` or an equivalent app loader before constructing code that synchronously parses XML/DEF/binary bytes;
 - awaits `Sound.ready()` / `Music.ready()` or relies on the `AppGameContainer` dynamic resource barrier before leaving loading modes that construct audio after `init`;
-- treats fullscreen toggles as browser-async: await `setDisplayMode` when it returns a promise, then recalculate scalable container transforms, while also handling resize/fullscreen events;
+- calls `SoundStore.get().unlock()` from a user gesture before expecting browser audio to play;
+- uses `JavaNumbers` at converted Java integer division, remainder, cast, byte, char, float, round, and packed-value boundaries;
+- treats fullscreen toggles as browser-async: await `setDisplayMode` when caller code needs post-fullscreen sequencing, while direct Java-style ignored calls are allowed because the container observes rejected promises internally; still handle resize/fullscreen events;
 - installs an `AppGameContainer` error handler before `start()` when the PWA needs to show loading/resource errors inside the UI;
 - focuses the game canvas when handing control from menu DOM to game input so browser key defaults are suppressed only during play;
 - configures `ResourceLoader` locations deliberately for the deployed base path, for example `addResourceLocation("/assets")` for origin-root assets or `addResourceLocation("assets")` for route-relative assets;

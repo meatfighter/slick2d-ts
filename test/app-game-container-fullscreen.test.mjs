@@ -4,6 +4,7 @@ import { AppGameContainer, Cursor, Display, Mouse } from "../dist/index.js";
 
 class FakeCanvas {
     constructor() {
+        this.fullscreenError = null;
         this.width = 800;
         this.height = 600;
         this.style = {
@@ -18,6 +19,9 @@ class FakeCanvas {
     }
 
     requestFullscreen() {
+        if (this.fullscreenError) {
+            return Promise.reject(this.fullscreenError);
+        }
         globalThis.document.fullscreenElement = this;
         return Promise.resolve();
     }
@@ -111,6 +115,21 @@ function createContainer(width = 800, height = 600) {
     return { canvas, container, game };
 }
 
+async function settleAsyncHandlers() {
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+    });
+}
+
+function installVisibleThenTransparentCursor(canvas) {
+    Mouse.setNativeCursor(new Cursor(1, 1, 0, 0, 1, new Uint8Array([255, 255, 255, 255]), null));
+    assert.equal(canvas.style.cursor, "default");
+    Mouse.setNativeCursor(new Cursor(16, 16, 0, 0, 1, new Uint8Array(16 * 16 * 4), null));
+    assert.equal(canvas.style.cursor, "none");
+}
+
 afterEach(() => {
     Mouse.setNativeCursor(null);
     Mouse.setElement(null);
@@ -178,4 +197,71 @@ test("destroy exits browser fullscreen, clears display state, and restores a tra
     assert.equal(canvas.style.width, "800px");
     assert.equal(canvas.style.height, "600px");
     assert.equal(canvas.style.cursor, "");
+});
+
+test("ignored rejected fullscreen display mode restores state and reports without unhandled rejection", async () => {
+    installBrowserGlobals();
+    const { canvas, container, game } = createContainer();
+    const errors = [];
+    const unhandled = [];
+    const onUnhandled = (reason) => {
+        unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+        container.setErrorHandler((error) => {
+            errors.push(error);
+        });
+        canvas.fullscreenError = new Error("denied fullscreen");
+        installVisibleThenTransparentCursor(canvas);
+
+        container.setDisplayMode(1280, 720, true);
+        await settleAsyncHandlers();
+
+        assert.equal(errors.length, 1);
+        assert.match(errors[0].message, /Failed to enter fullscreen/);
+        assert.equal(unhandled.length, 0);
+        assert.equal(container.isFullscreen(), false);
+        assert.equal(Display.isFullscreen(), false);
+        assert.equal(container.getWidth(), 800);
+        assert.equal(container.getHeight(), 600);
+        assert.equal(canvas.width, 800);
+        assert.equal(canvas.height, 600);
+        assert.equal(canvas.style.width, "800px");
+        assert.equal(canvas.style.height, "600px");
+        assert.equal(canvas.style.cursor, "default");
+        assert.deepEqual(game.resizeCalls.at(-1), [800, 600]);
+    } finally {
+        process.off("unhandledRejection", onUnhandled);
+    }
+});
+
+test("ignored rejected Display.setFullscreen reports through the active container handler", async () => {
+    installBrowserGlobals();
+    const { canvas, container } = createContainer();
+    const errors = [];
+    const unhandled = [];
+    const onUnhandled = (reason) => {
+        unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+        container.setErrorHandler((error) => {
+            errors.push(error);
+        });
+        canvas.fullscreenError = new Error("denied fullscreen");
+        installVisibleThenTransparentCursor(canvas);
+
+        Display.setFullscreen(true);
+        await settleAsyncHandlers();
+
+        assert.equal(errors.length, 1);
+        assert.match(errors[0].message, /Failed to enter fullscreen/);
+        assert.equal(unhandled.length, 0);
+        assert.equal(container.isFullscreen(), false);
+        assert.equal(Display.isFullscreen(), false);
+        assert.equal(canvas.style.cursor, "default");
+    } finally {
+        process.off("unhandledRejection", onUnhandled);
+    }
 });

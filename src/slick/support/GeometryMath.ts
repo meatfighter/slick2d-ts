@@ -1,5 +1,3 @@
-import { FastTrig } from "../util/FastTrig.js";
-
 /**
  * Java counterpart: source point value used by rotate helpers.
  */
@@ -8,20 +6,25 @@ export interface Point2D {
     y: number;
 }
 
+function jf(value: number): number {
+    return Math.fround(value);
+}
+
 /**
  * Java counterpart: source geometry helper methods.
  *
  * Contains continuous and discrete unit-vector recipes.
  */
 export class GeometryMath {
-    public static readonly ISQRT2 = 1 / Math.sqrt(2);
+    public static readonly ISQRT2 = jf(1 / Math.sqrt(2));
 
     public static createUnitVector2(angle: number): [number, number];
     public static createUnitVector2(angle: number, target: [number, number]): [number, number];
-    /** Java counterpart: Main.createUnitVector2(double). */
+    /** Java counterpart: Main.createUnitVector2(float). */
     public static createUnitVector2(angle: number, target: [number, number] = [0, 0]): [number, number] {
-        target[0] = FastTrig.cos(angle);
-        target[1] = FastTrig.sin(angle);
+        const a = jf(angle);
+        target[0] = jf(Math.cos(a));
+        target[1] = jf(Math.sin(a));
         return target;
     }
 
@@ -69,13 +72,20 @@ export class GeometryMath {
         return target;
     }
 
-    /** Java counterpart: Main.rotate(double, double, double). */
+    /** Java counterpart: Main.rotate(float, float, float). */
     public static rotate(x: number, y: number, angle: number): Point2D {
-        const cos = FastTrig.cos(angle);
-        const sin = FastTrig.sin(angle);
+        const fx = jf(x);
+        const fy = jf(y);
+        const a = jf(angle);
+        const cos = jf(Math.cos(a));
+        const sin = jf(Math.sin(a));
+        const xCos = jf(fx * cos);
+        const ySin = jf(fy * sin);
+        const xSin = jf(fx * sin);
+        const yCos = jf(fy * cos);
         return {
-            x: x * cos - y * sin,
-            y: x * sin + y * cos
+            x: jf(xCos - ySin),
+            y: jf(xSin + yCos)
         };
     }
 }

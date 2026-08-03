@@ -19,6 +19,12 @@ type TextureInfo = {
     width: number;
     height: number;
 };
+type ScreenClip = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+};
 
 const SOLID_VERTEX = `#version 300 es
 in vec2 a_position;
@@ -140,6 +146,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private textures = new Map<number, TextureInfo>();
     private currentTextureId = 0;
     private nextTextureId = 1;
+    private screenClip: ScreenClip | null = null;
+    private worldClip: ScreenClip | null = null;
 
     /** Initializes the renderer with a canvas and WebGL2 context attributes. */
     public initialize(canvas: HTMLCanvasElement, options: RenderBackendOptions): void {
@@ -174,6 +182,9 @@ export class WebGLRenderer implements RenderBackend, SGL {
         gl.clearColor(background.r, background.g, background.b, background.a);
         gl.clear(gl.COLOR_BUFFER_BIT);
         this.transformStack = [identityMatrix3()];
+        this.screenClip = null;
+        this.worldClip = null;
+        this.applyActiveClip();
     }
 
     /** Ends a frame by flushing pending work. */
@@ -344,17 +355,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Applies a screen-space scissor clip. */
     public setClip(x: number, y: number, width: number, height: number): void {
-        const gl = this.gl;
-        if (!gl) {
-            return;
-        }
-        gl.enable(gl.SCISSOR_TEST);
-        gl.scissor(Math.floor(x), Math.floor(this.height - y - height), Math.floor(width), Math.floor(height));
+        this.screenClip = WebGLRenderer.normalizeClip(x, y, width, height);
+        this.applyActiveClip();
     }
 
     /** Clears the active screen-space clip. */
     public clearClip(): void {
-        this.gl?.disable(this.gl.SCISSOR_TEST);
+        this.screenClip = null;
+        this.applyActiveClip();
     }
 
     /** Applies a transformed world-space clip by converting its bounds to a scissor rectangle. */
@@ -372,12 +380,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
         const maxX = Math.max(...xs);
         const minY = Math.min(...ys);
         const maxY = Math.max(...ys);
-        this.setClip(minX, minY, maxX - minX, maxY - minY);
+        this.worldClip = WebGLRenderer.normalizeClip(minX, minY, maxX - minX, maxY - minY);
+        this.applyActiveClip();
     }
 
     /** Clears the active world-space clip. */
     public clearWorldClip(): void {
-        this.clearClip();
+        this.worldClip = null;
+        this.applyActiveClip();
     }
 
     /** Saves the current matrix. */
@@ -493,6 +503,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.glScissor(int, int, int, int). */
     public glScissor(x: number, y: number, width: number, height: number): void {
+        this.screenClip = null;
+        this.worldClip = null;
         this.gl?.enable(this.gl.SCISSOR_TEST);
         this.gl?.scissor(x, y, width, height);
     }
@@ -934,6 +946,47 @@ export class WebGLRenderer implements RenderBackend, SGL {
         gl.uniform4f(colorLocation, 1, 1, 1, this.globalAlphaScale);
         gl.drawArrays(gl.TRIANGLES, 0, points.length);
         this.batch.markDirty();
+    }
+
+    private applyActiveClip(): void {
+        const gl = this.gl;
+        if (!gl) {
+            return;
+        }
+        const clip = WebGLRenderer.intersectClips(this.screenClip, this.worldClip);
+        if (!clip) {
+            gl.disable(gl.SCISSOR_TEST);
+            return;
+        }
+        gl.enable(gl.SCISSOR_TEST);
+        const width = Math.max(0, Math.floor(clip.width));
+        const height = Math.max(0, Math.floor(clip.height));
+        gl.scissor(Math.floor(clip.x), Math.floor(this.height - clip.y - clip.height), width, height);
+    }
+
+    private static normalizeClip(x: number, y: number, width: number, height: number): ScreenClip {
+        const normalizedWidth = Math.max(0, width);
+        const normalizedHeight = Math.max(0, height);
+        return { x, y, width: normalizedWidth, height: normalizedHeight };
+    }
+
+    private static intersectClips(a: ScreenClip | null, b: ScreenClip | null): ScreenClip | null {
+        if (!a) {
+            return b;
+        }
+        if (!b) {
+            return a;
+        }
+        const x1 = Math.max(a.x, b.x);
+        const y1 = Math.max(a.y, b.y);
+        const x2 = Math.min(a.x + a.width, b.x + b.width);
+        const y2 = Math.min(a.y + a.height, b.y + b.height);
+        return {
+            x: x1,
+            y: y1,
+            width: Math.max(0, x2 - x1),
+            height: Math.max(0, y2 - y1)
+        };
     }
 
     private toClip(x: number, y: number): [number, number] {

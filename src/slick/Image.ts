@@ -507,7 +507,7 @@ export class Image implements Renderable {
         if (!pixel) {
             throw new SlickException("Image pixel data is not available; wait for resources to finish loading before calling getColor");
         }
-        return new Color(pixel[0], pixel[1], pixel[2], pixel[3]);
+        return Color.fromInts(pixel[0], pixel[1], pixel[2], pixel[3]);
     }
 
     /** Java Slick2D counterpart: Image.isDestroyed(). */

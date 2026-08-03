@@ -257,6 +257,32 @@ export class SoundStore {
         return this.context;
     }
 
+    /** Browser parity helper: resumes Web Audio from a user gesture before gameplay playback. */
+    public async unlock(): Promise<boolean> {
+        const context = this.getAudioContext();
+        if (!context) {
+            this.soundWorksFlag = false;
+            this.soundsEnabled = false;
+            this.musicEnabled = false;
+            return false;
+        }
+        const shouldInitializeAudioState = !this.soundWorksFlag;
+        this.inited = true;
+        this.soundWorksFlag = true;
+        if (shouldInitializeAudioState) {
+            this.soundsEnabled = true;
+            this.musicEnabled = true;
+            this.resetSoundSources();
+        }
+        try {
+            await context.resume?.();
+            return context.state !== "closed";
+        } catch (error) {
+            Log.warn("Unable to unlock Web Audio", error);
+            return false;
+        }
+    }
+
     /** Browser parity helper: returns the global sound-effect gain bus. */
     public getSoundBus(): GainNode | null {
         this.init();
@@ -292,7 +318,7 @@ export class SoundStore {
 
     /** Browser parity helper: queues audio decode work into ResourceLoader.waitForAll(). */
     public preloadAudioBuffer(ref: string): Promise<void> {
-        const tracked = ResourceLoader.track(this.loadAudioBuffer(ref).then(() => undefined));
+        const tracked = ResourceLoader.track(this.loadAudioBuffer(ref).then(() => undefined), ref);
         void tracked.catch(() => undefined);
         return tracked;
     }
@@ -351,7 +377,7 @@ export class SoundStore {
             source.buffer = buffer;
             source.loop = loop;
             source.playbackRate.value = Math.max(0.25, Math.min(4, pitch));
-            sourceGain = Math.max(0.001, Math.max(0, volume * this.soundVolume));
+            sourceGain = Math.max(0, volume * this.soundVolume);
             gain.gain.value = sourceGain;
             source.connect(gain);
             this.connectPositionedSource(context, gain, bus, position);

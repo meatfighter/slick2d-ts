@@ -6,10 +6,21 @@ type ResourceRecord = {
     promise?: Promise<ArrayBuffer>;
     error?: unknown;
 };
+export type TrackedResourceError = {
+    label: string;
+    error: unknown;
+};
 
 type FetchFailure = {
     status?: number;
     cause?: unknown;
+};
+
+export type ResourcePreloadProgress = {
+    ref: string;
+    loaded: number;
+    total: number;
+    bytesLoaded: number;
 };
 
 /**
@@ -22,6 +33,8 @@ export class ResourceLoader {
     private static locations: string[] = [""];
     private static records = new Map<string, ResourceRecord>();
     private static trackedPromises = new Set<Promise<unknown>>();
+    private static trackedErrors: TrackedResourceError[] = [];
+    private static trackingGeneration = 0;
     private static cacheBustValue: string | null = null;
     private static retryCount = 0;
     private static retryDelay = 250;
@@ -160,14 +173,59 @@ export class ResourceLoader {
     /**
      * Browser parity helper.
      *
+     * Fetches a manifest of original Java resource paths before game init so
+     * later Java-style constructors can read synchronously through
+     * getResourceAsStream(ref).
+     */
+    public static async preloadResources(refs: Iterable<string>, onProgress?: (progress: ResourcePreloadProgress) => void): Promise<Map<string, ArrayBuffer>> {
+        const uniqueRefs = Array.from(new Set(refs));
+        const results = new Map<string, ArrayBuffer>();
+        const total = uniqueRefs.length;
+        let loaded = 0;
+        let bytesLoaded = 0;
+        if (total === 0) {
+            return results;
+        }
+        await Promise.all(uniqueRefs.map(async (ref) => {
+            try {
+                const bytes = await ResourceLoader.loadResource(ref);
+                const copy = bytes.slice(0);
+                results.set(ref, copy);
+                loaded++;
+                bytesLoaded += copy.byteLength;
+                onProgress?.({ ref, loaded, total, bytesLoaded });
+            } catch (error) {
+                throw error instanceof SlickException
+                    ? error
+                    : new SlickException(`Failed to preload resource ${ref}`, error);
+            }
+        }));
+        return results;
+    }
+
+    /**
+     * Browser parity helper.
+     *
      * Adds a non-Java decode/prepare promise to the same preload barrier used
      * by Java-style synchronous resource consumers.
      */
-    public static track<T>(promise: Promise<T>): Promise<T> {
-        const tracked = promise.finally(() => {
-            ResourceLoader.trackedPromises.delete(tracked);
+    public static track<T>(promise: Promise<T>, refOrLabel: string = "tracked resource"): Promise<T> {
+        const generation = ResourceLoader.trackingGeneration;
+        const tracked = promise.catch((error) => {
+            const reported = error instanceof SlickException
+                ? error
+                : new SlickException(`Failed to prepare resource ${refOrLabel}`, error);
+            if (generation === ResourceLoader.trackingGeneration) {
+                ResourceLoader.trackedErrors.push({ label: refOrLabel, error: reported });
+            }
+            throw reported;
+        }).finally(() => {
+            if (generation === ResourceLoader.trackingGeneration) {
+                ResourceLoader.trackedPromises.delete(tracked);
+            }
         });
         ResourceLoader.trackedPromises.add(tracked);
+        void tracked.catch(() => undefined);
         return tracked;
     }
 
@@ -213,13 +271,38 @@ export class ResourceLoader {
     /**
      * Browser parity helper.
      *
+     * Returns retained failures from tracked decode/preparation tasks.
+     */
+    public static getTrackedErrors(): TrackedResourceError[] {
+        return ResourceLoader.trackedErrors.slice();
+    }
+
+    /**
+     * Browser parity helper.
+     *
+     * Returns true when any fetch or tracked preparation task has failed.
+     */
+    public static hasFailed(): boolean {
+        return ResourceLoader.trackedErrors.length > 0
+            || Array.from(ResourceLoader.records.values()).some((record) => record.error !== undefined);
+    }
+
+    /**
+     * Browser parity helper.
+     *
      * Waits for all currently queued resource requests.
      */
     public static async waitForAll(): Promise<void> {
+        if (ResourceLoader.trackedErrors.length > 0) {
+            throw ResourceLoader.toTrackedFailureException();
+        }
         const promises = Array.from(ResourceLoader.records.values())
             .map((record) => record.promise)
             .filter((promise): promise is Promise<ArrayBuffer> => promise !== undefined);
         await Promise.all([...promises, ...ResourceLoader.trackedPromises]);
+        if (ResourceLoader.trackedErrors.length > 0) {
+            throw ResourceLoader.toTrackedFailureException();
+        }
     }
 
     /**
@@ -230,6 +313,30 @@ export class ResourceLoader {
     public static clearCache(): void {
         ResourceLoader.records.clear();
         ResourceLoader.trackedPromises.clear();
+        ResourceLoader.trackedErrors = [];
+        ResourceLoader.trackingGeneration++;
+    }
+
+    /**
+     * Browser parity helper.
+     *
+     * Clears retained failed resource/decode state without removing successful
+     * preloaded resource bytes.
+     */
+    public static clearFailures(): void {
+        for (const [ref, record] of Array.from(ResourceLoader.records.entries())) {
+            if (record.error !== undefined) {
+                ResourceLoader.records.delete(ref);
+            }
+        }
+        ResourceLoader.trackedPromises.clear();
+        ResourceLoader.trackedErrors = [];
+        ResourceLoader.trackingGeneration++;
+    }
+
+    private static toTrackedFailureException(): SlickException {
+        const first = ResourceLoader.trackedErrors[0];
+        return new SlickException(`Failed tracked resource: ${first.label}`, first.error);
     }
 
     private static withCacheBust(url: URL): URL {

@@ -98,6 +98,16 @@ export class Color {
         }
     }
 
+    /** Java Slick2D counterpart: Color(int, int, int, int). */
+    public static fromInts(r: number, g: number, b: number, a: number = 255): Color {
+        return Color.createRaw(Math.trunc(r) / 255, Math.trunc(g) / 255, Math.trunc(b) / 255, Math.trunc(a) / 255);
+    }
+
+    /** Java Slick2D counterpart: Color(float, float, float, float). */
+    public static fromFloats(r: number, g: number, b: number, a: number = 1): Color {
+        return Color.createRaw(r, g, b, a);
+    }
+
     /**
      * Java Slick2D counterpart: Color.decode(String).
      *
@@ -279,5 +289,14 @@ export class Color {
         const g = Math.round(clamp01(this.g) * 255) & 0xFF;
         const b = Math.round(clamp01(this.b) * 255) & 0xFF;
         return ((a << 24) | (r << 16) | (g << 8) | b) >>> 0;
+    }
+
+    private static createRaw(r: number, g: number, b: number, a: number): Color {
+        const color = Object.create(Color.prototype) as Color;
+        color.r = r;
+        color.g = g;
+        color.b = b;
+        color.a = a;
+        return color;
     }
 }

@@ -47,9 +47,15 @@ export class Song {
 
     /** Java counterpart: Song.stop(). */
     public stop(): void {
-        this.intro?.stop();
-        this.intro2?.stop();
-        this.loop?.stop();
+        if (this.intro?.playing()) {
+            this.intro.stop();
+        }
+        if (this.intro2?.playing()) {
+            this.intro2.stop();
+        }
+        if (this.loop?.playing()) {
+            this.loop.stop();
+        }
         this.playing = false;
         this.playedIntro2 = false;
     }
@@ -59,40 +65,36 @@ export class Song {
         if (this.playing) {
             return;
         }
-        this.playing = true;
-        this.playedIntro2 = false;
+        this.stop();
         if (this.intro) {
             this.intro.play();
         } else if (this.intro2) {
             this.intro2.play();
-            this.playedIntro2 = true;
         } else if (this.loop) {
             this.loop.loop();
         }
+        this.playing = true;
     }
 
     /** Java counterpart: Song.update(). */
     public update(): void {
-        if (!this.playing) {
-            return;
-        }
-        if (this.intro && this.intro.playing()) {
-            return;
-        }
-        if (this.intro2 && !this.playedIntro2) {
-            this.intro2.play();
-            this.playedIntro2 = true;
-            return;
-        }
-        if (this.intro2 && this.intro2.playing()) {
-            return;
-        }
-        if (this.loop) {
-            if (!this.loop.playing()) {
-                this.loop.loop();
+        if (this.playing) {
+            if (this.intro === null || !this.intro.playing()) {
+                if (!(this.intro2 === null || this.playedIntro2)) {
+                    this.playedIntro2 = true;
+                    this.intro2.play();
+                } else if ((this.intro2 === null || !this.intro2.playing())
+                    && this.loop !== null
+                    && !this.loop.playing()) {
+                    this.loop.loop();
+                }
             }
-        } else {
-            this.stop();
+            if (this.loop === null
+                && this.intro !== null
+                && !this.intro.playing()
+                && (this.intro2 === null || !this.intro2.playing())) {
+                this.stop();
+            }
         }
     }
 }

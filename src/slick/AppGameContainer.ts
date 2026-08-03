@@ -10,8 +10,10 @@ import { Image } from "./Image.js";
 import { Music } from "./Music.js";
 import { SoundStore } from "./openal/SoundStore.js";
 import type { ImageData as SlickImageData } from "./opengl/ImageData.js";
+import { InternalTextureLoader } from "./opengl/InternalTextureLoader.js";
 import { Renderer } from "./opengl/renderer/Renderer.js";
 import { SlickException } from "./SlickException.js";
+import { Log } from "./util/Log.js";
 import { ResourceLoader } from "./util/ResourceLoader.js";
 
 type DomImageData = ImageData;
@@ -107,7 +109,7 @@ export class AppGameContainer extends GameContainer {
         if (this.canvas) {
             this.applyCanvasSize(width, height);
         }
-        const fullscreenResult = this.setFullscreen(fullscreen);
+        const fullscreenResult = this.setFullscreenInternal(fullscreen);
         const completeDisplayMode = (): void => {
             if (fullscreen) {
                 if (this.isFullscreen()) {
@@ -119,12 +121,13 @@ export class AppGameContainer extends GameContainer {
             }
         };
         if (fullscreenResult instanceof Promise) {
-            return fullscreenResult.then(completeDisplayMode).catch((error) => {
+            const operation = fullscreenResult.then(completeDisplayMode).catch((error) => {
                 this.restoreDisplaySnapshot(snapshot);
                 throw error instanceof SlickException
                     ? error
                     : new SlickException(`Failed to set display mode: ${width}x${height} fullscreen=${fullscreen}`, error);
             });
+            return this.observeAsyncFailure(operation);
         }
         completeDisplayMode();
     }
@@ -138,6 +141,11 @@ export class AppGameContainer extends GameContainer {
 
     /** Java Slick2D counterpart: AppGameContainer.setFullscreen(boolean). */
     public override setFullscreen(fullscreen: boolean): void | Promise<void> {
+        const operation = this.setFullscreenInternal(fullscreen);
+        return operation instanceof Promise ? this.observeAsyncFailure(operation) : operation;
+    }
+
+    private setFullscreenInternal(fullscreen: boolean): void | Promise<void> {
         const previousFullscreen = this.fullscreen;
         this.fullscreen = fullscreen;
         if (!this.canvas || typeof document === "undefined") {
@@ -151,6 +159,9 @@ export class AppGameContainer extends GameContainer {
                 })
                 .catch((error) => {
                     this.fullscreen = previousFullscreen;
+                    if (document.fullscreenElement !== this.canvas) {
+                        Mouse.restoreNativeCursorAfterForcedFullscreenExit();
+                    }
                     throw new SlickException("Failed to enter fullscreen", error);
                 });
         }
@@ -176,8 +187,28 @@ export class AppGameContainer extends GameContainer {
 
     /** Java Slick2D counterpart: AppGameContainer.reinit(). */
     public override async reinit(): Promise<void> {
-        await this.game.init(this);
-        await ResourceLoader.waitForAll();
+        const shouldResumeLoop = this.started && !this.destroyed;
+        if (this.animationFrame !== 0) {
+            cancelAnimationFrame(this.animationFrame);
+            this.animationFrame = 0;
+        }
+        try {
+            this.rebuildSystemForReinit();
+            await this.game.init(this);
+            await ResourceLoader.waitForAll();
+            this.resetFrameBookkeeping();
+            if (shouldResumeLoop && !this.destroyed) {
+                this.animationFrame = requestAnimationFrame(this.loop);
+            }
+        } catch (error) {
+            const reported = this.toError(error, "Failed to reinitialize AppGameContainer");
+            this.destroy();
+            if (this.errorHandler) {
+                this.errorHandler(reported);
+                return;
+            }
+            throw reported;
+        }
     }
 
     /** Java Slick2D counterpart: AppGameContainer.start(). */
@@ -215,8 +246,7 @@ export class AppGameContainer extends GameContainer {
             AL.create();
             await this.game.init(this);
             await ResourceLoader.waitForAll();
-            this.lastFrameTime = this.now();
-            this.fpsWindowStart = this.lastFrameTime;
+            this.resetFrameBookkeeping();
             this.animationFrame = requestAnimationFrame(this.loop);
         } catch (error) {
             const reported = this.toError(error, "Failed to start AppGameContainer");
@@ -370,25 +400,25 @@ export class AppGameContainer extends GameContainer {
         if (this.waitingForResources) {
             return;
         }
-        const rawDelta = Math.max(0, Math.trunc(time - this.lastFrameTime));
-        const delta = this.smoothDeltas ? Math.round((rawDelta + Math.max(0, this.getTime() - this.lastFrameTime)) / 2) : rawDelta;
-        this.lastFrameTime = time;
         const visible = typeof document === "undefined" || document.visibilityState !== "hidden";
         if (this.updateOnlyWhenVisible && !visible) {
+            this.lastFrameTime = time;
             this.animationFrame = requestAnimationFrame(this.loop);
             return;
         }
-        if (!this.updateOnlyWhenVisible || visible) {
-            this.input.poll(this.width, this.height);
-            if (!this.paused) {
-                const cappedDelta = this.maximumLogicUpdateInterval > 0 ? Math.min(delta, this.maximumLogicUpdateInterval) : delta;
-                this.game.update(this, Math.max(this.minimumLogicUpdateInterval, cappedDelta));
-                Music.poll(delta);
-                SoundStore.get().poll(delta);
-            }
+        if (!this.shouldProcessTargetFrame(time)) {
+            this.animationFrame = requestAnimationFrame(this.loop);
+            return;
         }
+        const rawDelta = Math.max(0, Math.trunc(time - this.lastFrameTime));
+        const delta = this.smoothDeltas && this.getFPS() !== 0 ? Math.trunc(1000 / this.getFPS()) : rawDelta;
+        this.lastFrameTime = time;
+        this.input.poll(this.width, this.height);
+        Music.poll(delta);
+        SoundStore.get().poll(delta);
+        this.updateGame(delta);
         let waitForResources = ResourceLoader.hasPending();
-        if (this.alwaysRender || !this.paused) {
+        if (this.hasFocus() || this.getAlwaysRender()) {
             if (this.clearEachFrame) {
                 Renderer.getBackend().beginFrame(this.width, this.height, this.graphics.getBackground());
             } else {
@@ -402,6 +432,9 @@ export class AppGameContainer extends GameContainer {
             Renderer.getBackend().endFrame();
             waitForResources = waitForResources || ResourceLoader.hasPending();
         }
+        if (this.targetFrameRate !== -1) {
+            Display.sync(this.targetFrameRate);
+        }
         this.updateFps(time);
         if (Display.isCloseRequested() && this.game.closeRequested()) {
             this.destroy();
@@ -412,6 +445,78 @@ export class AppGameContainer extends GameContainer {
             return;
         }
         this.animationFrame = requestAnimationFrame(this.loop);
+    }
+
+    private shouldProcessTargetFrame(time: number): boolean {
+        if (this.targetFrameRate <= 0) {
+            return true;
+        }
+        return time - this.lastFrameTime >= 1000 / this.targetFrameRate;
+    }
+
+    private updateGame(delta: number): void {
+        if (this.paused) {
+            this.game.update(this, 0);
+            return;
+        }
+        this.storedDelta += delta;
+        if (this.storedDelta < this.minimumLogicUpdateInterval) {
+            return;
+        }
+        if (this.maximumLogicUpdateInterval !== 0) {
+            const cycles = Math.trunc(this.storedDelta / this.maximumLogicUpdateInterval);
+            for (let i = 0; i < cycles; i++) {
+                this.game.update(this, this.maximumLogicUpdateInterval);
+            }
+            const remainder = this.storedDelta % this.maximumLogicUpdateInterval;
+            if (remainder > this.minimumLogicUpdateInterval) {
+                this.game.update(this, remainder % this.maximumLogicUpdateInterval);
+                this.storedDelta = 0;
+            } else {
+                this.storedDelta = remainder;
+            }
+        } else {
+            this.game.update(this, this.storedDelta);
+            this.storedDelta = 0;
+        }
+    }
+
+    private rebuildSystemForReinit(): void {
+        this.waitingForResources = false;
+        this.resourceError = null;
+        ResourceLoader.clearFailures();
+        InternalTextureLoader.get().clear();
+        SoundStore.get().clear();
+        Renderer.getBackend().dispose();
+        if (this.canvas) {
+            Renderer.getBackend().initialize(this.canvas, {
+                alpha: true,
+                antialias: this.multiSample > 0,
+                stencil: GameContainer.stencil
+            });
+        } else {
+            Renderer.getBackend().initDisplay(this.width, this.height);
+        }
+        AL.create();
+        Display.setActiveContainer(this);
+        Display.create();
+        Display.setTitle(this.title);
+        this.setMusicVolume(1);
+        this.setSoundVolume(1);
+        this.graphics = new Graphics(this.width, this.height);
+        this.defaultFont = this.graphics.getFont();
+        Renderer.get().enterOrtho(this.width, this.height);
+        this.resetFrameBookkeeping();
+    }
+
+    private resetFrameBookkeeping(): void {
+        this.lastFrameTime = this.now();
+        this.storedDelta = 0;
+        this.framesThisSecond = 0;
+        this.fpsWindowStart = this.lastFrameTime;
+        this.fps = 0;
+        this.waitingForResources = false;
+        this.resourceError = null;
     }
 
     private readonly handleWindowResize = (): void => {
@@ -576,6 +681,26 @@ export class AppGameContainer extends GameContainer {
                 this.waitingForResources = false;
                 this.reportError(error);
             });
+    }
+
+    private observeAsyncFailure(operation: Promise<void>): Promise<void> {
+        void operation.catch((error) => {
+            this.reportRecoverableError(error);
+        });
+        return operation;
+    }
+
+    private reportRecoverableError(error: unknown): void {
+        const reported = this.toError(error, "Failed to complete AppGameContainer asynchronous operation");
+        if (this.errorHandler) {
+            try {
+                this.errorHandler(reported);
+            } catch (handlerError) {
+                Log.error("AppGameContainer error handler failed", handlerError);
+            }
+            return;
+        }
+        Log.error(reported);
     }
 
     private reportError(error: unknown): void {

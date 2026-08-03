@@ -341,7 +341,7 @@ export class Graphics {
     public getPixel(x: number, y: number): Color {
         const bytes = new Uint8Array(4);
         this.getArea(x, y, 1, 1, bytes);
-        return new Color(bytes[0], bytes[1], bytes[2], bytes[3]);
+        return Color.fromInts(bytes[0], bytes[1], bytes[2], bytes[3]);
     }
 
     /** Java Slick2D counterpart: Graphics.getArea(int, int, int, int). */

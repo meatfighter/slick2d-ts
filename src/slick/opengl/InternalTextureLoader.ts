@@ -1,3 +1,6 @@
+import { Renderer } from "./renderer/Renderer.js";
+import type { WebGLTextureResource } from "../rendering/WebGLTextureResource.js";
+
 /**
  * Java Slick2D counterpart: org.newdawn.slick.opengl.InternalTextureLoader.
  *
@@ -5,6 +8,7 @@
  */
 export class InternalTextureLoader {
     private static readonly instance = new InternalTextureLoader();
+    private readonly textures = new Set<WebGLTextureResource>();
     private holdTextureData = false;
     private deferredLoading = false;
     private sixteenBit = false;
@@ -32,8 +36,15 @@ export class InternalTextureLoader {
     /** Java Slick2D counterpart: InternalTextureLoader.clear(). */
     public clear(): void;
     /** Java Slick2D counterpart: InternalTextureLoader.clear(String). */
-    public clear(_name: string): void;
-    public clear(_name?: string): void {
+    public clear(name: string): void;
+    public clear(name?: string): void {
+        const gl = Renderer.getBackend().getContext();
+        for (const texture of Array.from(this.textures)) {
+            if (name === undefined || texture.ref === name) {
+                texture.dispose(gl);
+                this.textures.delete(texture);
+            }
+        }
     }
 
     /** Java Slick2D counterpart: InternalTextureLoader.set16BitMode(). */
@@ -57,6 +68,20 @@ export class InternalTextureLoader {
 
     /** Java Slick2D counterpart: InternalTextureLoader.reload(). */
     public reload(): void {
+        const gl = Renderer.getBackend().getContext();
+        for (const texture of Array.from(this.textures)) {
+            texture.dispose(gl);
+        }
+    }
+
+    /** Browser parity helper: registers a texture resource for Java-style cache clearing. */
+    public register(texture: WebGLTextureResource): void {
+        this.textures.add(texture);
+    }
+
+    /** Browser parity helper: removes a texture resource from Java-style cache tracking. */
+    public unregister(texture: WebGLTextureResource): void {
+        this.textures.delete(texture);
     }
 
     /** Browser parity helper: returns whether texture data retention was requested. */

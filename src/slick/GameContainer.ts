@@ -52,6 +52,7 @@ export abstract class GameContainer {
     protected targetFrameRate = -1;
     protected minimumLogicUpdateInterval = 1;
     protected maximumLogicUpdateInterval = 0;
+    protected storedDelta = 0;
     protected updateOnlyWhenVisible = false;
     protected fullscreen = false;
     protected paused = false;
@@ -214,18 +215,17 @@ export abstract class GameContainer {
 
     /** Java Slick2D counterpart: GameContainer.setTargetFrameRate(int). */
     public setTargetFrameRate(frameRate: number): void {
-        this.targetFrameRate = frameRate;
-        Display.sync(frameRate);
+        this.targetFrameRate = Math.trunc(frameRate);
     }
 
     /** Java Slick2D counterpart: GameContainer.setMinimumLogicUpdateInterval(int). */
     public setMinimumLogicUpdateInterval(interval: number): void {
-        this.minimumLogicUpdateInterval = interval;
+        this.minimumLogicUpdateInterval = Math.trunc(interval);
     }
 
     /** Java Slick2D counterpart: GameContainer.setMaximumLogicUpdateInterval(int). */
     public setMaximumLogicUpdateInterval(interval: number): void {
-        this.maximumLogicUpdateInterval = interval;
+        this.maximumLogicUpdateInterval = Math.trunc(interval);
     }
 
     /** Java Slick2D counterpart: GameContainer.setUpdateOnlyWhenVisible(boolean). */

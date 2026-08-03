@@ -1,6 +1,7 @@
 import { ResourceLoader } from "../util/ResourceLoader.js";
 import { SlickException } from "../SlickException.js";
 import type { Color } from "../Color.js";
+import { InternalTextureLoader } from "../opengl/InternalTextureLoader.js";
 
 type TextureSource = ImageBitmap | HTMLImageElement | HTMLCanvasElement | OffscreenCanvas;
 type TextureInputSource = TextureSource | ArrayBuffer | Blob;
@@ -72,7 +73,7 @@ export class WebGLTextureResource {
             this.height = 0;
             this.source = null;
             const loadOptions = typeof refOrOptions === "object" && refOrOptions !== null ? refOrOptions : options;
-            this.pending = ResourceLoader.track(this.load(sourceOrRef, loadOptions));
+            this.pending = ResourceLoader.track(this.load(sourceOrRef, loadOptions), sourceOrRef);
         } else if (sourceOrRef instanceof ArrayBuffer || sourceOrRef instanceof Blob) {
             const ref = typeof refOrOptions === "string" ? refOrOptions : "stream";
             this.ref = ref;
@@ -80,7 +81,7 @@ export class WebGLTextureResource {
             this.height = 0;
             this.source = null;
             const bytesOptions = typeof refOrOptions === "object" && refOrOptions !== null ? refOrOptions : options;
-            this.pending = ResourceLoader.track(this.loadBytes(sourceOrRef, ref, bytesOptions));
+            this.pending = ResourceLoader.track(this.loadBytes(sourceOrRef, ref, bytesOptions), ref);
         } else {
             const ref = typeof refOrOptions === "string" ? refOrOptions : refOrOptions;
             const sourceOptions = typeof refOrOptions === "object" && refOrOptions !== null ? refOrOptions : options;
@@ -91,6 +92,7 @@ export class WebGLTextureResource {
             this.prepareLoadedSource(sourceOrRef, sourceOptions);
             this.pending = null;
         }
+        InternalTextureLoader.get().register(this);
     }
 
     /** Returns true when the decoded image source is available. */
@@ -161,6 +163,7 @@ export class WebGLTextureResource {
             gl.deleteTexture(this.texture);
         }
         this.texture = null;
+        InternalTextureLoader.get().unregister(this);
     }
 
     private async load(ref: string, options: WebGLTextureLoadOptions): Promise<void> {

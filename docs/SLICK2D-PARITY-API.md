@@ -158,7 +158,7 @@ Java vendor package roots                    omit org/newdawn, keep src/slick an
 Game-title-specific helper names             never export title-specific modules from slick2d-ts
 Animation/AngelCodeFont/UnicodeFont          not required by the three game ports; do not implement in phase one
 Applet/AWT wrappers                          remove during ports; map lifecycle to AppGameContainer and DOM canvas
-Display.sync(targetFPS)                      required shim; records cap request without blocking the browser thread
+Display.sync(targetFPS)                      required shim; records processed-frame cap request; AppGameContainer paces RAF
 GameContainer shared context statics         required shims; map to the active WebGL resource/context owner
 org.lwjgl.openal.AL                          required minimal shim for copied container/audio paths
 Controller button callback indexes           listener callbacks are one-based; polling/storage is zero-based
@@ -170,6 +170,7 @@ new Thread()                                 replace with RAF loop, Promise flow
 System.exit(0)                               container.exit() or game-local state transition; never close the tab
 System.currentTimeMillis() throttles         Sys.getTime() or performance.now() monotonic milliseconds
 java.util.Random seeded behavior             use JavaRandom for exact seeded nextInt/nextFloat/nextBoolean parity
+Java primitive numeric behavior              use JavaNumbers for int division, casts, byte/char narrowing, float and round boundaries
 Collections.synchronizedMap                  normal Map is sufficient unless a port introduces Workers
 ```
 
@@ -228,6 +229,7 @@ src/
             HumanInput.ts
             IInput.ts
             IMode.ts
+            JavaNumbers.ts
             JavaRandom.ts
             RecordedInput.ts
             Song.ts
@@ -272,6 +274,7 @@ project Song helper classes          src/slick/support/Song.ts
 project IInput/HumanInput helpers    src/slick/support/IInput.ts
 project recorded/demo input helper   src/slick/support/RecordedInput.ts
 java.util.Random port helper         src/slick/support/JavaRandom.ts
+Java primitive numeric helpers       src/slick/support/JavaNumbers.ts
 project bitmap text helpers          src/slick/support/BitmapText.ts
 project draw helper methods          src/slick/support/SpriteDrawing.ts
 project geometry helper methods      src/slick/support/GeometryMath.ts
@@ -339,6 +342,8 @@ Implement these rules:
 - `ResourceLoader.setCacheBust(value)` appends or replaces a `v` query parameter on network fetch URLs while preserving the exact Java ref as the cache key.
 - `ResourceLoader.setRetryOptions(retries, delayMs)` configures network retry attempts for resources loaded through Slick. Retries apply only to fetch transport failures and non-OK HTTP responses; decode/parse failures fail immediately.
 - `ResourceLoader.hasPending()` and `getPendingCount()` report queued fetch/decode work, including browser-only promises registered through `track()`.
+- `ResourceLoader.track(promise, refOrLabel)` must retain failed browser decode/preparation tasks until `ResourceLoader.clearCache()` or `ResourceLoader.clearFailures()`. The retained label must be the original Java ref whenever the task belongs to an image/audio resource.
+- `ResourceLoader.getTrackedErrors()` returns retained tracked preparation failures, and `ResourceLoader.hasFailed()` returns true for either fetch failures or retained preparation failures. `waitForAll()` must reject even if a tracked decode failure settled before the caller awaited the barrier.
 - Browser resource locations must preserve Java's ordered search semantics. `loadResource(ref)` tries every configured location in order, retries that candidate according to retry settings, then falls through to the next location before failing.
 - `removeAllResourceLocations()` clears every location, matching Java. Add `""` explicitly when a port wants the default relative-to-page lookup after clearing.
 - Root-relative browser locations such as `/assets` must stay origin-root absolute. Relative locations such as `assets` stay relative to the deployed page/base URL. Absolute `https://...` locations stay absolute.
@@ -349,6 +354,7 @@ Implement these rules:
 - Resource failures must produce `SlickException` or stored `ResourceLoader` errors with enough data to identify the path and original cause.
 - Resource progress and diagnostics must come from `ResourceLoader` in phase one, then from `ResourceManager` when the fuller architecture is implemented.
 - Constructing `Image`, `Sound`, `Music`, `PackedSpriteSheet`, or `XMLPackedSheet` registers, retrieves, or tracks a resource through the shared resource loader.
+- Ports that construct `PackedSpriteSheet`, `XMLPackedSheet`, or game-local binary/text readers inside `game.init(...)` must call `ResourceLoader.preloadResources(manifest, onProgress)` from the browser bootstrap before `AppGameContainer.start()`. The container's post-init `waitForAll()` catches image/audio work queued by constructors; it cannot make a synchronous XML/DEF/binary constructor succeed if those bytes were never preloaded.
 - Resource paths must preserve the exact Java string value as the logical cache key, for example `images/player.png` and `sound/start.ogg`. The resource manager may resolve that key against a configured base URL, but the public Slick object keeps the original string.
 - `AppGameContainer.start()` must await all resources queued during `Game.init`.
 - Resources created after startup must begin loading immediately and expose a ready state internally.
@@ -404,6 +410,7 @@ Implement these rules:
 - `Image.FILTER_LINEAR` maps to `gl.LINEAR`.
 - `Graphics.setClip` maps to `gl.scissor` in framebuffer coordinates.
 - `Graphics.setWorldClip` maps to the current transform plus scissor when axis-aligned, or a stencil clip when transformed clipping cannot be represented by one scissor rectangle.
+- Maintain separate screen-clip and world-clip state. The WebGL backend applies the intersection; `clearWorldClip()` must leave an active `setClip(...)` scissor in place, and `clearClip()` must leave an active world clip in place.
 - `GameContainer.stencil` and `PixelFormat(..., stencil, ...)` request a WebGL context with `{ stencil: true }`.
 
 ### Web Runtime Libraries
@@ -542,6 +549,7 @@ Implement these rules:
 - `Sound.ready()` / `Sound.load()` and `Music.ready()` / `Music.load()` are browser parity helpers that return the constructor-queued decode promise. They do not replace Java-style `play()` call sites; they exist so loading screens and host bootstraps can await browser work explicitly.
 - `Sound.play(pitch, volume)` maps pitch to playback rate. Clamp or reject values the browser backend cannot play, and document that decision in the method comment.
 - `Sound.play(pitch, volume)`, `Sound.playAt(...)`, and `Sound.loop(pitch, volume)` must apply `SoundStore.get().getSoundVolume()` before delegating to `SoundStore.playSound(...)`, and `SoundStore.playSound(...)` must apply sound volume again when assigning the source gain. This matches the checked Slick2D Java source.
+- Sound-effect source gain must clamp only to `>= 0`. Do not add a nonzero Web Audio floor; global sound volume `0` or per-sound volume `0` must produce exact gain `0`.
 - `Sound.playAt(pitch, volume, x, y, z)` must pass coordinates to a Web Audio `PannerNode` when the browser backend provides one. If `createPanner()` is unavailable or fails, fall back to non-positioned playback while preserving Java-visible play/drop/latest-source behavior.
 - `Sound.playing()` and `Sound.stop()` must observe only the latest logical source started by that `Sound`, not every overlapping source previously spawned by the same instance.
 - If `SoundStore.playSound(...)` returns `null` for a `Sound.play(...)`, `playAt(...)`, or `loop(...)` attempt, that failed attempt must replace the remembered source with "none"; later `Sound.playing()` returns false and `Sound.stop()` does not stop the older source.
@@ -565,12 +573,13 @@ Implement these rules:
 - `AppGameContainer` must listen to `fullscreenchange` and `resize`, update canvas backing size and CSS size, then reinitialize the WebGL display dimensions.
 - `AppGameContainer` must default to Java's `updateOnlyWhenVisible=true` behavior. Hidden frames skip update/render unless `setUpdateOnlyWhenVisible(false)` is called, and hidden time must not accumulate into the first visible update delta.
 - Fullscreen entry/exit failures must reject with `SlickException`. Display-mode requests that resized the canvas before a failed fullscreen request must restore the previous logical and canvas dimensions.
+- Returned fullscreen/display-mode promises must be internally observed by `AppGameContainer` so a direct Java-style caller that ignores the returned promise does not create a browser `unhandledrejection`. The rejection must still be returned to explicit `await` callers, while ignored failures are routed to `AppGameContainer.setErrorHandler(handler)` or `Log.error`.
 - After browser-applied display size changes, the container must mark `Display.wasResized()` and call `containerSizeChanged(container)` when the active game exposes that Java-style helper.
 - `AppGameContainer` must track the last successful non-fullscreen display mode separately from the requested fullscreen mode. Browser-forced fullscreen exit must restore that windowed mode, clear fullscreen CSS sizing, mark `Display.wasResized()`, and notify `containerSizeChanged(container)` when present.
 - `AppGameContainer.destroy()` must request browser fullscreen exit when the active canvas owns fullscreen, restore windowed canvas size/CSS synchronously, and clear stale Slick fullscreen state even though `document.exitFullscreen()` resolves asynchronously.
 - `setMouseGrabbed` maps to Pointer Lock where available.
 - Cursor methods must use CSS cursor values or browser cursor assets.
-- A transparent native cursor installed for fullscreen hiding must be restored when browser-forced fullscreen exit bypasses the game method that would normally call `Mouse.setNativeCursor(previousCursor)`.
+- A transparent native cursor installed for fullscreen hiding must be restored when browser-forced fullscreen exit or denied fullscreen entry bypasses the game method that would normally call `Mouse.setNativeCursor(previousCursor)`.
 - Keyboard constants must retain the original LWJGL numeric values.
 - Input polling methods must preserve Slick2D's difference between "pressed once" and "currently down".
 - While the game canvas owns focus/input, Slick movement/action keys must call `KeyboardEvent.preventDefault()` so arrows and Space do not scroll or activate DOM UI. This must not suppress normal behavior when an editable/menu element has focus.
@@ -709,6 +718,9 @@ Implementation instructions:
 
 - Preserve Slick2D's listener behavior where controller button callback indexes start at `1`.
 - Polling APIs such as `Input.isButtonPressed` must use zero-based button indexes. The observed key-binding helper decrements the listener callback value before storing it, then passes the stored value to `isButtonPressed`.
+- Direction callbacks and polling must treat standard browser Gamepad D-pad buttons as Slick POV equivalents: up `12`, down `13`, left `14`, and right `15`, in addition to axes `0` and `1` with the Slick `0.5` threshold.
+- Because these D-pad buttons stand in for Java POV, they must not also emit `controllerButtonPressed` or `controllerButtonReleased` listener edges. Direct `isButtonPressed(12..15, controller)` polling may still reflect the browser Gamepad button state.
+- Track current controller down state separately from one-shot pressed records. A held control fires one press edge, a release fires the matching released callback, and a later press can fire again even if earlier one-shot state was consumed.
 
 ### `slick.MouseListener`
 
@@ -797,6 +809,8 @@ export class Color {
     public constructor(r: number, g: number, b: number);
     public constructor(r: number, g: number, b: number, a: number);
     public constructor(value: number);
+    public static fromInts(r: number, g: number, b: number, a?: number): Color;
+    public static fromFloats(r: number, g: number, b: number, a?: number): Color;
     public static decode(value: string): Color;
     public bind(): void;
     public hashCode(): number;
@@ -825,6 +839,10 @@ export class Color {
 Implementation instructions:
 
 - Store `r`, `g`, `b`, and `a` as normalized floats from `0` to `1`, matching Slick2D.
+- TypeScript cannot overload `number` as Java distinguishes `int` and `float`. For literal ports, Java `new Color(int,int,int,int)` maps to `Color.fromInts(...)`, and Java `new Color(float,float,float,float)` maps to `Color.fromFloats(...)`.
+- Keep `new Color(packedInteger)` and `new Color(Color)` Java-shaped constructors. The numeric multi-channel constructor remains a compatibility convenience but must not be used for internal byte reads or newly ported ambiguous Java call sites.
+- `Graphics.getPixel(...)` and `Image.getColor(...)` must convert 0-255 bytes through `Color.fromInts(...)`, so byte value `1` becomes `1 / 255`, not full intensity.
+- Converted fade/color-table code must preserve Java integer arithmetic before calling `Color.fromInts(...)`, for example `255 * i / (count - 1)` must truncate like Java `int` division.
 - Integer constructors accept Java byte-like channel values from `0` to `255`.
 - The single-number constructor interprets packed integer color values exactly as Java Slick2D: `0xAARRGGBB`. If the packed alpha byte is `0`, use alpha `255`.
 - Static color constants must be independent `Color` instances.
@@ -1195,12 +1213,14 @@ Implementation instructions:
 - Keyboard events from focused interactive DOM controls must be ignored by Slick state and listeners entirely, not merely allowed to keep their browser default behavior.
 - Pointer and wheel events outside the prevent-default/game element must be ignored unless they are completing an existing game drag/release.
 - `pause()` clears held key/mouse state plus key, mouse, and controller pressed records. `poll()` must clear those pressed records and return while paused, matching Java Slick2D.
-- `bindToElement` must also install browser lost-focus cleanup on `window.blur` and document `visibilitychange`. The cleanup clears `downKeys`, `downMouse`, `pressedKeys`, `pressedMouse`, and `controlPressed`.
+- `bindToElement` must also install browser lost-focus cleanup on `window.blur` and document `visibilitychange`. The cleanup clears `downKeys`, `downMouse`, `pressedKeys`, `pressedMouse`, `controlPressed`, and controller down-state tracking.
 - `poll()` must clear all browser-held input state and return when the document is hidden or `document.hasFocus()` is false.
 - `setScale` and `setOffset` are required by `ScalableGame` and `ScalableGame2`; they transform browser pointer coordinates into game coordinates.
 - Gamepad direction methods must support `Input.ANY_CONTROLLER`.
+- Gamepad direction methods must check both axes and standard D-pad buttons: left axis `0 < -0.5` or button `14`, right axis `0 > 0.5` or button `15`, up axis `1 < -0.5` or button `12`, down axis `1 > 0.5` or button `13`.
 - `isButton1Pressed`, `isButton2Pressed`, and `isButton3Pressed` delegate to `isButtonPressed(0/1/2, controller)`.
 - `isControlPressed(button, controller)` consumes one-shot controller control state using Slick's control indexes: left `0`, right `1`, up `2`, down `3`, button 1 `4`, button 2 `5`, button 3 `6`, and so on. `isButtonPressed(index, controller)` is the zero-based physical-button polling API and must not add the directional offset.
+- Controller listener dispatch must call directional and button release callbacks when controls transition from down to up. Button listener indexes remain one-based; one-shot polling storage remains Slick control-index based. Standard D-pad buttons `12..15` dispatch as direction controls only.
 - `getControllerCount`, `getAxisCount`, `getAxisValue`, and `getAxisName` read from the Gamepad API and return `0`, `0`, `0`, and `""` for missing controllers or axes.
 - `disableControllers` records that controller polling must be skipped.
 - Key repeat methods record repeat settings and synthesize repeated `keyPressed` callbacks only when enabled.
@@ -1234,7 +1254,7 @@ Implementation instructions:
 - `playing()` returns true only for the latest logical source started by this `Sound`, including a latest play that is waiting for an already-queued browser decode to settle.
 - `stop()` stops only the latest logical source started by this `Sound`. Earlier overlapping sources from the same `Sound` continue until they end, their source is reused/stopped through lower-level store behavior, or global cleanup stops them.
 - A failed play/loop attempt from disabled sounds, exhausted source slots, or unavailable audio must clear this latest-source reference, matching Java `AudioImpl` overwriting its source index with `-1`.
-- `playAt` is a browser-adapted parity method: ignore positional coordinates and behave exactly like `play(pitch, volume)`.
+- `playAt` passes coordinates to Web Audio panning when available and otherwise behaves like `play(pitch, volume)` without changing Java-visible latest-source/drop behavior.
 - `loop` repeats until `stop`.
 
 ### `slick.Music`
@@ -1463,9 +1483,13 @@ Implementation instructions:
 - `getWidth` and `getHeight` return logical game size, not necessarily CSS pixel size.
 - `getScreenWidth` and `getScreenHeight` return the actual canvas backing size.
 - `setClearEachFrame` controls whether the canvas is cleared before each render.
-- `setAlwaysRender` controls rendering while paused or unfocused.
-- `setSmoothDeltas` can enable delta smoothing but must default to Java-like raw deltas.
+- `setAlwaysRender` controls rendering while unfocused. Paused containers still render when `hasFocus()` is true, matching Java `GameContainer.updateAndRender(...)`.
+- `setSmoothDeltas` must default to false. When true and `getFPS() != 0`, the RAF loop must replace the raw frame delta with `Math.trunc(1000 / getFPS())`, matching Java integer division.
 - `setVSync` records requested behavior; browsers already sync `requestAnimationFrame`.
+- `setTargetFrameRate(frameRate)` stores a Java `int` frame cap. `AppGameContainer` must use positive values as a nonblocking RAF pacing gate and call `Display.sync(targetFrameRate)` after each processed frame when the value is not `-1`.
+- `setMinimumLogicUpdateInterval(interval)` stores a Java `int` threshold. The loop must accumulate deltas in `storedDelta` and skip `game.update(...)` until `storedDelta >= minimumLogicUpdateInterval`; it must not raise every small delta to the minimum.
+- `setMaximumLogicUpdateInterval(interval)` stores a Java `int` maximum chunk size. When nonzero, the loop must split accumulated logic time into repeated `game.update(container, maximumLogicUpdateInterval)` calls, then handle the remainder exactly like Java: update and clear only when `remainder > minimumLogicUpdateInterval`; otherwise retain the remainder in `storedDelta`.
+- `setPaused(true)` pauses input records through `Input.pause()`, but the container loop must still poll input, poll music/audio, and call `game.update(container, 0)` on each processed frame.
 - `setSoundOn`, `setMusicOn`, and volume methods feed the audio subsystem.
 - Mouse cursor overloads map to CSS cursor assets. `ImageData`, `Image`, and `Cursor` overloads must create an object URL or data URL from decoded pixels, then revoke old generated URLs when the cursor changes.
 - `setAnimatedMouseCursor` must use the first frame as the browser-adapted cursor image and must preserve the delay array for diagnostics because CSS animated cursor support is not portable.
@@ -1513,14 +1537,19 @@ Implementation instructions:
 - `start` creates or binds the canvas, initializes input/audio/rendering, calls `game.init`, resolves resources queued during init, and begins the browser loop.
 - The RAF loop must match Java close behavior: check `Display.isCloseRequested()` first, and call `game.closeRequested()` only inside that branch.
 - The container default must match Java `AppGameContainer`: `isUpdatingOnlyWhenVisible()` returns true before any setter call. When hidden and that flag is true, skip update/render and reset frame timing so hidden elapsed time is not delivered to the next visible update.
+- For visible or explicitly update-while-hidden frames, the RAF loop must mirror Java `GameContainer.updateAndRender(delta)` scheduling: apply smooth deltas, poll input, call `Music.poll(delta)` and `SoundStore.get().poll(delta)` before the pause branch, accumulate `storedDelta`, apply minimum/maximum logic interval splitting, call `game.update(container, 0)` while paused, render when `hasFocus()` or `getAlwaysRender()` is true, and call `Display.sync(targetFrameRate)` after processed frames when `targetFrameRate != -1`.
+- Positive `targetFrameRate` values must be meaningful in the browser loop. Implement them as a nonblocking RAF pacing gate that skips processing until the elapsed time since the last processed frame reaches `1000 / targetFrameRate`; the delivered delta for the next processed frame must include the skipped RAF time.
 - `start` focuses the canvas, routes input through `Input.bindToElement(window)`, and calls `Input.setPreventDefaultElement(canvas)` so game keys suppress browser defaults only during canvas-owned play.
 - If resources are queued during a later `update`, the loop must finish rendering the current progress frame, wait for `ResourceLoader.waitForAll()`, reset `lastFrameTime`, and then resume. Rejections destroy the container and throw a `SlickException` or the original `Error`.
 - `start()` must wrap canvas setup, renderer/audio initialization, `game.init()`, and the initial `ResourceLoader.waitForAll()` in cleanup/error handling. Startup failure must unbind input, remove browser listeners, dispose renderer state, reset `Display`, set `started=false`, and leave the same container retryable.
 - `setErrorHandler(handler)` installs the host callback for startup and async frame/resource errors. When present, the container must destroy itself and call the handler instead of relying on a raw RAF exception. When absent during startup, `start()` rejects after cleanup.
-- `setDisplayMode(width, height, fullscreen)` sets logical width and height, updates canvas sizing, then calls `setFullscreen(fullscreen)`. It returns the fullscreen promise when the browser starts one; ports that need immediate scale recalculation must await that promise.
+- `setDisplayMode(width, height, fullscreen)` sets logical width and height, updates canvas sizing, then delegates to the same internal fullscreen transition used by `setFullscreen(fullscreen)`. It returns the fullscreen promise when the browser starts one; ports that need immediate scale recalculation must await that promise.
 - Successful non-fullscreen display-mode calls must update the stored last-windowed mode. Fullscreen display-mode calls must not overwrite it.
 - `setFullscreen(fullscreen)` updates browser fullscreen state, then applies actual browser display dimensions after the promise resolves. `fullscreenchange` handles browser-forced enter/exit, while `resize` only reapplies browser display dimensions while the canvas is actually fullscreen.
 - Fullscreen failures reject with `SlickException`; `setDisplayMode` restores the previous display snapshot before rethrowing when fullscreen is denied.
+- `setDisplayMode(width, height, true)` and `setFullscreen(true)` must also observe their own returned promises. Java-style game code may call them synchronously from `update`; if the browser denies fullscreen and the caller ignores the promise, the failure must reach `setErrorHandler(handler)` or `Log.error` without producing an unhandled promise rejection.
+- `reinit()` must be a Java-parity rebuild, not a partial `game.init()` call. It must stop the active RAF callback, clear retained resource failures while preserving successful resource bytes, call `InternalTextureLoader.get().clear()`, call `SoundStore.get().clear()`, rebuild renderer/display/audio state, reset music and sound volumes to `1`, create a new `Graphics(width, height)` and default font, enter ortho mode, reset frame bookkeeping (`lastFrameTime`, `storedDelta`, FPS counters, pending resource/error flags), then call `game.init(this)` and await `ResourceLoader.waitForAll()`. If the container was running, schedule the next RAF only after reinit succeeds.
+- Denied fullscreen entry must restore any all-transparent native cursor hide when the final browser state is not fullscreen. This covers Java-style game code that hides the cursor before requesting fullscreen.
 - A browser-forced `fullscreenchange` to non-fullscreen must set `fullscreen=false`, restore the stored last-windowed canvas backing size and CSS pixel size, call `Display.markResized(width, height)`, invoke `containerSizeChanged(container)` on the active game if that method exists, and restore any transparent fullscreen cursor hide through `Mouse`.
 - Explicit `setDisplayMode(width, height, false)` must not double-notify resize-aware games when the browser `fullscreenchange` observes the same already-restored size.
 - After `applyCanvasSize`, `applyBrowserDisplaySize`, fullscreenchange, or resize updates the final backing size, call `Display.markResized(width, height)` and invoke `containerSizeChanged(container)` on the active game if that method exists.
@@ -1641,6 +1670,18 @@ Implementation instructions:
 ### `slick.util.ResourceLoader`
 
 ```ts
+export type ResourcePreloadProgress = {
+    ref: string;
+    loaded: number;
+    total: number;
+    bytesLoaded: number;
+};
+
+export type TrackedResourceError = {
+    label: string;
+    error: unknown;
+};
+
 export class ResourceLoader {
     public static addResourceLocation(location: unknown): void;
     public static removeResourceLocation(location: unknown): void;
@@ -1652,13 +1693,17 @@ export class ResourceLoader {
     public static resourceExists(ref: string): boolean;
     public static registerResource(ref: string, data: ArrayBuffer | Uint8Array): void;
     public static loadResource(ref: string): Promise<ArrayBuffer>;
-    public static track<T>(promise: Promise<T>): Promise<T>;
+    public static preloadResources(refs: Iterable<string>, onProgress?: (progress: ResourcePreloadProgress) => void): Promise<Map<string, ArrayBuffer>>;
+    public static track<T>(promise: Promise<T>, refOrLabel?: string): Promise<T>;
     public static getPendingCount(): number;
     public static hasPending(): boolean;
     public static resourceFailed(ref: string): boolean;
     public static getResourceError(ref: string): unknown;
+    public static getTrackedErrors(): TrackedResourceError[];
+    public static hasFailed(): boolean;
     public static waitForAll(): Promise<void>;
     public static clearCache(): void;
+    public static clearFailures(): void;
 }
 ```
 
@@ -1672,12 +1717,18 @@ Implementation instructions:
 - `getResource(ref)` returns the first syntactically resolvable candidate URL and is not proof that the resource exists.
 - `loadResource(ref)` is the browser async fetch/decode-byte entry point. It must cache in-flight requests by the original Java ref string, but a previous failed record must not permanently block a retry.
 - `loadResource(ref)` must generate every candidate URL from the ordered locations, apply cache-bust to each candidate, run configured retries for that candidate, and then try the next candidate before failing.
+- `preloadResources(refs, onProgress)` is the manifest pre-init barrier for game ports. It must fetch unique original Java ref strings concurrently through `loadResource`, register the bytes under those exact refs, return a map of loaded byte copies, and call `onProgress` after each successful resource with `{ ref, loaded, total, bytesLoaded }`.
 - `setCacheBust(value)` configures the network URL query parameter `v`. Passing `null` clears the setting. The cache key remains the original Java ref.
 - `setRetryOptions(retries, delayMs)` configures fetch retries. Clamp negative values to zero and wait `delayMs` between attempts when greater than zero.
-- `track(promise)` adds browser-only preparation work, such as `ImageBitmap` decode, to `waitForAll()` without changing Java method names.
+- `track(promise, refOrLabel)` adds browser-only preparation work, such as `ImageBitmap` or `AudioBuffer` decode, to `waitForAll()` without changing Java method names. Pass the original Java resource ref when available.
+- Failed tracked work must be retained in `getTrackedErrors()` until `clearCache()` or `clearFailures()`, even after the promise is removed from the pending set. Non-`SlickException` failures are wrapped as `SlickException("Failed to prepare resource <refOrLabel>", cause)`.
 - `getPendingCount()` returns queued byte fetches plus tracked browser preparation promises that have not settled.
 - `hasPending()` returns `getPendingCount() > 0` and is used by the container loop to catch dynamic Java-style loading steps after startup.
+- `hasFailed()` returns true when any fetch record or tracked preparation task failed.
 - `waitForAll()` is the preload barrier that must be awaited before code constructs classes that synchronously parse bytes, including `PackedSpriteSheet`, `XMLPackedSheet`, and game-local `BinaryReader`/map loaders.
+- `waitForAll()` must reject if retained tracked failures exist before or after awaiting current pending work. This keeps loading/error screens reliable when image/audio decode fails before the host awaits the barrier.
+- `clearCache()` clears byte records, pending handles, and retained tracked failures so a PWA restart begins with a clean resource state.
+- `clearFailures()` clears failed fetch records, retained tracked failures, and tracked pending handles without removing successfully preloaded resource bytes. `AppGameContainer.reinit()` uses this so browser lifecycle reset does not throw away the PWA preload manifest cache merely to clear stale decode/fetch errors.
 - Provide additional modern async helpers in this class only if they do not replace the Java-named methods.
 
 ### `slick.opengl.SlickCallable`
@@ -1831,6 +1882,8 @@ export class InternalTextureLoader {
     public static get2Fold(fold: number): number;
     public static createIntBuffer(size: number): Int32Array;
     public reload(): void | Promise<void>;
+    public register(texture: WebGLTextureResource): void;
+    public unregister(texture: WebGLTextureResource): void;
 }
 ```
 
@@ -1840,6 +1893,7 @@ Implementation instructions:
 - This is a compatibility facade over WebGL texture resource caching.
 - `clear()` invalidates image/texture cache entries owned by the active rendering context and releases their WebGL texture objects.
 - `clear(name)` invalidates only cache entries whose resource reference or texture name equals `name`.
+- `WebGLTextureResource` instances must register here when constructed and unregister when disposed, so copied Slick code that calls `InternalTextureLoader.get().clear()` actually releases browser texture objects.
 - `set16BitMode()` records the requested mode for parity diagnostics. The WebGL backend continues to use RGBA8 textures unless a tested browser-specific 16-bit path is explicitly implemented and documented.
 - `get2Fold` returns the smallest power of two greater than or equal to `fold`.
 
@@ -2031,6 +2085,7 @@ export class SoundStore {
     public getSourceCount(): number;
     public setMaxSources(max: number): void;
     public getAudioContext(): AudioContext | null;
+    public unlock(): Promise<boolean>;
     public getSoundBus(): GainNode | null;
     public getMusicBus(): GainNode | null;
     public loadAudioBuffer(ref: string): Promise<AudioBuffer>;
@@ -2052,9 +2107,11 @@ Implementation instructions:
 - `setMusicOn(false)` after init calls `suspend()` on tracked music handles when available and stores enough state for `setMusicOn(true)` to resume. This mirrors Java `pauseLoop()`/`restartLoop()` behavior, must not call public `Music.pause()` semantics for `Music` handles, and must not be implemented as volume-only muting.
 - `setSoundsOn(false)` after init prevents future sound effects from starting; active effect handles may continue unless `clear()` or `stop()` is called, matching the narrower Java sound toggle behavior used by the games.
 - `setSoundVolume(volume)` stores the Java Slick sound-effect volume for future source setup. Do not implement it as a sound bus gain that changes active sound effects.
+- `setSoundVolume(0)` must allow future sound-effect source gain to become exactly `0`; do not apply a nonzero minimum gain floor in Web Audio.
 - `loadAudioBuffer(ref)` loads bytes through `ResourceLoader.loadResource(ref)`, decodes them through the shared `AudioContext`, caches the in-flight/completed decode promise, deletes failed cache entries, and rejects with `SlickException`.
+- `unlock()` is the browser user-gesture helper for PWA menus. It creates or resumes the shared `AudioContext`, initializes Slick sound/music flags if audio was not already working, preserves existing on/off toggles when audio is already initialized, and resolves `true` only when the context is usable.
 - `preloadAudioBuffer(ref)` tracks `loadAudioBuffer(ref)` through `ResourceLoader.track()` and is what `Sound` and `Music` constructors must call.
-- `playSound(ref, pitch, volume, loop, onEnded)` is the shared effect playback helper. It keeps `Sound.play()` non-async, reserves a logical source immediately, starts after the decode promise resolves, clamps playback rate to the supported browser range, applies `volume * soundVolume` to the source gain, and logs load/playback errors.
+- `playSound(ref, pitch, volume, loop, onEnded)` is the shared effect playback helper. It keeps `Sound.play()` non-async, reserves a logical source immediately, starts after the decode promise resolves, clamps playback rate to the supported browser range, applies `Math.max(0, volume * soundVolume)` to the source gain with no audible floor, and logs load/playback errors.
 - `track(handle)` and `untrack(handle)` register externally-created music handles so `clear`, `isMusicPlaying`, and music toggles can operate over both effects and music.
 - Source IDs are compatibility-only numbers. Source 0 is reserved for music; sound effects use logical sources `1..getSourceCount()-2`.
 - `setMaxSources(max)` configures the total logical source capacity, including the reserved music source. If all effect slots are active, `playSound(...)` returns `null` without creating a Web Audio source.
@@ -2570,6 +2627,38 @@ Implementation instructions:
 - Constructor without a seed uses `(BigInt(Date.now()) << 16n) ^ BigInt(Math.floor(performance.now() * 1000))` when `performance.now()` exists, or `BigInt(Date.now())` otherwise, then delegates to `setSeed`.
 - Keep this helper in `slick.support` because it is a neutral porting helper, not a Slick2D public API class.
 
+### `slick.support.JavaNumbers`
+
+```ts
+export class JavaNumbers {
+    public static toInt(value: number | bigint): number;
+    public static castDoubleToInt(value: number): number;
+    public static toLong(value: number | bigint): bigint;
+    public static intDiv(dividend: number, divisor: number): number;
+    public static intRem(dividend: number, divisor: number): number;
+    public static toByte(value: number | bigint): number;
+    public static toUnsignedByte(value: number | bigint): number;
+    public static toShort(value: number | bigint): number;
+    public static toChar(value: number | bigint): number;
+    public static toFloat(value: number): number;
+    public static roundFloat(value: number): number;
+    public static roundDouble(value: number): bigint;
+}
+```
+
+Implementation instructions:
+
+- Java counterpart: primitive conversion and arithmetic boundaries in ported game logic.
+- Keep this helper in `slick.support` because it is a neutral porting helper, not a Slick2D public API class.
+- `toInt(value)` narrows integral arithmetic or `long`/`bigint` values to Java signed 32-bit `int` with wraparound.
+- `castDoubleToInt(value)` mirrors Java narrowing from `float`/`double` to `int`: `NaN` becomes `0`, finite values truncate toward zero, and out-of-range values saturate to `Integer.MIN_VALUE` or `Integer.MAX_VALUE`.
+- `toLong(value)` returns a signed 64-bit `bigint`, using wraparound for `bigint` inputs and Java floating narrowing rules for number inputs.
+- `intDiv` and `intRem` must convert operands to signed 32-bit int first, throw `Error("/ by zero")` for zero divisors, truncate division toward zero, preserve Java's dividend-sign remainder, and preserve `Integer.MIN_VALUE / -1 == Integer.MIN_VALUE`.
+- `toByte`, `toShort`, and `toChar` perform Java narrowing conversions. `toUnsignedByte(value)` is the shared helper for Java byte values used with `& 0xFF`.
+- `toFloat(value)` uses `Math.fround(value)`.
+- `roundFloat(value)` and `roundDouble(value)` mirror `Math.round(float)` and `Math.round(double)` by flooring `value + 0.5`, returning `int` and `long` respectively.
+- Ported game code must use these helpers at converted Java integer division, remainder, narrowing cast, byte, char, float-assignment, and packed-value boundaries. Do not use plain TypeScript `/` where Java source used integer operands.
+
 ### `slick.support.Song`
 
 ```ts
@@ -2600,12 +2689,16 @@ Implementation instructions:
 - `STREAMING` must default to `false`, matching the source helper that passes a streaming hint.
 - String constructors create `Music` instances with the same path strings supplied by the Java code.
 - `play` is idempotent while already playing.
+- `play` must call `stop()` before it starts any selected part, matching the Java helper's reset-before-start order.
+- `play` must start the selected `Music` part before setting `playing = true`; callbacks or fake music used by tests must observe `playing === false` during the start call.
 - If there is no intro and no intro2, `play` starts `loop.loop()`.
 - If there is no intro but there is `intro2`, `play` starts `intro2.play()`.
+- Do not set `playedIntro2 = true` in `play`, including the no-intro/intro2 case. Jackal's source helper leaves it false, so the first `update()` can replay `intro2` and set the flag there.
 - Otherwise `play` starts `intro.play()`.
 - `update` starts `intro2` after `intro` finishes when `intro2` exists and has not played.
 - `update` starts `loop.loop()` after the intro sequence finishes when `loop` exists.
 - If there is no loop and the intro sequence finishes, `update` calls `stop`.
+- `stop` must only call `stop()` on a part when that part exists and its `playing()` method currently returns true, then reset `playing = false` and `playedIntro2 = false`.
 
 ### `slick.support.BitmapText`
 
@@ -2640,7 +2733,7 @@ Implementation instructions:
 - `drawString(text, x, y)` draws every character in order and advances `x` by `xAdvance`.
 - `drawString(text, x, y, length)` draws at most `length` characters, preserving the source helper that reveals text progressively.
 - When `cullMinY` or `cullMaxY` is supplied, `drawString` variants skip rendering outside that inclusive vertical range, matching the source helper that ignores text below `-16` or above `600`.
-- `drawStringAlpha` must save each glyph's original alpha, set the requested alpha, draw, then restore.
+- `drawStringAlpha` must set each glyph's alpha to the requested value, draw, then reset that glyph alpha to exactly `1`, matching Jackal's `image.setAlpha(1f)` helper. A restore-old-alpha helper would need a different name.
 - `drawStringScaled` must push a transform, translate to `x, y`, scale uniformly, draw glyphs at local positions `i * xAdvance, 0`, then pop.
 - `drawStringCentered(text, centerX, y)` starts at `centerX - (text.length * xAdvance) / 2`.
 - `drawNumber(value, digits, x, y)` draws least-significant digits right-to-left and starts at `x + (digits - 1) * xAdvance`.
@@ -2684,8 +2777,10 @@ Implementation instructions:
 export class SpriteDrawing {
     public static draw(image: Image, x: number, y: number): void;
     public static drawAlpha(image: Image, x: number, y: number, alpha: number): void;
-    public static drawOffset(image: Image, x: number, y: number, offsetX: number, offsetY: number): void;
-    public static drawOffset(image: Image, x: number, y: number, offsetX: number, offsetY: number, alpha: number): void;
+    public static drawOffset(image: Image, x: number, y: number): void;
+    public static drawOffset(image: Image, x: number, y: number, alpha: number): void;
+    public static drawCameraOffset(image: Image, x: number, y: number, offsetX: number, offsetY: number): void;
+    public static drawCameraOffset(image: Image, x: number, y: number, offsetX: number, offsetY: number, alpha: number): void;
     public static drawFaded(image: Image, x: number, y: number, alpha: number): void;
     public static drawRotated(image: Image, x: number, y: number, angle: number): void;
     public static drawRotated(image: Image, x: number, y: number, centerX: number, centerY: number, angle: number): void;
@@ -2704,7 +2799,7 @@ export class SpriteDrawing {
     public static drawCenteredAlpha(image: Image, x: number, y: number, alpha: number): void;
     public static drawScaled(image: Image, x: number, y: number, scale: number): void;
     public static drawScaled(image: Image, x: number, y: number, scale: number, alpha: number): void;
-    public static drawScaled(image: Image, x: number, y: number, width: number, height: number): void;
+    public static drawSized(image: Image, x: number, y: number, width: number, height: number): void;
     public static withTranslation(x: number, y: number, callback: () => void): void;
     public static withRotation(x: number, y: number, angle: number, callback: () => void): void;
     public static withScale(x: number, y: number, scaleX: number, scaleY: number, callback: () => void): void;
@@ -2715,13 +2810,21 @@ Implementation instructions:
 
 - Java counterpart: repeated source `Main` drawing helper methods that wrap `Image`, `Graphics`, and `GL11`.
 - These helpers are neutral convenience functions. Game ports may keep exact local `Main.draw(...)` overload names and delegate to this class.
-- `drawAlpha` must save the original image alpha, call `setAlpha(alpha)`, draw, then restore the original alpha.
-- `drawOffset` draws at `x - offsetX, y - offsetY`. Game ports pass their camera or scroll offset explicitly.
+- Alpha helpers must call `setAlpha(alpha)`, draw, then reset image alpha to exactly `1`, matching the audited Java helper methods.
+- `drawOffset(image, x, y)` is Jackal's local-offset helper: draw exactly at local coordinates `x, y` under the currently active transform. The alpha overload sets image alpha, draws at `x, y`, then resets alpha to exactly `1`.
+- `drawCameraOffset(image, x, y, offsetX, offsetY)` is the explicitly named browser/game convenience helper for `x - offsetX, y - offsetY`. Do not map Jackal's `Main.drawOffset(...)` to this helper.
 - `drawFaded` is an alpha draw helper. Fade state, fade listeners, and mode transitions remain game-local.
-- Rotation and scaling methods must use `Graphics.pushTransform`/`popTransform` or the `GL11` shim so transform state is restored after the draw.
-- Overloads with explicit centers rotate or scale around `centerX, centerY`; overloads with `centers: number[]` read `[centerX, centerY]`.
-- Centered methods draw around the image center using `image.getWidth()` and `image.getHeight()`.
+- Rotation and scaling methods must use `Graphics.pushTransform`/`popTransform` or the `GL11` shim so transform state is restored after the draw. They must not emulate Java matrix helpers by mutating `Image.setRotation(...)` or `Image.setCenterOfRotation(...)`.
+- `drawRotated(image, x, y, angle)` must perform `translate(x, y)`, `rotate(angle)`, then `image.draw(-image.getWidth() * 0.5, -image.getHeight() * 0.5)`.
+- Overloads with explicit `centerX` and `centerY` must treat those values as local draw offsets after the translate/rotate/scale transform. They are not image rotation pivots. Overloads with `centers: number[]` read `[centerX, centerY]` as the same local offsets.
+- `drawRotatedScaled(...)` must perform `translate(x, y)`, `rotate(angle)`, `scale(scaleX, scaleY)`, then draw at the Java local offset.
+- `drawScaled(image, x, y, scale)` and `drawScaled(image, x, y, scale, alpha)` follow Jackal's helper semantics for every numeric `scale`, including values greater than `1`: `translate(x, y)`, `scale(scale, scale)`, then draw at `(-width / 2, -height / 2)`. Never use a runtime magnitude heuristic to reinterpret the five-argument form as width/height.
+- `drawSized(image, x, y, width, height)` is the separate explicit top-left width/height convenience helper. Use this name for browser or game-local code that truly wants `Image.draw(x, y, width, height)`.
+- If a game port needs Ms. Pac-Man's top-left-anchored `drawScaled`, implement a tiny game-local wrapper that translates by `x + width / 2, y + height / 2` before delegating to the same matrix pattern.
+- Centered methods draw around the image center using a local transform and `image.getWidth()` / `image.getHeight()`.
 - `withTranslation`, `withRotation`, and `withScale` provide a structured replacement for helper pairs such as `translateGraphics`, `rotateGraphics`, `scaleGraphics`, and `popGraphics`.
+- `withRotation(x, y, angle, callback)` must match Jackal's `rotateGraphics(x, y, angle)`: push, translate to `x,y`, rotate around the translated local origin, run the callback, then pop. It must not call `Graphics.rotate(x, y, angle)` as a screen-space pivot rotation.
+- Transform wrappers must restore the matrix stack in `finally` so thrown draw/resource errors cannot leak a pushed transform into later rendering.
 
 ### `slick.support.GeometryMath`
 
@@ -2744,12 +2847,12 @@ export class GeometryMath {
 Implementation instructions:
 
 - Java counterpart: source `Main.createUnitVector2`, `Main.createUnitVector`, and static `Main.rotate`.
-- `ISQRT2` is `1 / Math.sqrt(2)`.
-- `createUnitVector2(angle)` treats `angle` as radians and returns `[FastTrig.cos(angle), FastTrig.sin(angle)]`, matching the helper that uses Slick2D's reduced-angle trig.
+- `ISQRT2` is `Math.fround(1 / Math.sqrt(2))`, matching Java's `(float)(1.0 / Math.sqrt(2))`.
+- `createUnitVector2(angle)` treats `angle` as radians and uses Java `Math.cos`/`Math.sin` semantics with Java `float` narrowing: narrow the argument with `Math.fround`, compute with `Math.cos`/`Math.sin`, then narrow each stored output with `Math.fround`. Do not use Slick `FastTrig` for this game helper mapping.
 - `createUnitVector(angle)` is a discrete direction helper. It must recognize exactly `0`, `360`, `45`, `405`, `90`, `135`, `180`, `225`, `270`, `315`, and `-45`.
 - Discrete vector results are `[1, 0]`, `[ISQRT2, ISQRT2]`, `[0, 1]`, `[-ISQRT2, ISQRT2]`, `[-1, 0]`, `[-ISQRT2, -ISQRT2]`, `[0, -1]`, and `[ISQRT2, -ISQRT2]` for the corresponding angles.
 - For an unrecognized angle with a provided `target`, leave `target` unchanged, matching the Java switch with no `default`.
-- `rotate(x, y, angle)` treats `angle` as radians and returns `{ x: x * cos(angle) - y * sin(angle), y: x * sin(angle) + y * cos(angle) }`.
+- `rotate(x, y, angle)` treats `angle` as radians and mirrors Java `Point2D.Float` arithmetic: narrow `x`, `y`, and `angle` to float, narrow `cos` and `sin` to float, narrow the intermediate products and sums, then return `{ x, y }` as float-rounded numbers.
 
 ### Source Helper Method Mapping
 
@@ -2812,7 +2915,7 @@ Main.drawString(String, x, y, color, scale)     BitmapText.drawStringScaled(...)
 Main.drawStringCentered(...)                    BitmapText.drawStringCentered(...)
 Main.draw(Image, x, y)                          image.draw(x, y), after game-local camera offset
 Main.draw(Image, x, y, alpha)                   SpriteDrawing.drawAlpha(image, x, y, alpha)
-Main.drawOffset(Image, x, y)                    SpriteDrawing.drawOffset(image, x, y, cameraX, cameraY)
+Main.drawOffset(Image, x, y)                    SpriteDrawing.drawOffset(image, x, y)
 Main.drawFaded(Image, x, y, alpha)              SpriteDrawing.drawFaded(image, x, y, alpha)
 Main.drawRotated(...)                           SpriteDrawing.drawRotated(...)
 Main.drawRotatedScaled(...)                     SpriteDrawing.drawRotatedScaled(...)
@@ -2821,7 +2924,7 @@ Main.drawScaled(...)                            SpriteDrawing.drawScaled(...)
 Main.drawLine(Graphics, ...)                    save color, set red, draw camera-offset line, restore color
 Main.drawVehicle(...)                           game-local sprite selection by 45-degree sectors, then SpriteDrawing
 Main.translateGraphics(...)                     SpriteDrawing.withTranslation(...) or Graphics.translate
-Main.rotateGraphics(...)                        SpriteDrawing.withRotation(...) or Graphics.rotate
+Main.rotateGraphics(...)                        SpriteDrawing.withRotation(...)
 Main.scaleGraphics(...)                         SpriteDrawing.withScale(...) or Graphics.scale
 Main.popGraphics()                              callback boundary or Graphics.popTransform()
 Main.createUnitVector2(angle)                   GeometryMath.createUnitVector2(angle)
@@ -2848,7 +2951,7 @@ IMenuListener.selectionChanged(index)           game-local menu callback when se
 IMenuListener.optionSelected(index)             game-local menu callback when an option is chosen
 Main.resetNextFrameTime()                       Sys.getTime(), or reset fixed-step loop timing
 while(nextFrameTime <= Sys.getTime()) update    fixed-step game loop adapter from GAME-LOOP.md
-Display.sync(targetFPS)                         Display.sync(targetFPS), nonblocking recorded frame-cap request
+Display.sync(targetFPS)                         AppGameContainer RAF pacing plus Display.sync(targetFPS) recording
 GameContainer.getBuildVersion()                 parse ResourceLoader bytes for version/build, else return -1
 GameContainer.enableSharedContext()             record shared WebGL resource owner before Display.create(...)
 AL.create()/AL.destroy()                        initialize or tear down browser audio subsystem state
@@ -2868,7 +2971,7 @@ AL.create()/AL.destroy()                        initialize or tear down browser 
 8. Implement `GameContainer` and `AppGameContainer`.
 9. Implement `ScalableGame`, `ScalableGame2`, and `ApplicationGameContainer`.
 10. Implement packed-sheet parsing for `.def` and XML sprite atlases.
-11. Add `slick.support.IMode`, `IInput`, `ButtonMapping`, `HumanInput`, `RecordedInput`, `JavaRandom`, `Song`, `BitmapText`, `BinaryReader`, `SpriteDrawing`, and `GeometryMath`.
+11. Add `slick.support.IMode`, `IInput`, `ButtonMapping`, `HumanInput`, `RecordedInput`, `JavaRandom`, `JavaNumbers`, `Song`, `BitmapText`, `BinaryReader`, `SpriteDrawing`, and `GeometryMath`.
 12. Add the narrow `lwjgl`, `lwjgl.openal.AL`, `slick.openal.SoundStore`, and `opengl` shims needed by copied helper code.
 
 ## Parity Verification Checklist
@@ -2885,7 +2988,7 @@ Before considering the library compatible with the three Java projects, verify:
 - `ScalableGame2.containerSizeChanged` updates input scale and offset.
 - Legacy applet/container methods have explicit migration mappings and are not exported as applet APIs.
 - `ApplicationGameContainer` exposes every desktop-style public method used by the Java helper code, including cursor and fullscreen methods.
-- `slick.support.IMode`, `IInput`, `ButtonMapping`, `HumanInput`, `RecordedInput`, `JavaRandom`, `Song`, `BitmapText`, `BinaryReader`, `SpriteDrawing`, and `GeometryMath` cover the neutral reusable helper methods found in the three projects.
+- `slick.support.IMode`, `IInput`, `ButtonMapping`, `HumanInput`, `RecordedInput`, `JavaRandom`, `JavaNumbers`, `Song`, `BitmapText`, `BinaryReader`, `SpriteDrawing`, and `GeometryMath` cover the neutral reusable helper methods found in the three projects.
 - `Image.FILTER_NEAREST` produces crisp pixel-art rendering.
 - `Game.update` receives integer millisecond deltas.
 - `Game.render` can draw images, rectangles, lines, and clipped world regions without changing game code semantics.

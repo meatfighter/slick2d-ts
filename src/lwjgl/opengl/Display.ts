@@ -183,12 +183,15 @@ export class Display {
         Display.fullscreen = fullscreen;
         const result = Display.activeContainer?.setFullscreen(fullscreen);
         if (result instanceof Promise) {
-            return result.then(() => {
+            const operation = result.then(() => {
                 Display.fullscreen = Display.activeContainer?.isFullscreen() ?? fullscreen;
             }).catch((error) => {
                 Display.fullscreen = previousFullscreen;
                 throw error;
             });
+            void operation.catch(() => {
+            });
+            return operation;
         }
         Display.fullscreen = Display.activeContainer?.isFullscreen() ?? fullscreen;
     }
