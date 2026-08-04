@@ -10,7 +10,7 @@ export class WebGLRenderTarget {
     public texture: WebGLTexture | null = null;
     public readonly textureResource: WebGLTextureResource;
 
-    /** Creates a render target placeholder with an associated texture resource. */
+    /** Creates a framebuffer-backed render target with an associated texture resource. */
     public constructor(width: number, height: number, textureResource: WebGLTextureResource) {
         this.width = width;
         this.height = height;

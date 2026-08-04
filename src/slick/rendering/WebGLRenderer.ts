@@ -1,8 +1,8 @@
-import { Color } from "../Color.js";
+import type { Color } from "../Color.js";
 import { SlickException } from "../SlickException.js";
 import type { Image } from "../Image.js";
 import type { SGL } from "../opengl/renderer/SGL.js";
-import { identityMatrix3, Matrix3, multiplyMatrix3, RenderBackend, RenderBackendOptions, rotationMatrix3, scaleMatrix3, transformPoint, translationMatrix3 } from "./RenderBackend.js";
+import { identityMatrix3, Matrix3, RenderBackend, RenderBackendOptions } from "./RenderBackend.js";
 import { WebGLBatch } from "./WebGLBatch.js";
 import { WebGLRenderTarget } from "./WebGLRenderTarget.js";
 import { WebGLShaderProgram } from "./WebGLShaderProgram.js";
@@ -60,12 +60,24 @@ const TEXTURE_FRAGMENT = `#version 300 es
 precision mediump float;
 uniform sampler2D u_texture;
 uniform vec4 u_color;
+uniform float u_flash;
 in vec2 v_texCoord;
 in vec4 v_color;
 out vec4 outColor;
 void main() {
-    outColor = texture(u_texture, v_texCoord) * v_color * u_color;
+    vec4 texel = texture(u_texture, v_texCoord);
+    if (u_flash > 0.5) {
+        outColor = vec4(v_color.rgb * u_color.rgb, texel.a * v_color.a * u_color.a);
+    } else {
+        outColor = texel * v_color * u_color;
+    }
 }`;
+
+const WHITE_COLOR: Color = { r: 1, g: 1, b: 1, a: 1 } as Color;
+const IDENTITY_TRANSFORM = identityMatrix3();
+const TEXTURE_VERTEX_FLOATS = 8;
+const SOLID_VERTEX_FLOATS = 6;
+const TEXTURE_BATCH_VERTEX_CAPACITY = 2048 * 6;
 
 /**
  * Internal WebGL2 renderer implementing Slick2D's 2D OpenGL-style state.
@@ -134,10 +146,20 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private globalAlphaScale = 1;
     private currentColor = [1, 1, 1, 1];
     private transformStack: Matrix3[] = [identityMatrix3()];
+    private readonly matrixPool: Matrix3[] = [];
+    private readonly matrixScratch: Matrix3 = identityMatrix3();
+    private readonly textureBatchVertices = new Float32Array(TEXTURE_BATCH_VERTEX_CAPACITY * TEXTURE_VERTEX_FLOATS);
+    private textureBatchVertexCount = 0;
+    private textureBatchTexture: WebGLTexture | null = null;
+    private textureBatchFlash = false;
+    private readonly solidQuadVertices = new Float32Array(36);
+    private dynamicSolidVertices = new Float32Array(0);
+    private readonly modelViewScratch = new Float32Array(16);
+    private readonly scratchColor: Color = { r: 1, g: 1, b: 1, a: 1 } as Color;
     private currentTarget: WebGLRenderTarget | null = null;
     private immediateType = 0;
     private immediateTexCoord: [number, number] = [0, 0];
-    private immediateVertices: Array<{ x: number; y: number; u: number; v: number }> = [];
+    private immediateVertices: number[] = [];
     private lists = new Map<number, Array<() => void>>();
     private recordingList: number | null = null;
     private recordingOption = 0;
@@ -171,8 +193,10 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Begins a frame by binding the default target, setting viewport, and clearing. */
     public beginFrame(width: number, height: number, background: Color): void {
+        this.flushTextureBatch();
         this.width = Math.max(1, width);
         this.height = Math.max(1, height);
+        this.currentTarget = null;
         const gl = this.gl;
         if (!gl) {
             return;
@@ -181,7 +205,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
         gl.viewport(0, 0, this.width, this.height);
         gl.clearColor(background.r, background.g, background.b, background.a);
         gl.clear(gl.COLOR_BUFFER_BIT);
-        this.transformStack = [identityMatrix3()];
+        this.transformStack.length = 1;
+        this.writeIdentity(this.transformStack[0]);
         this.screenClip = null;
         this.worldClip = null;
         this.applyActiveClip();
@@ -195,6 +220,10 @@ export class WebGLRenderer implements RenderBackend, SGL {
     /** Sets the active framebuffer-backed render target. */
     public setRenderTarget(target: WebGLRenderTarget | null): void {
         const gl = this.gl;
+        if (this.currentTarget === target) {
+            return;
+        }
+        this.flushTextureBatch();
         this.currentTarget = target;
         if (!gl) {
             return;
@@ -213,16 +242,49 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     /** Draws a textured quad. */
-    public drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3): void {
-        this.drawImageWarped(image, x, y, x + width, y, x + width, y + height, x, y + height, srcX, srcY, srcWidth, srcHeight, alpha, tint, transform);
+    public drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors: boolean = true, useCurrentColorForNullTint: boolean = false): void {
+        this.drawImageWarped(image, x, y, x + width, y, x + width, y + height, x, y + height, srcX, srcY, srcWidth, srcHeight, alpha, tint, transform, useCornerColors, useCurrentColorForNullTint);
+    }
+
+    /** Draws a textured quad as a Slick flash/silhouette. */
+    public drawImageFlash(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, tint: Color, transform: Matrix3): void {
+        this.drawTexturedWarped(
+            image,
+            x, y,
+            x + width, y,
+            x + width, y + height,
+            x, y + height,
+            srcX, srcY, srcWidth, srcHeight,
+            1,
+            tint,
+            transform,
+            true,
+            true,
+            false
+        );
     }
 
     /** Draws a textured quad with arbitrary corner positions. */
-    public drawImageWarped(image: Image, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3): void {
+    public drawImageWarped(image: Image, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors: boolean = true, useCurrentColorForNullTint: boolean = false): void {
+        this.drawTexturedWarped(
+            image,
+            x1, y1,
+            x2, y2,
+            x3, y3,
+            x4, y4,
+            srcX, srcY, srcWidth, srcHeight,
+            alpha,
+            tint,
+            transform,
+            false,
+            useCornerColors,
+            useCurrentColorForNullTint
+        );
+    }
+
+    private drawTexturedWarped(image: Image, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, flash: boolean, useCornerColors: boolean, useCurrentColorForNullTint: boolean): void {
         const gl = this.gl;
-        const textureProgram = this.textureProgram;
-        const buffer = this.buffer;
-        if (!gl || !textureProgram || !buffer) {
+        if (!gl || !this.textureProgram || !this.buffer) {
             return;
         }
         const resource = (image as unknown as ImageInternals).__getTextureResource?.() ?? null;
@@ -230,98 +292,83 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (!resource || !texture || resource.width <= 0 || resource.height <= 0) {
             return;
         }
-        const matrix = multiplyMatrix3(this.currentMatrix(), transform);
-        const color = tint ?? Color.white;
+        const matrix = this.combinedMatrix(transform);
         const u1 = srcX / resource.width;
         const v1 = srcY / resource.height;
         const u2 = (srcX + srcWidth) / resource.width;
         const v2 = (srcY + srcHeight) / resource.height;
-        const p1 = this.toClip(...transformPoint(matrix, x1, y1));
-        const p2 = this.toClip(...transformPoint(matrix, x2, y2));
-        const p3 = this.toClip(...transformPoint(matrix, x3, y3));
-        const p4 = this.toClip(...transformPoint(matrix, x4, y4));
-        const cornerColors = (image as unknown as ImageInternals).__getCornerColors?.() ?? null;
-        const topLeft = cornerColors?.[0] ?? Color.white;
-        const topRight = cornerColors?.[1] ?? Color.white;
-        const bottomRight = cornerColors?.[2] ?? Color.white;
-        const bottomLeft = cornerColors?.[3] ?? Color.white;
-        const vertices = new Float32Array([
-            p1[0], p1[1], u1, v1, topLeft.r, topLeft.g, topLeft.b, topLeft.a,
-            p2[0], p2[1], u2, v1, topRight.r, topRight.g, topRight.b, topRight.a,
-            p3[0], p3[1], u2, v2, bottomRight.r, bottomRight.g, bottomRight.b, bottomRight.a,
-            p1[0], p1[1], u1, v1, topLeft.r, topLeft.g, topLeft.b, topLeft.a,
-            p3[0], p3[1], u2, v2, bottomRight.r, bottomRight.g, bottomRight.b, bottomRight.a,
-            p4[0], p4[1], u1, v2, bottomLeft.r, bottomLeft.g, bottomLeft.b, bottomLeft.a
-        ]);
-        gl.useProgram(textureProgram.program);
-        gl.bindTexture(gl.TEXTURE_2D, texture);
-        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-        gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STREAM_DRAW);
-        const position = textureProgram.getAttribLocation(gl, "a_position");
-        const texCoord = textureProgram.getAttribLocation(gl, "a_texCoord");
-        const colorAttrib = textureProgram.getAttribLocation(gl, "a_color");
-        gl.enableVertexAttribArray(position);
-        gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 32, 0);
-        gl.enableVertexAttribArray(texCoord);
-        gl.vertexAttribPointer(texCoord, 2, gl.FLOAT, false, 32, 8);
-        gl.enableVertexAttribArray(colorAttrib);
-        gl.vertexAttribPointer(colorAttrib, 4, gl.FLOAT, false, 32, 16);
-        const colorLocation = textureProgram.getUniformLocation(gl, "u_color");
-        gl.uniform4f(colorLocation, color.r, color.g, color.b, color.a * alpha * this.globalAlphaScale);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        const cornerColors = useCornerColors ? (image as unknown as ImageInternals).__getCornerColors?.() ?? null : null;
+        const color = tint ?? (useCurrentColorForNullTint && !cornerColors
+            ? this.setScratchColor(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3])
+            : WHITE_COLOR);
+        const topLeft = cornerColors?.[0] ?? WHITE_COLOR;
+        const topRight = cornerColors?.[1] ?? WHITE_COLOR;
+        const bottomRight = cornerColors?.[2] ?? WHITE_COLOR;
+        const bottomLeft = cornerColors?.[3] ?? WHITE_COLOR;
+        this.queueTextureQuad(
+            texture,
+            matrix,
+            x1, y1, x2, y2, x3, y3, x4, y4,
+            u1, v1, u2, v2,
+            topLeft, topRight, bottomRight, bottomLeft,
+            color,
+            color.a * alpha * this.globalAlphaScale,
+            flash
+        );
         this.batch.markDirty();
     }
 
     /** Draws a filled rectangle. */
-    public fillRect(x: number, y: number, width: number, height: number, color: Color, transform: Matrix3 = identityMatrix3()): void {
+    public fillRect(x: number, y: number, width: number, height: number, color: Color, transform: Matrix3 = IDENTITY_TRANSFORM): void {
         const x2 = x + width;
         const y2 = y + height;
-        this.drawSolidPolygon([
-            [x, y],
-            [x2, y],
-            [x2, y2],
-            [x, y],
-            [x2, y2],
-            [x, y2]
-        ], color, transform);
+        this.drawSolidQuad(
+            x, y,
+            x2, y,
+            x2, y2,
+            x, y2,
+            color,
+            transform
+        );
     }
 
     /** Draws a line as a thin quad so browser line-width limits do not matter. */
-    public drawLine(x1: number, y1: number, x2: number, y2: number, color: Color, width: number, transform: Matrix3 = identityMatrix3()): void {
+    public drawLine(x1: number, y1: number, x2: number, y2: number, color: Color, width: number, transform: Matrix3 = IDENTITY_TRANSFORM): void {
         const dx = x2 - x1;
         const dy = y2 - y1;
         const len = Math.hypot(dx, dy) || 1;
         const px = -dy / len * width / 2;
         const py = dx / len * width / 2;
-        this.drawSolidPolygon([
-            [x1 + px, y1 + py],
-            [x2 + px, y2 + py],
-            [x2 - px, y2 - py],
-            [x1 + px, y1 + py],
-            [x2 - px, y2 - py],
-            [x1 - px, y1 - py]
-        ], color, transform);
+        this.drawSolidQuad(
+            x1 + px, y1 + py,
+            x2 + px, y2 + py,
+            x2 - px, y2 - py,
+            x1 - px, y1 - py,
+            color,
+            transform
+        );
     }
 
     /** Draws a line with endpoint color interpolation. */
-    public drawGradientLine(x1: number, y1: number, color1: Color, x2: number, y2: number, color2: Color, width: number, transform: Matrix3 = identityMatrix3()): void {
+    public drawGradientLine(x1: number, y1: number, color1: Color, x2: number, y2: number, color2: Color, width: number, transform: Matrix3 = IDENTITY_TRANSFORM): void {
         const dx = x2 - x1;
         const dy = y2 - y1;
         const len = Math.hypot(dx, dy) || 1;
         const px = -dy / len * width / 2;
         const py = dx / len * width / 2;
-        this.drawColoredTriangles([
-            { x: x1 + px, y: y1 + py, color: color1 },
-            { x: x2 + px, y: y2 + py, color: color2 },
-            { x: x2 - px, y: y2 - py, color: color2 },
-            { x: x1 + px, y: y1 + py, color: color1 },
-            { x: x2 - px, y: y2 - py, color: color2 },
-            { x: x1 - px, y: y1 - py, color: color1 }
-        ], transform);
+        const matrix = this.combinedMatrix(transform);
+        const vertices = this.solidQuadVertices;
+        this.writeSolidVertex(vertices, 0, matrix, x1 + px, y1 + py, color1);
+        this.writeSolidVertex(vertices, 1, matrix, x2 + px, y2 + py, color2);
+        this.writeSolidVertex(vertices, 2, matrix, x2 - px, y2 - py, color2);
+        this.writeSolidVertex(vertices, 3, matrix, x1 + px, y1 + py, color1);
+        this.writeSolidVertex(vertices, 4, matrix, x2 - px, y2 - py, color2);
+        this.writeSolidVertex(vertices, 5, matrix, x1 - px, y1 - py, color1);
+        this.submitSolidVertices(vertices, 6);
     }
 
     /** Draws connected line segments. */
-    public drawLineStrip(points: Array<[number, number]>, color: Color, width: number, transform: Matrix3 = identityMatrix3()): void {
+    public drawLineStrip(points: Array<[number, number]>, color: Color, width: number, transform: Matrix3 = IDENTITY_TRANSFORM): void {
         for (let i = 0; i + 1 < points.length; i++) {
             const start = points[i];
             const end = points[i + 1];
@@ -330,12 +377,13 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     /** Draws already-triangulated solid geometry. */
-    public fillTriangles(points: Array<[number, number]>, color: Color, transform: Matrix3 = identityMatrix3()): void {
+    public fillTriangles(points: Array<[number, number]>, color: Color, transform: Matrix3 = IDENTITY_TRANSFORM): void {
         this.drawSolidPolygon(points, color, transform);
     }
 
     /** Copies pixels from the active framebuffer into a render-target image texture. */
     public copyAreaToRenderTarget(target: WebGLRenderTarget, x: number, y: number): void {
+        this.flushTextureBatch();
         const gl = this.gl;
         if (!gl) {
             return;
@@ -355,70 +403,103 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Applies a screen-space scissor clip. */
     public setClip(x: number, y: number, width: number, height: number): void {
+        this.flushTextureBatch();
         this.screenClip = WebGLRenderer.normalizeClip(x, y, width, height);
         this.applyActiveClip();
     }
 
     /** Clears the active screen-space clip. */
     public clearClip(): void {
+        this.flushTextureBatch();
         this.screenClip = null;
         this.applyActiveClip();
     }
 
     /** Applies a transformed world-space clip by converting its bounds to a scissor rectangle. */
     public setWorldClip(x: number, y: number, width: number, height: number, transform: Matrix3): void {
-        const matrix = multiplyMatrix3(this.currentMatrix(), transform);
-        const points = [
-            transformPoint(matrix, x, y),
-            transformPoint(matrix, x + width, y),
-            transformPoint(matrix, x + width, y + height),
-            transformPoint(matrix, x, y + height)
-        ];
-        const xs = points.map((point) => point[0]);
-        const ys = points.map((point) => point[1]);
-        const minX = Math.min(...xs);
-        const maxX = Math.max(...xs);
-        const minY = Math.min(...ys);
-        const maxY = Math.max(...ys);
+        this.flushTextureBatch();
+        const matrix = this.combinedMatrix(transform);
+        const x2 = x + width;
+        const y2 = y + height;
+        const tx1 = matrix[0] * x + matrix[1] * y + matrix[2];
+        const ty1 = matrix[3] * x + matrix[4] * y + matrix[5];
+        const tx2 = matrix[0] * x2 + matrix[1] * y + matrix[2];
+        const ty2 = matrix[3] * x2 + matrix[4] * y + matrix[5];
+        const tx3 = matrix[0] * x2 + matrix[1] * y2 + matrix[2];
+        const ty3 = matrix[3] * x2 + matrix[4] * y2 + matrix[5];
+        const tx4 = matrix[0] * x + matrix[1] * y2 + matrix[2];
+        const ty4 = matrix[3] * x + matrix[4] * y2 + matrix[5];
+        const minX = Math.min(tx1, tx2, tx3, tx4);
+        const maxX = Math.max(tx1, tx2, tx3, tx4);
+        const minY = Math.min(ty1, ty2, ty3, ty4);
+        const maxY = Math.max(ty1, ty2, ty3, ty4);
         this.worldClip = WebGLRenderer.normalizeClip(minX, minY, maxX - minX, maxY - minY);
         this.applyActiveClip();
     }
 
     /** Clears the active world-space clip. */
     public clearWorldClip(): void {
+        this.flushTextureBatch();
         this.worldClip = null;
         this.applyActiveClip();
     }
 
     /** Saves the current matrix. */
     public pushTransform(): void {
-        this.transformStack.push([...this.currentMatrix()] as Matrix3);
+        const matrix = this.matrixPool.pop() ?? identityMatrix3();
+        this.copyMatrix(this.currentMatrix(), matrix);
+        this.transformStack.push(matrix);
     }
 
     /** Restores the previous matrix. */
     public popTransform(): void {
         if (this.transformStack.length > 1) {
-            this.transformStack.pop();
+            const matrix = this.transformStack.pop();
+            if (matrix) {
+                this.matrixPool.push(matrix);
+            }
         }
     }
 
     /** Applies a translation to the current matrix. */
     public translate(x: number, y: number): void {
-        this.replaceCurrent(multiplyMatrix3(this.currentMatrix(), translationMatrix3(x, y)));
+        const matrix = this.currentMatrix();
+        matrix[2] = matrix[0] * x + matrix[1] * y + matrix[2];
+        matrix[5] = matrix[3] * x + matrix[4] * y + matrix[5];
     }
 
     /** Applies a scale to the current matrix. */
     public scale(x: number, y: number): void {
-        this.replaceCurrent(multiplyMatrix3(this.currentMatrix(), scaleMatrix3(x, y)));
+        const matrix = this.currentMatrix();
+        matrix[0] *= x;
+        matrix[1] *= y;
+        matrix[3] *= x;
+        matrix[4] *= y;
     }
 
     /** Applies a clockwise degree rotation around a point to the current matrix. */
     public rotate(x: number, y: number, angle: number): void {
-        this.replaceCurrent(multiplyMatrix3(this.currentMatrix(), rotationMatrix3(x, y, angle)));
+        const radians = angle * Math.PI / 180;
+        const c = Math.cos(radians);
+        const s = Math.sin(radians);
+        const tx = x - c * x + s * y;
+        const ty = y - s * x - c * y;
+        const matrix = this.currentMatrix();
+        const m0 = matrix[0];
+        const m1 = matrix[1];
+        const m3 = matrix[3];
+        const m4 = matrix[4];
+        matrix[0] = m0 * c + m1 * s;
+        matrix[1] = -m0 * s + m1 * c;
+        matrix[2] = m0 * tx + m1 * ty + matrix[2];
+        matrix[3] = m3 * c + m4 * s;
+        matrix[4] = -m3 * s + m4 * c;
+        matrix[5] = m3 * tx + m4 * ty + matrix[5];
     }
 
     /** Reads RGBA pixels from the active target. */
     public readPixels(x: number, y: number, width: number, height: number, target: Uint8Array): void {
+        this.flushTextureBatch();
         const gl = this.gl;
         if (!gl) {
             target.fill(0);
@@ -429,6 +510,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Binds a decoded WebGL texture resource to the active texture unit. */
     public bindTextureResource(resource: WebGLTextureResource): void {
+        this.flushTextureBatch();
         const gl = this.gl;
         if (!gl) {
             return;
@@ -442,6 +524,9 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Handles browser WebGL context loss. */
     public handleContextLost(): void {
+        this.textureBatchVertexCount = 0;
+        this.textureBatchTexture = null;
+        this.textureBatchFlash = false;
         this.gl = null;
         this.solidProgram = null;
         this.textureProgram = null;
@@ -476,11 +561,13 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.flush(). */
     public flush(): void {
+        this.flushTextureBatch();
         this.batch.flush();
     }
 
     /** Java Slick2D counterpart: SGL.initDisplay(int, int). */
     public initDisplay(width: number, height: number): void {
+        this.flushTextureBatch();
         this.width = Math.max(1, width);
         this.height = Math.max(1, height);
         this.gl?.viewport(0, 0, this.width, this.height);
@@ -503,6 +590,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.glScissor(int, int, int, int). */
     public glScissor(x: number, y: number, width: number, height: number): void {
+        this.flushTextureBatch();
         this.screenClip = null;
         this.worldClip = null;
         this.gl?.enable(this.gl.SCISSOR_TEST);
@@ -520,17 +608,19 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.glClear(int). */
     public glClear(mask: number): void {
+        this.flushTextureBatch();
         this.gl?.clear(mask);
     }
 
     /** Java Slick2D counterpart: SGL.glColorMask(boolean, boolean, boolean, boolean). */
     public glColorMask(red: boolean, green: boolean, blue: boolean, alpha: boolean): void {
+        this.flushTextureBatch();
         this.gl?.colorMask(red, green, blue, alpha);
     }
 
     /** Java Slick2D counterpart: SGL.glLoadIdentity(). */
     public glLoadIdentity(): void {
-        this.transformStack[this.transformStack.length - 1] = identityMatrix3();
+        this.writeIdentity(this.transformStack[this.transformStack.length - 1]);
     }
 
     /** Java Slick2D counterpart: SGL.glGetInteger(int, IntBuffer). */
@@ -543,7 +633,27 @@ export class WebGLRenderer implements RenderBackend, SGL {
     public glGetFloat(id: number, ret: Float32Array): void {
         if (id === this.GL_MODELVIEW_MATRIX) {
             const m = this.currentMatrix();
-            ret.set([m[0], m[3], 0, m[6], m[1], m[4], 0, m[7], 0, 0, 1, 0, m[2], m[5], 0, m[8]].slice(0, ret.length));
+            const scratch = this.modelViewScratch;
+            scratch[0] = m[0];
+            scratch[1] = m[3];
+            scratch[2] = 0;
+            scratch[3] = m[6];
+            scratch[4] = m[1];
+            scratch[5] = m[4];
+            scratch[6] = 0;
+            scratch[7] = m[7];
+            scratch[8] = 0;
+            scratch[9] = 0;
+            scratch[10] = 1;
+            scratch[11] = 0;
+            scratch[12] = m[2];
+            scratch[13] = m[5];
+            scratch[14] = 0;
+            scratch[15] = m[8];
+            const limit = Math.min(ret.length, scratch.length);
+            for (let i = 0; i < limit; i++) {
+                ret[i] = scratch[i];
+            }
             return;
         }
         const value = this.gl?.getParameter(id);
@@ -555,6 +665,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (this.recordListCommand(() => this.glEnable(id))) {
             return;
         }
+        this.flushTextureBatch();
         this.gl?.enable(id);
     }
 
@@ -563,6 +674,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (this.recordListCommand(() => this.glDisable(id))) {
             return;
         }
+        this.flushTextureBatch();
         this.gl?.disable(id);
     }
 
@@ -571,6 +683,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (this.recordListCommand(() => this.glBindTexture(target, id))) {
             return;
         }
+        this.flushTextureBatch();
         const gl = this.gl;
         this.currentTextureId = Math.trunc(id);
         if (!gl) {
@@ -594,6 +707,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.glGetTexImage(...). */
     public glGetTexImage(target: number, level: number, format: number, type: number, pixels: Uint8Array): void {
+        this.flushTextureBatch();
         pixels.fill(0);
         const gl = this.gl;
         const info = this.currentTextureId === 0 ? null : this.textures.get(this.currentTextureId);
@@ -616,6 +730,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.glDeleteTextures(IntBuffer). */
     public glDeleteTextures(buffer: Int32Array): void {
+        this.flushTextureBatch();
         const gl = this.gl;
         for (const id of buffer) {
             const info = this.textures.get(id);
@@ -634,7 +749,10 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (this.recordListCommand(() => this.glColor4f(r, g, b, a))) {
             return;
         }
-        this.currentColor = [r, g, b, a];
+        this.currentColor[0] = r;
+        this.currentColor[1] = g;
+        this.currentColor[2] = b;
+        this.currentColor[3] = a;
     }
 
     /** Java Slick2D counterpart: SGL.glTexCoord2f(float, float). */
@@ -642,7 +760,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (this.recordListCommand(() => this.glTexCoord2f(u, v))) {
             return;
         }
-        this.immediateTexCoord = [u, v];
+        this.immediateTexCoord[0] = u;
+        this.immediateTexCoord[1] = v;
     }
 
     /** Java Slick2D counterpart: SGL.glVertex3f(float, float, float). */
@@ -650,7 +769,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (this.recordListCommand(() => this.glVertex3f(x, y, _z))) {
             return;
         }
-        this.immediateVertices.push({ x, y, u: this.immediateTexCoord[0], v: this.immediateTexCoord[1] });
+        this.immediateVertices.push(x, y, this.immediateTexCoord[0], this.immediateTexCoord[1]);
     }
 
     /** Java Slick2D counterpart: SGL.glVertex2f(float, float). */
@@ -658,7 +777,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (this.recordListCommand(() => this.glVertex2f(x, y))) {
             return;
         }
-        this.immediateVertices.push({ x, y, u: this.immediateTexCoord[0], v: this.immediateTexCoord[1] });
+        this.immediateVertices.push(x, y, this.immediateTexCoord[0], this.immediateTexCoord[1]);
     }
 
     /** Java Slick2D counterpart: SGL.glRotatef(float, float, float, float). */
@@ -685,7 +804,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
             return;
         }
         this.immediateType = geomType;
-        this.immediateVertices = [];
+        this.immediateVertices.length = 0;
     }
 
     /** Java Slick2D counterpart: SGL.glEnd(). */
@@ -694,16 +813,15 @@ export class WebGLRenderer implements RenderBackend, SGL {
             return;
         }
         if (this.immediateType === this.GL_LINES) {
-            for (let i = 0; i + 1 < this.immediateVertices.length; i += 2) {
-                const a = this.immediateVertices[i];
-                const b = this.immediateVertices[i + 1];
-                this.drawLine(a.x, a.y, b.x, b.y, new Color(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3]), this.lineWidth);
+            const color = this.setScratchColor(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3]);
+            for (let i = 0; i + 7 < this.immediateVertices.length; i += 8) {
+                this.drawLine(this.immediateVertices[i], this.immediateVertices[i + 1], this.immediateVertices[i + 4], this.immediateVertices[i + 5], color, this.lineWidth);
             }
         } else {
-            const points = this.immediateVertices.map((vertex) => [vertex.x, vertex.y] as [number, number]);
-            this.drawSolidPolygon(points, new Color(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3]), identityMatrix3());
+            const color = this.setScratchColor(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3]);
+            this.drawImmediateSolidVertices(color);
         }
-        this.immediateVertices = [];
+        this.immediateVertices.length = 0;
         this.immediateType = 0;
     }
 
@@ -747,6 +865,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (this.recordListCommand(() => this.glBlendFunc(src, dest))) {
             return;
         }
+        this.flushTextureBatch();
         this.gl?.blendFunc(src, dest);
     }
 
@@ -787,6 +906,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.glCopyTexImage2D(...). */
     public glCopyTexImage2D(target: number, level: number, internalFormat: number, x: number, y: number, width: number, height: number, border: number): void {
+        this.flushTextureBatch();
         this.gl?.copyTexImage2D(target, level, internalFormat, x, y, width, height, border);
         const info = this.currentTextureId === 0 ? null : this.textures.get(this.currentTextureId);
         if (info) {
@@ -798,11 +918,13 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.glReadPixels(...). */
     public glReadPixels(x: number, y: number, width: number, height: number, format: number, type: number, pixels: Uint8Array): void {
+        this.flushTextureBatch();
         this.gl?.readPixels(x, y, width, height, format, type, pixels);
     }
 
     /** Java Slick2D counterpart: SGL.glTexParameteri(int, int, int). */
     public glTexParameteri(target: number, param: number, value: number): void {
+        this.flushTextureBatch();
         this.gl?.texParameteri(target, param, value);
     }
 
@@ -820,16 +942,19 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.glDepthMask(boolean). */
     public glDepthMask(mask: boolean): void {
+        this.flushTextureBatch();
         this.gl?.depthMask(mask);
     }
 
     /** Java Slick2D counterpart: SGL.glClearDepth(float). */
     public glClearDepth(value: number): void {
+        this.flushTextureBatch();
         this.gl?.clearDepth(value);
     }
 
     /** Java Slick2D counterpart: SGL.glDepthFunc(int). */
     public glDepthFunc(func: number): void {
+        this.flushTextureBatch();
         this.gl?.depthFunc(func);
     }
 
@@ -841,7 +966,16 @@ export class WebGLRenderer implements RenderBackend, SGL {
     /** Java Slick2D counterpart: SGL.glLoadMatrix(FloatBuffer). */
     public glLoadMatrix(buffer: Float32Array): void {
         if (buffer.length >= 16) {
-            this.replaceCurrent([buffer[0], buffer[4], buffer[12], buffer[1], buffer[5], buffer[13], 0, 0, 1]);
+            const matrix = this.currentMatrix();
+            matrix[0] = buffer[0];
+            matrix[1] = buffer[4];
+            matrix[2] = buffer[12];
+            matrix[3] = buffer[1];
+            matrix[4] = buffer[5];
+            matrix[5] = buffer[13];
+            matrix[6] = 0;
+            matrix[7] = 0;
+            matrix[8] = 1;
         }
     }
 
@@ -871,6 +1005,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.glTexImage2D(...). */
     public glTexImage2D(target: number, level: number, dstPixelFormat: number, width: number, height: number, border: number, srcPixelFormat: number, type: number, textureBuffer: Uint8Array): void {
+        this.flushTextureBatch();
         this.gl?.texImage2D(target, level, dstPixelFormat, width, height, border, srcPixelFormat, type, textureBuffer);
         const info = this.currentTextureId === 0 ? null : this.textures.get(this.currentTextureId);
         if (info) {
@@ -882,6 +1017,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.glTexSubImage2D(...). */
     public glTexSubImage2D(target: number, level: number, pageX: number, pageY: number, width: number, height: number, format: number, type: number, scratchByteBuffer: Uint8Array): void {
+        this.flushTextureBatch();
         this.gl?.texSubImage2D(target, level, pageX, pageY, width, height, format, type, scratchByteBuffer);
     }
 
@@ -909,10 +1045,6 @@ export class WebGLRenderer implements RenderBackend, SGL {
         return [...this.currentMatrix()] as Matrix3;
     }
 
-    private drawSolidPolygon(points: Array<[number, number]>, color: Color, transform: Matrix3): void {
-        this.drawColoredTriangles(points.map((point) => ({ x: point[0], y: point[1], color })), transform);
-    }
-
     private recordListCommand(command: () => void): boolean {
         if (this.recordingList === null || this.replayingList) {
             return false;
@@ -921,21 +1053,129 @@ export class WebGLRenderer implements RenderBackend, SGL {
         return this.recordingOption === this.GL_COMPILE;
     }
 
-    private drawColoredTriangles(points: Array<{ x: number; y: number; color: Color }>, transform: Matrix3): void {
+    private queueTextureQuad(
+        texture: WebGLTexture,
+        matrix: Matrix3,
+        x1: number, y1: number,
+        x2: number, y2: number,
+        x3: number, y3: number,
+        x4: number, y4: number,
+        u1: number, v1: number,
+        u2: number, v2: number,
+        topLeft: Color,
+        topRight: Color,
+        bottomRight: Color,
+        bottomLeft: Color,
+        tint: Color,
+        alphaScale: number,
+        flash: boolean
+    ): void {
+        if (this.textureBatchTexture !== null && (this.textureBatchTexture !== texture || this.textureBatchFlash !== flash)) {
+            this.flushTextureBatch();
+        }
+        if (this.textureBatchVertexCount + 6 > TEXTURE_BATCH_VERTEX_CAPACITY) {
+            this.flushTextureBatch();
+        }
+        this.textureBatchTexture = texture;
+        this.textureBatchFlash = flash;
+        const vertices = this.textureBatchVertices;
+        const base = this.textureBatchVertexCount;
+        this.writeTextureVertex(vertices, base, matrix, x1, y1, u1, v1, topLeft, tint, alphaScale);
+        this.writeTextureVertex(vertices, base + 1, matrix, x2, y2, u2, v1, topRight, tint, alphaScale);
+        this.writeTextureVertex(vertices, base + 2, matrix, x3, y3, u2, v2, bottomRight, tint, alphaScale);
+        this.writeTextureVertex(vertices, base + 3, matrix, x1, y1, u1, v1, topLeft, tint, alphaScale);
+        this.writeTextureVertex(vertices, base + 4, matrix, x3, y3, u2, v2, bottomRight, tint, alphaScale);
+        this.writeTextureVertex(vertices, base + 5, matrix, x4, y4, u1, v2, bottomLeft, tint, alphaScale);
+        this.textureBatchVertexCount += 6;
+    }
+
+    private flushTextureBatch(): void {
+        const vertexCount = this.textureBatchVertexCount;
+        if (vertexCount === 0) {
+            return;
+        }
+        const gl = this.gl;
+        const textureProgram = this.textureProgram;
+        const buffer = this.buffer;
+        const texture = this.textureBatchTexture;
+        if (gl && textureProgram && buffer && texture) {
+            gl.useProgram(textureProgram.program);
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            const floatCount = vertexCount * TEXTURE_VERTEX_FLOATS;
+            gl.bufferData(gl.ARRAY_BUFFER, floatCount * Float32Array.BYTES_PER_ELEMENT, gl.STREAM_DRAW);
+            gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.textureBatchVertices, 0, floatCount);
+            const position = textureProgram.getAttribLocation(gl, "a_position");
+            const texCoord = textureProgram.getAttribLocation(gl, "a_texCoord");
+            const colorAttrib = textureProgram.getAttribLocation(gl, "a_color");
+            gl.enableVertexAttribArray(position);
+            gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 32, 0);
+            gl.enableVertexAttribArray(texCoord);
+            gl.vertexAttribPointer(texCoord, 2, gl.FLOAT, false, 32, 8);
+            gl.enableVertexAttribArray(colorAttrib);
+            gl.vertexAttribPointer(colorAttrib, 4, gl.FLOAT, false, 32, 16);
+            const colorLocation = textureProgram.getUniformLocation(gl, "u_color");
+            gl.uniform4f(colorLocation, 1, 1, 1, 1);
+            const flashLocation = textureProgram.getUniformLocation(gl, "u_flash");
+            gl.uniform1f(flashLocation, this.textureBatchFlash ? 1 : 0);
+            gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
+        }
+        this.textureBatchVertexCount = 0;
+        this.textureBatchTexture = null;
+        this.textureBatchFlash = false;
+    }
+
+    private drawSolidPolygon(points: Array<[number, number]>, color: Color, transform: Matrix3): void {
+        if (points.length === 0) {
+            return;
+        }
+        const matrix = this.combinedMatrix(transform);
+        const vertices = this.ensureDynamicSolidCapacity(points.length);
+        for (let i = 0; i < points.length; i++) {
+            const point = points[i];
+            this.writeSolidVertex(vertices, i, matrix, point[0], point[1], color);
+        }
+        this.submitSolidVertices(vertices, points.length);
+    }
+
+    private drawImmediateSolidVertices(color: Color): void {
+        const vertexCount = Math.trunc(this.immediateVertices.length / 4);
+        if (vertexCount === 0) {
+            return;
+        }
+        const vertices = this.ensureDynamicSolidCapacity(vertexCount);
+        const matrix = this.currentMatrix();
+        for (let vertex = 0, source = 0; vertex < vertexCount; vertex++, source += 4) {
+            this.writeSolidVertex(vertices, vertex, matrix, this.immediateVertices[source], this.immediateVertices[source + 1], color);
+        }
+        this.submitSolidVertices(vertices, vertexCount);
+    }
+
+    private drawSolidQuad(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, color: Color, transform: Matrix3): void {
+        const matrix = this.combinedMatrix(transform);
+        const vertices = this.solidQuadVertices;
+        this.writeSolidVertex(vertices, 0, matrix, x1, y1, color);
+        this.writeSolidVertex(vertices, 1, matrix, x2, y2, color);
+        this.writeSolidVertex(vertices, 2, matrix, x3, y3, color);
+        this.writeSolidVertex(vertices, 3, matrix, x1, y1, color);
+        this.writeSolidVertex(vertices, 4, matrix, x3, y3, color);
+        this.writeSolidVertex(vertices, 5, matrix, x4, y4, color);
+        this.submitSolidVertices(vertices, 6);
+    }
+
+    private submitSolidVertices(vertices: Float32Array, vertexCount: number): void {
+        this.flushTextureBatch();
         const gl = this.gl;
         const solidProgram = this.solidProgram;
         const buffer = this.buffer;
-        if (!gl || !solidProgram || !buffer || points.length === 0) {
+        if (!gl || !solidProgram || !buffer || vertexCount === 0) {
             return;
         }
-        const matrix = multiplyMatrix3(this.currentMatrix(), transform);
-        const vertices = new Float32Array(points.flatMap((point) => {
-            const clip = this.toClip(...transformPoint(matrix, point.x, point.y));
-            return [clip[0], clip[1], point.color.r, point.color.g, point.color.b, point.color.a];
-        }));
         gl.useProgram(solidProgram.program);
         gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-        gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STREAM_DRAW);
+        const floatCount = vertexCount * SOLID_VERTEX_FLOATS;
+        gl.bufferData(gl.ARRAY_BUFFER, floatCount * Float32Array.BYTES_PER_ELEMENT, gl.STREAM_DRAW);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, vertices, 0, floatCount);
         const position = solidProgram.getAttribLocation(gl, "a_position");
         const colorAttrib = solidProgram.getAttribLocation(gl, "a_color");
         gl.enableVertexAttribArray(position);
@@ -944,8 +1184,85 @@ export class WebGLRenderer implements RenderBackend, SGL {
         gl.vertexAttribPointer(colorAttrib, 4, gl.FLOAT, false, 24, 8);
         const colorLocation = solidProgram.getUniformLocation(gl, "u_color");
         gl.uniform4f(colorLocation, 1, 1, 1, this.globalAlphaScale);
-        gl.drawArrays(gl.TRIANGLES, 0, points.length);
+        gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
         this.batch.markDirty();
+    }
+
+    private ensureDynamicSolidCapacity(vertexCount: number): Float32Array {
+        const required = vertexCount * 6;
+        if (this.dynamicSolidVertices.length < required) {
+            this.dynamicSolidVertices = new Float32Array(required);
+        }
+        return this.dynamicSolidVertices;
+    }
+
+    private combinedMatrix(transform: Matrix3): Matrix3 {
+        const current = this.currentMatrix();
+        const out = this.matrixScratch;
+        out[0] = current[0] * transform[0] + current[1] * transform[3] + current[2] * transform[6];
+        out[1] = current[0] * transform[1] + current[1] * transform[4] + current[2] * transform[7];
+        out[2] = current[0] * transform[2] + current[1] * transform[5] + current[2] * transform[8];
+        out[3] = current[3] * transform[0] + current[4] * transform[3] + current[5] * transform[6];
+        out[4] = current[3] * transform[1] + current[4] * transform[4] + current[5] * transform[7];
+        out[5] = current[3] * transform[2] + current[4] * transform[5] + current[5] * transform[8];
+        out[6] = current[6] * transform[0] + current[7] * transform[3] + current[8] * transform[6];
+        out[7] = current[6] * transform[1] + current[7] * transform[4] + current[8] * transform[7];
+        out[8] = current[6] * transform[2] + current[7] * transform[5] + current[8] * transform[8];
+        return out;
+    }
+
+    private writeTextureVertex(vertices: Float32Array, vertex: number, matrix: Matrix3, x: number, y: number, u: number, v: number, color: Color, tint: Color, alphaScale: number): void {
+        const offset = vertex * TEXTURE_VERTEX_FLOATS;
+        vertices[offset] = (matrix[0] * x + matrix[1] * y + matrix[2]) / this.width * 2 - 1;
+        vertices[offset + 1] = 1 - (matrix[3] * x + matrix[4] * y + matrix[5]) / this.height * 2;
+        vertices[offset + 2] = u;
+        vertices[offset + 3] = v;
+        vertices[offset + 4] = color.r * tint.r;
+        vertices[offset + 5] = color.g * tint.g;
+        vertices[offset + 6] = color.b * tint.b;
+        vertices[offset + 7] = color.a * alphaScale;
+    }
+
+    private writeSolidVertex(vertices: Float32Array, vertex: number, matrix: Matrix3, x: number, y: number, color: Color): void {
+        const offset = vertex * SOLID_VERTEX_FLOATS;
+        vertices[offset] = (matrix[0] * x + matrix[1] * y + matrix[2]) / this.width * 2 - 1;
+        vertices[offset + 1] = 1 - (matrix[3] * x + matrix[4] * y + matrix[5]) / this.height * 2;
+        vertices[offset + 2] = color.r;
+        vertices[offset + 3] = color.g;
+        vertices[offset + 4] = color.b;
+        vertices[offset + 5] = color.a;
+    }
+
+    private copyMatrix(source: Matrix3, target: Matrix3): void {
+        target[0] = source[0];
+        target[1] = source[1];
+        target[2] = source[2];
+        target[3] = source[3];
+        target[4] = source[4];
+        target[5] = source[5];
+        target[6] = source[6];
+        target[7] = source[7];
+        target[8] = source[8];
+    }
+
+    private writeIdentity(target: Matrix3): void {
+        target[0] = 1;
+        target[1] = 0;
+        target[2] = 0;
+        target[3] = 0;
+        target[4] = 1;
+        target[5] = 0;
+        target[6] = 0;
+        target[7] = 0;
+        target[8] = 1;
+    }
+
+    private setScratchColor(r: number, g: number, b: number, a: number): Color {
+        this.scratchColor.r = r;
+        this.scratchColor.g = g;
+        this.scratchColor.b = b;
+        this.scratchColor.a = a;
+        return this.scratchColor;
     }
 
     private applyActiveClip(): void {
@@ -989,18 +1306,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         };
     }
 
-    private toClip(x: number, y: number): [number, number] {
-        return [
-            (x / this.width) * 2 - 1,
-            1 - (y / this.height) * 2
-        ];
-    }
-
     private currentMatrix(): Matrix3 {
         return this.transformStack[this.transformStack.length - 1];
-    }
-
-    private replaceCurrent(matrix: Matrix3): void {
-        this.transformStack[this.transformStack.length - 1] = matrix;
     }
 }

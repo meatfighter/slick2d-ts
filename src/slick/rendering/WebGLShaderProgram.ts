@@ -7,6 +7,8 @@ import { SlickException } from "../SlickException.js";
  */
 export class WebGLShaderProgram {
     public readonly program: WebGLProgram;
+    private readonly attribLocations = new Map<string, number>();
+    private readonly uniformLocations = new Map<string, WebGLUniformLocation>();
 
     /** Creates and links a WebGL program from vertex and fragment sources. */
     public constructor(gl: WebGL2RenderingContext, vertexSource: string, fragmentSource: string) {
@@ -31,19 +33,29 @@ export class WebGLShaderProgram {
 
     /** Returns an attribute location, throwing if it is missing. */
     public getAttribLocation(gl: WebGL2RenderingContext, name: string): number {
+        const cached = this.attribLocations.get(name);
+        if (cached !== undefined) {
+            return cached;
+        }
         const location = gl.getAttribLocation(this.program, name);
         if (location < 0) {
             throw new SlickException(`Missing shader attribute: ${name}`);
         }
+        this.attribLocations.set(name, location);
         return location;
     }
 
     /** Returns a uniform location, throwing if it is missing. */
     public getUniformLocation(gl: WebGL2RenderingContext, name: string): WebGLUniformLocation {
+        const cached = this.uniformLocations.get(name);
+        if (cached) {
+            return cached;
+        }
         const location = gl.getUniformLocation(this.program, name);
         if (!location) {
             throw new SlickException(`Missing shader uniform: ${name}`);
         }
+        this.uniformLocations.set(name, location);
         return location;
     }
 

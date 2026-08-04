@@ -82,8 +82,10 @@ export class Input {
     private readonly pressedKeys = new Set<number>();
     private readonly downMouse = new Set<number>();
     private readonly pressedMouse = new Set<number>();
-    private readonly controlPressed = new Map<string, boolean>();
-    private readonly controlDown = new Set<string>();
+    private readonly controlPressed = new Set<number>();
+    private readonly controlDown = new Set<number>();
+    private readonly seenControllers = new Set<number>();
+    private readonly staleControlKeys: number[] = [];
     private readonly keyListeners: KeyListener[] = [];
     private readonly mouseListeners: MouseListener[] = [];
     private readonly controllerListeners: ControllerListener[] = [];
@@ -323,18 +325,24 @@ export class Input {
     /** Java Slick2D counterpart: Input.isControlPressed(int, int). */
     public isControlPressed(button: number, controller: number): boolean;
     public isControlPressed(button: number, controller: number = 0): boolean {
-        const key = `${controller}:${button}`;
-        const pressed = this.controlPressed.get(key) === true;
+        const key = Input.controlKey(controller, button);
+        const pressed = this.controlPressed.has(key);
         this.controlPressed.delete(key);
         return pressed;
     }
 
     /** Java Slick2D counterpart: Input.isButtonPressed(int, int). */
     public isButtonPressed(index: number, controller: number): boolean {
+        const gamepads = this.getGamepads();
         if (controller === Input.ANY_CONTROLLER) {
-            return this.getGamepads().some((gamepad) => gamepad?.buttons[index]?.pressed === true);
+            for (const gamepad of gamepads) {
+                if (gamepad?.buttons[index]?.pressed === true) {
+                    return true;
+                }
+            }
+            return false;
         }
-        return this.getGamepads()[controller]?.buttons[index]?.pressed === true;
+        return gamepads[controller]?.buttons[index]?.pressed === true;
     }
 
     /** Java Slick2D counterpart: Input.isButton1Pressed(int). */
@@ -359,7 +367,16 @@ export class Input {
 
     /** Java Slick2D counterpart: Input.getControllerCount(). */
     public getControllerCount(): number {
-        return Input.controllersDisabled ? 0 : this.getGamepads().filter(Boolean).length;
+        if (Input.controllersDisabled) {
+            return 0;
+        }
+        let count = 0;
+        for (const gamepad of this.getGamepads()) {
+            if (gamepad) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /** Java Slick2D counterpart: Input.getAxisCount(int). */
@@ -642,8 +659,10 @@ export class Input {
         if (Input.controllersDisabled) {
             return;
         }
-        const seenControllers = new Set<number>();
-        for (const gamepad of this.getGamepads()) {
+        const seenControllers = this.seenControllers;
+        seenControllers.clear();
+        const gamepads = this.getGamepads();
+        for (const gamepad of gamepads) {
             if (!gamepad) {
                 continue;
             }
@@ -677,9 +696,10 @@ export class Input {
                 (listener) => listener.controllerDownPressed(controller),
                 (listener) => listener.controllerDownReleased(controller)
             );
-            gamepad.buttons.forEach((button, index) => {
+            for (let index = 0; index < gamepad.buttons.length; index++) {
+                const button = gamepad.buttons[index];
                 if (Input.isStandardDpadButton(index)) {
-                    return;
+                    continue;
                 }
                 const control = 4 + index;
                 this.updateControlState(
@@ -689,23 +709,26 @@ export class Input {
                     (listener) => listener.controllerButtonPressed(controller, index + 1),
                     (listener) => listener.controllerButtonReleased(controller, index + 1)
                 );
-            });
-        }
-        for (const key of Array.from(this.controlDown)) {
-            const controller = Number.parseInt(key.substring(0, key.indexOf(":")), 10);
-            if (!seenControllers.has(controller)) {
-                this.controlDown.delete(key);
             }
+        }
+        this.staleControlKeys.length = 0;
+        for (const key of this.controlDown) {
+            if (!seenControllers.has(Input.controllerFromControlKey(key))) {
+                this.staleControlKeys.push(key);
+            }
+        }
+        for (let i = 0; i < this.staleControlKeys.length; i++) {
+            this.controlDown.delete(this.staleControlKeys[i]);
         }
     }
 
     private updateControlState(controller: number, control: number, down: boolean, onPressed: (listener: ControllerListener) => void, onReleased: (listener: ControllerListener) => void): void {
-        const key = `${controller}:${control}`;
+        const key = Input.controlKey(controller, control);
         const wasDown = this.controlDown.has(key);
         if (down) {
             if (!wasDown) {
                 this.controlDown.add(key);
-                this.controlPressed.set(key, true);
+                this.controlPressed.add(key);
                 for (const listener of this.controllerListeners) {
                     if (isAccepting(listener)) {
                         onPressed(listener);
@@ -728,10 +751,16 @@ export class Input {
         if (Input.controllersDisabled) {
             return false;
         }
+        const gamepads = this.getGamepads();
         if (controller === Input.ANY_CONTROLLER) {
-            return this.getGamepads().some((gamepad) => !!gamepad && predicate(gamepad));
+            for (const gamepad of gamepads) {
+                if (gamepad && predicate(gamepad)) {
+                    return true;
+                }
+            }
+            return false;
         }
-        const gamepad = this.getGamepads()[controller];
+        const gamepad = gamepads[controller];
         return !!gamepad && predicate(gamepad);
     }
 
@@ -739,7 +768,7 @@ export class Input {
         if (typeof navigator === "undefined" || !navigator.getGamepads) {
             return [];
         }
-        return Array.from(navigator.getGamepads());
+        return navigator.getGamepads();
     }
 
     private removeFrom<T>(array: T[], item: T): void {
@@ -771,6 +800,14 @@ export class Input {
 
     private static isStandardDpadButton(index: number): boolean {
         return index >= 12 && index <= 15;
+    }
+
+    private static controlKey(controller: number, control: number): number {
+        return controller * 1024 + control;
+    }
+
+    private static controllerFromControlKey(key: number): number {
+        return Math.trunc(key / 1024);
     }
 
     private static browserHasInputFocus(): boolean {

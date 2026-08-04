@@ -4,9 +4,19 @@ import { Image } from "./Image.js";
 import { SlickException } from "./SlickException.js";
 import { identityMatrix3, Matrix3 } from "./rendering/RenderBackend.js";
 import type { WebGLRenderTarget } from "./rendering/WebGLRenderTarget.js";
+import type { WebGLRenderer } from "./rendering/WebGLRenderer.js";
 import { Renderer } from "./opengl/renderer/Renderer.js";
 import { FastTrig } from "./util/FastTrig.js";
 import { CanvasFont } from "./support/CanvasFont.js";
+
+const IDENTITY_TRANSFORM = identityMatrix3();
+
+export type ClipRect = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+};
 
 /**
  * Java Slick2D counterpart: org.newdawn.slick.Graphics.
@@ -32,6 +42,8 @@ export class Graphics {
     private drawMode = Graphics.MODE_NORMAL;
     private width = 0;
     private height = 0;
+    private screenClipRecord: ClipRect | null = null;
+    private worldClipRecord: ClipRect | null = null;
     private readonly renderTarget: WebGLRenderTarget | null;
 
     public constructor();
@@ -68,11 +80,52 @@ export class Graphics {
 
     /** Java Slick2D counterpart: Graphics.setDrawMode(int). */
     public setDrawMode(mode: number): void {
-        this.drawMode = mode;
+        const renderer = this.beginRenderTarget();
+        try {
+            this.drawMode = mode;
+            if (mode === Graphics.MODE_NORMAL) {
+                renderer.glEnable(renderer.GL_BLEND);
+                renderer.glColorMask(true, true, true, true);
+                renderer.glBlendFunc(renderer.GL_SRC_ALPHA, renderer.GL_ONE_MINUS_SRC_ALPHA);
+            } else if (mode === Graphics.MODE_ALPHA_MAP) {
+                renderer.glDisable(renderer.GL_BLEND);
+                renderer.glColorMask(false, false, false, true);
+            } else if (mode === Graphics.MODE_ALPHA_BLEND) {
+                renderer.glEnable(renderer.GL_BLEND);
+                renderer.glColorMask(true, true, true, false);
+                renderer.glBlendFunc(renderer.GL_DST_ALPHA, renderer.GL_ONE_MINUS_DST_ALPHA);
+            } else if (mode === Graphics.MODE_COLOR_MULTIPLY) {
+                renderer.glEnable(renderer.GL_BLEND);
+                renderer.glColorMask(true, true, true, true);
+                renderer.glBlendFunc(renderer.GL_ONE_MINUS_SRC_COLOR, renderer.GL_SRC_COLOR);
+            } else if (mode === Graphics.MODE_ADD) {
+                renderer.glEnable(renderer.GL_BLEND);
+                renderer.glColorMask(true, true, true, true);
+                renderer.glBlendFunc(renderer.GL_ONE, renderer.GL_ONE);
+            } else if (mode === Graphics.MODE_SCREEN) {
+                renderer.glEnable(renderer.GL_BLEND);
+                renderer.glColorMask(true, true, true, true);
+                renderer.glBlendFunc(renderer.GL_ONE, renderer.GL_ONE_MINUS_SRC_COLOR);
+            }
+        } finally {
+            this.endRenderTarget(renderer);
+        }
     }
 
     /** Java Slick2D counterpart: Graphics.clearAlphaMap(). */
     public clearAlphaMap(): void {
+        this.pushTransform();
+        Renderer.get().glLoadIdentity();
+        const originalMode = this.drawMode;
+        try {
+            this.setDrawMode(Graphics.MODE_ALPHA_MAP);
+            this.setColor(Color.transparent);
+            this.fillRect(0, 0, this.width || 1, this.height || 1);
+            this.setColor(this.color);
+            this.setDrawMode(originalMode);
+        } finally {
+            this.popTransform();
+        }
     }
 
     /** Java Slick2D counterpart: Graphics.flush(). */
@@ -107,10 +160,12 @@ export class Graphics {
 
     /** Java Slick2D counterpart: Graphics.clear(). */
     public clear(): void {
-        this.withRenderTarget(() => {
-            const renderer = Renderer.getBackend();
-            renderer.fillRect(0, 0, this.width || 1, this.height || 1, this.background, identityMatrix3());
-        });
+        const renderer = this.beginRenderTarget();
+        try {
+            renderer.fillRect(0, 0, this.width || 1, this.height || 1, this.background, IDENTITY_TRANSFORM);
+        } finally {
+            this.endRenderTarget(renderer);
+        }
     }
 
     /** Java Slick2D counterpart: Graphics.resetTransform(). */
@@ -146,7 +201,12 @@ export class Graphics {
 
     /** Java Slick2D counterpart: Graphics.drawLine(float, float, float, float). */
     public drawLine(x1: number, y1: number, x2: number, y2: number): void {
-        this.withRenderTarget(() => Renderer.getBackend().drawLine(x1, y1, x2, y2, this.color, this.lineWidth, identityMatrix3()));
+        const renderer = this.beginRenderTarget();
+        try {
+            renderer.drawLine(x1, y1, x2, y2, this.color, this.lineWidth, IDENTITY_TRANSFORM);
+        } finally {
+            this.endRenderTarget(renderer);
+        }
     }
 
     /** Java Slick2D counterpart: Graphics.drawRect(float, float, float, float). */
@@ -159,33 +219,85 @@ export class Graphics {
 
     /** Java Slick2D counterpart: Graphics.fillRect(float, float, float, float). */
     public fillRect(x: number, y: number, width: number, height: number): void;
-    /** Java Slick2D counterpart: Graphics.fillRect(float, float, float, float, ShapeFill). */
-    public fillRect(x: number, y: number, width: number, height: number, fill: unknown): void;
-    public fillRect(x: number, y: number, width: number, height: number, fill?: unknown): void {
-        if (fill !== undefined) {
-            throw new SlickException("Unsupported phase-one Graphics.fillRect ShapeFill overload");
+    /** Java Slick2D counterpart: Graphics.fillRect(float, float, float, float, Image, float, float). */
+    public fillRect(x: number, y: number, width: number, height: number, pattern: Image, offX: number, offY: number): void;
+    public fillRect(x: number, y: number, width: number, height: number, pattern?: Image, offX?: number, offY?: number): void {
+        if (pattern !== undefined) {
+            if (offX === undefined || offY === undefined) {
+                throw new SlickException("Graphics.fillRect pattern overload requires offX and offY");
+            }
+            this.fillPatternRect(x, y, width, height, pattern, offX, offY);
+            return;
         }
-        this.withRenderTarget(() => Renderer.getBackend().fillRect(x, y, width, height, this.color, identityMatrix3()));
+        const renderer = this.beginRenderTarget();
+        try {
+            renderer.fillRect(x, y, width, height, this.color, IDENTITY_TRANSFORM);
+        } finally {
+            this.endRenderTarget(renderer);
+        }
     }
 
     /** Java Slick2D counterpart: Graphics.clearClip(). */
     public clearClip(): void {
-        Renderer.getBackend().clearClip();
+        const renderer = this.beginRenderTarget();
+        try {
+            this.screenClipRecord = null;
+            renderer.clearClip();
+        } finally {
+            this.endRenderTarget(renderer);
+        }
     }
 
     /** Java Slick2D counterpart: Graphics.setClip(int, int, int, int). */
     public setClip(x: number, y: number, width: number, height: number): void {
-        Renderer.getBackend().setClip(x, y, width, height);
+        const renderer = this.beginRenderTarget();
+        try {
+            this.screenClipRecord = { x, y, width, height };
+            renderer.setClip(x, y, width, height);
+        } finally {
+            this.endRenderTarget(renderer);
+        }
+    }
+
+    /** Java Slick2D counterpart: Graphics.getClip(). */
+    public getClip(): ClipRect | null {
+        return this.screenClipRecord === null ? null : { ...this.screenClipRecord };
     }
 
     /** Java Slick2D counterpart: Graphics.clearWorldClip(). */
     public clearWorldClip(): void {
-        Renderer.getBackend().clearWorldClip();
+        const renderer = this.beginRenderTarget();
+        try {
+            this.applyWorldClip(renderer, null);
+        } finally {
+            this.endRenderTarget(renderer);
+        }
     }
 
     /** Java Slick2D counterpart: Graphics.setWorldClip(float, float, float, float). */
-    public setWorldClip(x: number, y: number, width: number, height: number): void {
-        Renderer.getBackend().setWorldClip(x, y, width, height, identityMatrix3());
+    public setWorldClip(x: number, y: number, width: number, height: number): void;
+    /** Java Slick2D counterpart: Graphics.setWorldClip(Rectangle). */
+    public setWorldClip(clip: ClipRect | null): void;
+    public setWorldClip(xOrClip: number | ClipRect | null, y?: number, width?: number, height?: number): void {
+        const renderer = this.beginRenderTarget();
+        try {
+            if (xOrClip === null) {
+                this.applyWorldClip(renderer, null);
+            } else if (typeof xOrClip === "object") {
+                this.applyWorldClip(renderer, xOrClip);
+            } else if (y !== undefined && width !== undefined && height !== undefined) {
+                this.applyWorldClip(renderer, { x: xOrClip, y, width, height });
+            } else {
+                throw new SlickException("Invalid Graphics.setWorldClip overload");
+            }
+        } finally {
+            this.endRenderTarget(renderer);
+        }
+    }
+
+    /** Java Slick2D counterpart: Graphics.getWorldClip(). */
+    public getWorldClip(): ClipRect | null {
+        return this.worldClipRecord === null ? null : { ...this.worldClipRecord };
     }
 
     /** Java Slick2D counterpart: Graphics.drawOval(float, float, float, float). */
@@ -205,7 +317,12 @@ export class Graphics {
         const start = c === undefined ? a : b;
         const end = c === undefined ? b : c;
         const points = Graphics.arcPoints(x, y, width, height, segments, start, end);
-        this.withRenderTarget(() => Renderer.getBackend().drawLineStrip(points, this.color, this.lineWidth, identityMatrix3()));
+        const renderer = this.beginRenderTarget();
+        try {
+            renderer.drawLineStrip(points, this.color, this.lineWidth, IDENTITY_TRANSFORM);
+        } finally {
+            this.endRenderTarget(renderer);
+        }
     }
 
     /** Java Slick2D counterpart: Graphics.fillOval(float, float, float, float). */
@@ -231,7 +348,12 @@ export class Graphics {
         for (let i = 0; i + 1 < boundary.length; i++) {
             triangles.push([cx, cy], boundary[i], boundary[i + 1]);
         }
-        this.withRenderTarget(() => Renderer.getBackend().fillTriangles(triangles, this.color, identityMatrix3()));
+        const renderer = this.beginRenderTarget();
+        try {
+            renderer.fillTriangles(triangles, this.color, IDENTITY_TRANSFORM);
+        } finally {
+            this.endRenderTarget(renderer);
+        }
     }
 
     /** Java Slick2D counterpart: Graphics.drawRoundRect(float, float, float, float, int). */
@@ -312,19 +434,36 @@ export class Graphics {
     public drawImage(image: Image, x: number, y: number): void;
     /** Java Slick2D counterpart: Graphics.drawImage(Image, float, float, Color). */
     public drawImage(image: Image, x: number, y: number, color: Color): void;
-    /** Java Slick2D counterpart: Graphics.drawImage(Image, float, float, float, float). */
-    public drawImage(image: Image, x: number, y: number, width: number, height: number): void;
-    /** Java Slick2D counterpart: Graphics.drawImage(Image, float, float, float, float, Color). */
-    public drawImage(image: Image, x: number, y: number, a?: number | Color, b?: number, c?: Color): void {
-        this.withRenderTarget(() => {
-            if (a instanceof Color) {
+    /** Java Slick2D counterpart: Graphics.drawImage(Image, float, float, float, float, float, float). */
+    public drawImage(image: Image, x: number, y: number, srcx: number, srcy: number, srcx2: number, srcy2: number): void;
+    /** Java Slick2D counterpart: Graphics.drawImage(Image, float, float, float, float, float, float, Color). */
+    public drawImage(image: Image, x: number, y: number, srcx: number, srcy: number, srcx2: number, srcy2: number, color: Color): void;
+    /** Java Slick2D counterpart: Graphics.drawImage(Image, float, float, float, float, float, float, float, float). */
+    public drawImage(image: Image, x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number): void;
+    /** Java Slick2D counterpart: Graphics.drawImage(Image, float, float, float, float, float, float, float, float, Color). */
+    public drawImage(image: Image, x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number, color: Color): void;
+    public drawImage(image: Image, x: number, y: number, a?: number | Color, b?: number, c?: number, d?: number, e?: number | Color, f?: number | Color, g?: Color): void {
+        const renderer = this.beginRenderTarget();
+        try {
+            if (arguments.length === 3) {
+                image.draw(x, y, Color.white);
+            } else if (arguments.length === 4 && a instanceof Color) {
                 image.draw(x, y, a);
-            } else if (typeof a === "number" && typeof b === "number") {
-                image.draw(x, y, a, b, c ?? this.color);
+            } else if (arguments.length === 7 && typeof a === "number" && typeof b === "number" && typeof c === "number" && typeof d === "number") {
+                image.draw(x, y, a, b, c, d);
+            } else if (arguments.length === 8 && typeof a === "number" && typeof b === "number" && typeof c === "number" && typeof d === "number" && e instanceof Color) {
+                image.draw(x, y, x + image.getWidth(), y + image.getHeight(), a, b, c, d, e);
+            } else if (arguments.length === 9 && typeof a === "number" && typeof b === "number" && typeof c === "number" && typeof d === "number" && typeof e === "number" && typeof f === "number") {
+                image.draw(x, y, a, b, c, d, e, f);
+            } else if (arguments.length === 10 && typeof a === "number" && typeof b === "number" && typeof c === "number" && typeof d === "number" && typeof e === "number" && typeof f === "number" && g instanceof Color) {
+                image.draw(x, y, a, b, c, d, e, f, g);
             } else {
-                image.draw(x, y, this.color);
+                throw new SlickException("Invalid Graphics.drawImage overload");
             }
-        });
+            this.color.bind();
+        } finally {
+            this.endRenderTarget(renderer);
+        }
     }
 
     /** Java Slick2D counterpart: Graphics.copyArea(Image, int, int). */
@@ -333,7 +472,12 @@ export class Graphics {
         if (!renderTarget) {
             throw new SlickException("Graphics.copyArea requires a writable Image target");
         }
-        this.withRenderTarget(() => Renderer.getBackend().copyAreaToRenderTarget(renderTarget, x, y));
+        const renderer = this.beginRenderTarget();
+        try {
+            renderer.copyAreaToRenderTarget(renderTarget, x, y);
+        } finally {
+            this.endRenderTarget(renderer);
+        }
         target.ensureInverted();
     }
 
@@ -353,7 +497,12 @@ export class Graphics {
             if (target.byteLength < width * height * 4) {
                 throw new RangeError("Byte buffer provided to get area is not big enough");
             }
-            this.withRenderTarget(() => Renderer.getBackend().readPixels(x, y, width, height, target));
+            const renderer = this.beginRenderTarget();
+            try {
+                renderer.readPixels(x, y, width, height, target);
+            } finally {
+                this.endRenderTarget(renderer);
+            }
             return;
         }
         const image = new Image(width, height);
@@ -383,7 +532,12 @@ export class Graphics {
         } else {
             throw new SlickException("Invalid Graphics.drawGradientLine overload");
         }
-        this.withRenderTarget(() => Renderer.getBackend().drawGradientLine(x1, y1, color1, x2, y2, color2, this.lineWidth, identityMatrix3()));
+        const renderer = this.beginRenderTarget();
+        try {
+            renderer.drawGradientLine(x1, y1, color1, x2, y2, color2, this.lineWidth, IDENTITY_TRANSFORM);
+        } finally {
+            this.endRenderTarget(renderer);
+        }
     }
 
     /** Java Slick2D counterpart: Graphics.pushTransform(). */
@@ -443,16 +597,59 @@ export class Graphics {
         return Math.min(Math.trunc(radius), maxRadius);
     }
 
-    private withRenderTarget<T>(callback: () => T): T {
-        const renderer = Renderer.getBackend();
-        renderer.setRenderTarget(this.renderTarget);
+    private fillPatternRect(x: number, y: number, width: number, height: number, pattern: Image, offX: number, offY: number): void {
+        const patternWidth = pattern.getWidth();
+        const patternHeight = pattern.getHeight();
+        if (patternWidth <= 0 || patternHeight <= 0) {
+            return;
+        }
+        const renderer = this.beginRenderTarget();
+        const previousWorldClip = this.worldClipRecord === null ? null : { ...this.worldClipRecord };
         try {
-            Graphics.current = this;
+            this.applyWorldClip(renderer, { x, y, width, height });
+            const cols = Math.trunc(Math.ceil(width / patternWidth)) + 2;
+            const rows = Math.trunc(Math.ceil(height / patternHeight)) + 2;
+            for (let c = 0; c < cols; c++) {
+                const drawX = c * patternWidth + x - offX;
+                for (let r = 0; r < rows; r++) {
+                    pattern.draw(drawX, r * patternHeight + y - offY);
+                }
+            }
+        } finally {
+            this.applyWorldClip(renderer, previousWorldClip);
+            this.endRenderTarget(renderer);
+        }
+    }
+
+    private applyWorldClip(renderer: WebGLRenderer, clip: ClipRect | null): void {
+        if (clip === null) {
+            this.worldClipRecord = null;
+            renderer.clearWorldClip();
+            return;
+        }
+        this.worldClipRecord = { x: clip.x, y: clip.y, width: clip.width, height: clip.height };
+        renderer.setWorldClip(clip.x, clip.y, clip.width, clip.height, IDENTITY_TRANSFORM);
+    }
+
+    private withRenderTarget<T>(callback: () => T): T {
+        const renderer = this.beginRenderTarget();
+        try {
             return callback();
         } finally {
-            if (this.renderTarget) {
-                renderer.setRenderTarget(null);
-            }
+            this.endRenderTarget(renderer);
+        }
+    }
+
+    private beginRenderTarget(): WebGLRenderer {
+        const renderer = Renderer.getBackend();
+        renderer.setRenderTarget(this.renderTarget);
+        Graphics.current = this;
+        return renderer;
+    }
+
+    private endRenderTarget(renderer: WebGLRenderer): void {
+        if (this.renderTarget) {
+            renderer.setRenderTarget(null);
         }
     }
 }

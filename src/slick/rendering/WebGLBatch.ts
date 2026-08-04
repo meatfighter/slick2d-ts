@@ -1,8 +1,8 @@
 /**
- * Internal WebGL batch placeholder.
+ * Tracks renderer batch boundaries.
  *
- * The phase-one renderer submits immediate quads, but this class preserves the
- * documented file boundary and central flush hook.
+ * The renderer owns the reusable vertex buffers; this class records whether
+ * queued work has crossed a Slick flush boundary.
  */
 export class WebGLBatch {
     private pending = false;

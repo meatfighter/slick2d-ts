@@ -1,6 +1,12 @@
 const MULTIPLIER = 0x5DEECE66Dn;
-const ADDEND = 0xBn;
 const MASK = (1n << 48n) - 1n;
+const MULTIPLIER_0 = 0xE66D;
+const MULTIPLIER_1 = 0xDEEC;
+const MULTIPLIER_2 = 0x0005;
+const ADDEND = 0x000B;
+const LIMB = 0x10000;
+const LIMB_MASK = 0xFFFF;
+const FLOAT_DIVISOR = 0x1000000;
 
 /**
  * Java counterpart: java.util.Random subset.
@@ -8,7 +14,9 @@ const MASK = (1n << 48n) - 1n;
  * Exact 48-bit LCG for deterministic seeded ports.
  */
 export class JavaRandom {
-    private seed = 0n;
+    private seed0 = 0;
+    private seed1 = 0;
+    private seed2 = 0;
 
     public constructor();
     public constructor(seed: number | bigint);
@@ -19,7 +27,10 @@ export class JavaRandom {
 
     /** Java counterpart: Random.setSeed(long). */
     public setSeed(seed: number | bigint): void {
-        this.seed = (BigInt(seed) ^ MULTIPLIER) & MASK;
+        const scrambled = (BigInt(seed) ^ MULTIPLIER) & MASK;
+        this.seed0 = Number(scrambled & 0xFFFFn);
+        this.seed1 = Number((scrambled >> 16n) & 0xFFFFn);
+        this.seed2 = Number((scrambled >> 32n) & 0xFFFFn);
     }
 
     public nextInt(): number;
@@ -29,24 +40,27 @@ export class JavaRandom {
         if (bound === undefined) {
             return this.next(32) | 0;
         }
-        if (bound <= 0) {
+        const n = bound | 0;
+        if (n <= 0) {
             throw new Error("bound must be positive");
         }
-        if ((bound & -bound) === bound) {
-            return Number((BigInt(bound) * BigInt(this.next(31))) >> 31n);
+        const bits = this.next(31);
+        if ((n & -n) === n) {
+            const power = 31 - Math.clz32(n);
+            return bits >>> (31 - power);
         }
-        while (true) {
-            const bits = this.next(31);
-            const value = bits % bound;
-            if (((bits - value + (bound - 1)) | 0) >= 0) {
-                return value;
-            }
+        let retryBits = bits;
+        let value = retryBits % n;
+        while (((retryBits - value + (n - 1)) | 0) < 0) {
+            retryBits = this.next(31);
+            value = retryBits % n;
         }
+        return value;
     }
 
     /** Java counterpart: Random.nextFloat(). */
     public nextFloat(): number {
-        return this.next(24) / (1 << 24);
+        return this.next(24) / FLOAT_DIVISOR;
     }
 
     /** Java counterpart: Random.nextBoolean(). */
@@ -55,8 +69,33 @@ export class JavaRandom {
     }
 
     private next(bits: number): number {
-        this.seed = (this.seed * MULTIPLIER + ADDEND) & MASK;
-        return Number(this.seed >> (48n - BigInt(bits)));
+        const product0 = this.seed0 * MULTIPLIER_0 + ADDEND;
+        const product1 = Math.floor(product0 / LIMB)
+            + this.seed0 * MULTIPLIER_1
+            + this.seed1 * MULTIPLIER_0;
+        const product2 = Math.floor(product1 / LIMB)
+            + this.seed0 * MULTIPLIER_2
+            + this.seed1 * MULTIPLIER_1
+            + this.seed2 * MULTIPLIER_0;
+        this.seed0 = product0 & LIMB_MASK;
+        this.seed1 = product1 & LIMB_MASK;
+        this.seed2 = product2 & LIMB_MASK;
+
+        switch (bits) {
+            case 32:
+                return this.seed2 * LIMB + this.seed1;
+            case 31:
+                return this.seed2 * 0x8000 + (this.seed1 >>> 1);
+            case 24:
+                return (this.seed2 << 8) | (this.seed1 >>> 8);
+            case 1:
+                return this.seed2 >>> 15;
+            default:
+                if (bits <= 16) {
+                    return this.seed2 >>> (16 - bits);
+                }
+                return Math.floor((this.seed2 * LIMB + this.seed1) / (2 ** (32 - bits)));
+        }
     }
 
     private static defaultSeed(): bigint {

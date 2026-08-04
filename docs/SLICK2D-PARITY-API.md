@@ -483,10 +483,11 @@ The default shader set must include:
 
 Batching rules:
 
-- Flush when the texture changes and the batch cannot add another texture.
-- Flush before changing blend mode, scissor, stencil, framebuffer, or shader.
+- Queue same-texture image and sprite draws into a reusable typed vertex buffer. Bake current transform, source UVs, tint, alpha, per-corner color, and global alpha into vertices at draw-call time.
+- Flush when the texture changes or the reusable texture batch is full.
+- Flush before solid/immediate drawing, changing blend mode, scissor, stencil, framebuffer, shader, raw texture object state, or render target.
 - Flush before `SlickCallable.enterSafeBlock`.
-- Flush before `Graphics.getArea` or any `gl.readPixels` call.
+- Flush before `Graphics.getArea`, `Graphics.copyArea`, `glCopyTexImage2D`, `glGetTexImage`, or any `gl.readPixels` call.
 - Preserve draw order exactly.
 
 Context loss rules:
@@ -504,7 +505,9 @@ export interface RenderBackend {
     beginFrame(width: number, height: number, background: Color): void;
     endFrame(): void;
     setRenderTarget(target: WebGLRenderTarget | null): void;
-    drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3): void;
+    drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors?: boolean, useCurrentColorForNullTint?: boolean): void;
+    drawImageFlash(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, tint: Color, transform: Matrix3): void;
+    drawImageWarped(image: Image, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors?: boolean, useCurrentColorForNullTint?: boolean): void;
     fillRect(x: number, y: number, width: number, height: number, color: Color, transform: Matrix3): void;
     drawLine(x1: number, y1: number, x2: number, y2: number, color: Color, width: number, transform: Matrix3): void;
     setClip(x: number, y: number, width: number, height: number): void;
@@ -529,7 +532,7 @@ Internal file responsibilities:
 ```text
 RenderBackend.ts          Shared private interface and backend options
 WebGLRenderer.ts          Owns WebGL2 context, frame lifecycle, state stacks, and draw submission
-WebGLBatch.ts             Queues textured and solid quads, preserves draw order, flushes on state changes
+WebGLBatch.ts             Tracks renderer batch dirtiness and Slick flush boundaries; reusable vertex queues live in WebGLRenderer
 WebGLTextureResource.ts   Wraps WebGLTexture, ImageBitmap/source size, UV defaults, filter, and reload data
 WebGLRenderTarget.ts      Wraps framebuffer plus texture for Image(width, height) and Graphics.getArea
 WebGLShaderProgram.ts     Compiles, links, binds, and validates shader programs
@@ -887,13 +890,17 @@ export class Image implements Renderable {
     public draw(): void;
     public draw(x: number, y: number): void;
     public draw(x: number, y: number, scale: number): void;
+    public draw(x: number, y: number, scale: number, filter: Color): void;
     public draw(x: number, y: number, filter: Color): void;
     public draw(x: number, y: number, width: number, height: number): void;
     public draw(x: number, y: number, width: number, height: number, filter: Color): void;
     public draw(x: number, y: number, srcx: number, srcy: number, srcx2: number, srcy2: number): void;
-    public draw(x: number, y: number, width: number, height: number, srcx: number, srcy: number, srcx2: number, srcy2: number): void;
+    public draw(x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number): void;
+    public draw(x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number, filter: Color): void;
     public drawCentered(x: number, y: number): void;
     public drawEmbedded(x: number, y: number, width: number, height: number): void;
+    public drawEmbedded(x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number): void;
+    public drawEmbedded(x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number, filter: Color | null): void;
     public drawSheared(x: number, y: number, hshear: number, vshear: number): void;
     public drawSheared(x: number, y: number, hshear: number, vshear: number, filter: Color): void;
     public drawFlash(x: number, y: number): void;
@@ -919,6 +926,11 @@ export class Image implements Renderable {
     public endUse(): void;
     public startUse(): void;
     public toString(): string;
+    public getTexture(): WebGLTextureResource;
+    public getTextureOffsetX(): number;
+    public getTextureOffsetY(): number;
+    public getTextureWidth(): number;
+    public getTextureHeight(): number;
     public getColor(x: number, y: number): Color;
     public isDestroyed(): boolean;
     public destroy(): void;
@@ -935,8 +947,9 @@ Implementation instructions:
 - `ArrayBuffer` and `Blob` constructors must decode the supplied bytes and register them under `ref`.
 - `Image(width, height)` creates a texture-backed render target with a framebuffer.
 - `getSubImage` returns a new `Image` view over the same source resource with a different source rectangle.
-- `copy` returns a new `Image` object sharing the source pixels but with independent alpha, rotation, filter, name, and center state.
+- `copy` must match Java Slick2D's `copy() -> getSubImage(0,0,width,height)` semantics. It shares source pixels and preserves the source rectangle/flip state, but returns a fresh draw-state object with alpha `1`, rotation `0`, no user name, no per-corner colors, and center-of-rotation at the copy's center.
 - `getScaledCopy` changes logical display width and height only. It must not change the sampled source rectangle.
+- `getTextureOffsetX/Y` and `getTextureWidth/Height` return normalized Slick texture coordinates. Flipped copies must return the Java sign convention: offset moves to the far edge and width/height becomes negative on the flipped axis.
 - `ensureInverted` must be idempotent.
 - `getColor` must sample cached texture pixel data, not the current framebuffer.
 - `setColor` and `setImageColor` must render with Slick per-corner color behavior through WebGL vertex colors.
@@ -949,10 +962,22 @@ Implementation instructions:
 - `flushPixelData()` drops cached CPU pixel data. When no CPU-side pixel cache exists, it returns immediately and records no state change.
 - `drawSheared` draws a textured WebGL quad with corners `(x,y)`, `(x + width,y + vshear)`, `(x + width + hshear,y + height + vshear)`, and `(x + hshear,y + height)`, preserving source rectangle, flips, tint, alpha, corner colors, and image rotation.
 - `drawWarped` draws the image as one textured WebGL quad using the Java argument order: top-left, top-right, bottom-right, bottom-left. It must preserve source rectangle, flips, alpha, corner colors, and image rotation.
+- `drawFlash` must use the WebGL flash/silhouette shader path, not ordinary tint drawing. It samples source alpha but replaces sampled RGB with the flash color, preserving source rectangle, flips, rotation, and color alpha. Java Slick2D's `drawFlash` source path does not multiply by the image's stored `alpha` field.
+- `draw(x,y,scale,filter)` must match Java by drawing at `getWidth() * scale` and `getHeight() * scale` using the supplied color filter.
+- Source-rectangle `draw(...)` overloads must use Java's embedded path: they preserve image alpha and rotation but do not apply per-corner image colors.
+- `drawEmbedded(x,y,width,height)` draws a full-image quad in the active transform without image rotation and without stored image alpha. If the image has per-corner colors, those colors are emitted as the vertex colors. If the image has no per-corner colors, the no-filter embedded draw inherits the current SGL color, matching Java's `startUse()`/`drawEmbedded()` immediate-mode behavior.
+- Source-rectangle `drawEmbedded(...)` overloads draw in the active transform without image rotation, without stored image alpha, and without per-corner colors. The no-filter 8-argument overload delegates with `null`, matching Java, so the backend must use the current SGL color for `null` tint on this embedded path only.
 
 ### `slick.Graphics`
 
 ```ts
+export type ClipRect = {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+};
+
 export class Graphics {
     public static readonly MODE_NORMAL: number;
     public static readonly MODE_ALPHA_MAP: number;
@@ -982,11 +1007,14 @@ export class Graphics {
     public drawLine(x1: number, y1: number, x2: number, y2: number): void;
     public drawRect(x: number, y: number, width: number, height: number): void;
     public fillRect(x: number, y: number, width: number, height: number): void;
-    public fillRect(x: number, y: number, width: number, height: number, fill: unknown): void;
+    public fillRect(x: number, y: number, width: number, height: number, pattern: Image, offX: number, offY: number): void;
     public clearClip(): void;
     public setClip(x: number, y: number, width: number, height: number): void;
+    public getClip(): ClipRect | null;
     public clearWorldClip(): void;
     public setWorldClip(x: number, y: number, width: number, height: number): void;
+    public setWorldClip(clip: ClipRect | null): void;
+    public getWorldClip(): ClipRect | null;
     public drawOval(x: number, y: number, width: number, height: number): void;
     public drawOval(x: number, y: number, width: number, height: number, segments: number): void;
     public drawArc(x: number, y: number, width: number, height: number, start: number, end: number): void;
@@ -1007,8 +1035,10 @@ export class Graphics {
     public drawString(text: string, x: number, y: number): void;
     public drawImage(image: Image, x: number, y: number): void;
     public drawImage(image: Image, x: number, y: number, color: Color): void;
-    public drawImage(image: Image, x: number, y: number, width: number, height: number): void;
-    public drawImage(image: Image, x: number, y: number, width: number, height: number, color: Color): void;
+    public drawImage(image: Image, x: number, y: number, srcx: number, srcy: number, srcx2: number, srcy2: number): void;
+    public drawImage(image: Image, x: number, y: number, srcx: number, srcy: number, srcx2: number, srcy2: number, color: Color): void;
+    public drawImage(image: Image, x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number): void;
+    public drawImage(image: Image, x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number, color: Color): void;
     public copyArea(target: Image, x: number, y: number): void;
     public getPixel(x: number, y: number): Color;
     public getArea(x: number, y: number, width: number, height: number): Image;
@@ -1026,11 +1056,16 @@ Implementation instructions:
 - Required by the games: `clearClip`, `clearWorldClip`, `drawImage`, `drawLine`, `drawRect`, `fillRect`, `flush`, `getArea`, `getColor`, `setClip`, `setColor`, and `setWorldClip`.
 - Maintain current color as a copy so later mutation of the caller's `Color` does not unexpectedly change drawing state.
 - `fillRect` and `drawRect` use the current `Color`.
-- `drawImage` delegates to image drawing while applying the current transform, clip, alpha, and color filter.
+- `fillRect(x,y,width,height,pattern,offX,offY)` tiles the supplied `Image` exactly like Java: `ceil(width / pattern.getWidth()) + 2` columns and `ceil(height / pattern.getHeight()) + 2` rows, drawing at `c * patternWidth + x - offX` and `r * patternHeight + y - offY`, clipped to the requested world rectangle, then restoring the previous world clip.
+- `drawImage(image,x,y)` delegates to `drawImage(image,x,y,Color.white)` and must not use the current `Graphics` color as an implicit tint.
+- `drawImage` must implement Java's source-rectangle and destination/source-rectangle overloads by arity. The previous TS-only `drawImage(image,x,y,width,height)` convenience shape is not a Java `Graphics` overload and must not be part of the parity facade.
 - `setClip` clips in container/screen coordinates.
 - `setWorldClip` clips in current world coordinates and must be affected by the active transform.
+- `getClip` and `getWorldClip` return the last requested clip rectangle or `null`, matching Java's record-returning accessors. Return a copy so callers cannot mutate internal clip records.
 - `clearClip` removes the screen clip.
 - `clearWorldClip` removes the world clip.
+- `setDrawMode` must apply Java Slick2D's WebGL state: normal uses `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`; alpha-map disables blending and masks RGB; alpha-blend uses `DST_ALPHA, ONE_MINUS_DST_ALPHA` and masks alpha; color-multiply uses `ONE_MINUS_SRC_COLOR, SRC_COLOR`; add uses `ONE, ONE`; screen uses `ONE, ONE_MINUS_SRC_COLOR`.
+- `clearAlphaMap` must switch to alpha-map mode, load identity transform, fill the full context with transparent color, and restore the previous draw mode. Java Slick2D's source leaves the current color as the transparent clear color after this call.
 - `getArea` returns an offscreen `Image` containing pixels copied from the current render target.
 - `getArea(..., target)` writes RGBA bytes into the supplied buffer for cursor compatibility code.
 - `copyArea(target, x, y)` copies from the active framebuffer into a writable `Image(width,height)` render-target texture using `gl.copyTexSubImage2D`, then calls `target.ensureInverted()`, matching Slick's copied texture orientation behavior.
@@ -1038,7 +1073,7 @@ Implementation instructions:
 - Ovals and arcs use Slick's default `50` segments unless an explicit segment count is supplied. Arc point generation follows Slick's `while (end < start) end += 360`, integer-degree stepping, and `FastTrig` sine/cosine calls.
 - Filled arcs are triangulated as a center-origin fan. Rounded rectangles follow Slick's straight-edge plus quarter-arc composition and clamp the corner radius to half the smaller dimension.
 - `drawGradientLine` uses WebGL per-vertex colors on the thick-line quad so colors interpolate from the first endpoint to the second endpoint.
-- The `fillRect(..., ShapeFill)` overload remains explicitly unsupported because the library does not yet include Slick's shape/gradient-fill hierarchy and the three audited games do not call that overload.
+- Slick's separate `ShapeFill` hierarchy is still outside this library's current public surface. Do not confuse it with Java's implemented patterned rectangle overload.
 
 ### `slick.Input`
 
@@ -2617,11 +2652,12 @@ Implementation instructions:
 
 - Java counterpart: `java.util.Random` methods used by the source games.
 - Required because all three source games use `Random`, and two ports reset seeded instances with `0xCAFEBABE` or `0xDEADBEEF` for deterministic behavior.
-- Use Java's exact 48-bit linear congruential generator: multiplier `0x5DEECE66D`, addend `0xB`, mask `(1n << 48n) - 1n`.
-- `setSeed(seed)` stores `(BigInt(seed) ^ 0x5DEECE66Dn) & mask`.
-- Private `next(bits)` advances `seed = (seed * multiplier + addend) & mask`, then returns the high `bits` bits as a non-negative `number`.
+- Use Java's exact 48-bit linear congruential generator: multiplier `0x5DEECE66D`, addend `0xB`, and mask `(1 << 48) - 1`.
+- Store the internal seed as three unsigned 16-bit numeric limbs: low, middle, and high. `next(bits)`, `nextInt(bound)`, `nextFloat()`, and `nextBoolean()` are gameplay hot paths and must not allocate temporary objects or perform BigInt arithmetic.
+- `setSeed(seed)` is an API boundary and may use BigInt to compute `(seed ^ 0x5DEECE66D) & mask`, then split the result into the three 16-bit limbs.
+- Private `next(bits)` advances the 48-bit seed with numeric 16-bit limb multiplication/carry and returns the high `bits` bits as a non-negative `number`.
 - `nextInt()` returns the signed 32-bit result of `next(32)`.
-- `nextInt(bound)` throws `Error` when `bound <= 0`. For powers of two it returns `Number((BigInt(bound) * BigInt(next(31))) >> 31n)`. For other bounds it repeats Java's rejection loop: read `bits = next(31)`, set `value = bits % bound`, retry while the signed 32-bit value of `bits - value + (bound - 1)` is less than `0`, then return `value`.
+- `nextInt(bound)` throws `Error` when `bound <= 0`. For powers of two, use the Java fast path without BigInt by returning the high bits equivalent of `(bound * next(31)) >> 31`. For other bounds, repeat Java's rejection loop: read `bits = next(31)`, set `value = bits % bound`, retry while the signed 32-bit value of `bits - value + (bound - 1)` is less than `0`, then return `value`.
 - `nextFloat()` returns `next(24) / (1 << 24)`.
 - `nextBoolean()` returns `next(1) !== 0`.
 - Constructor without a seed uses `(BigInt(Date.now()) << 16n) ^ BigInt(Math.floor(performance.now() * 1000))` when `performance.now()` exists, or `BigInt(Date.now())` otherwise, then delegates to `setSeed`.

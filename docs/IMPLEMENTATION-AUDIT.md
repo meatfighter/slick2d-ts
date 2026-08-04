@@ -248,6 +248,46 @@ The Jackal re-audit pass 5 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDI
 - `ResourceLoader.clearFailures()` now clears failed fetch records, tracked pending handles, and retained tracked decode/preparation errors without removing successfully preloaded bytes, so a PWA reinit can recover from stale failures without discarding the manifest preload cache.
 - Regression tests now cover texture-loader disposal and the `reinit()` cleanup-before-init ordering, stale failure clearing, audio-handle clearing, volume reset, graphics/default-font recreation, frame-state reset, and RAF rescheduling.
 
+The random performance handoff in `C:\js-projects\jackal-js\SLICK2D_TS_RANDOM_PERFORMANCE_ISSUE_2026-08-04.md` was checked against `JavaRandom` and Jackal's heavy gameplay use of `java.util.Random` parity. Confirmed browser-relevant hot-path performance bug fixed in this pass:
+
+- `JavaRandom` now stores Java's 48-bit LCG seed as three numeric 16-bit limbs instead of a single BigInt.
+- `next(bits)`, `nextInt()`, `nextInt(bound)`, `nextFloat()`, and `nextBoolean()` no longer perform BigInt arithmetic or allocate temporary objects in the hot path.
+- Java behavior is preserved: `setSeed(...)` still applies `(seed ^ 0x5DEECE66D) & ((1 << 48) - 1)` at the API boundary, `nextInt(bound)` keeps Java's power-of-two fast path and signed-overflow rejection loop, and unbounded `nextInt()` still returns the signed 32-bit `next(32)` value.
+- Regression tests now cover Java vectors for unbounded ints, bounded ints, rejection-loop stress bound `1073741825`, exact `nextFloat()` values, booleans, and nonpositive-bound errors.
+- `BinaryReader.readLong()` intentionally remains BigInt-based because Jackal DAT direction data uses Java signed `long` bitfields and needs exact 64-bit parity.
+
+The performance/parity audit on 2026-08-04 was checked against Java Slick2D `Image`, `Graphics`, `Input`, `Music`, `SoundStore`, `SGL`, the WebGL renderer, and the helper usages in the three source games. Confirmed browser-relevant efficiency and parity fixes added in this pass:
+
+- `WebGLRenderer` now batches same-texture sprite/image quads into a reusable `Float32Array` and emits them at Slick flush boundaries, texture changes, render-target changes, clip changes, readbacks, clears, and solid/immediate drawing boundaries. Tint, alpha, corner colors, transforms, and global alpha are baked per vertex at queue time so later browser state changes do not rewrite the Java draw order.
+- `WebGLRenderer` now reuses typed vertex buffers for solid quads, gradient lines, and immediate-mode geometry instead of allocating `Float32Array`, point arrays, and mapped vertex objects per draw.
+- Renderer transforms now mutate the current matrix and pool pushed matrices; `translate`, `scale`, `rotate`, `glLoadIdentity`, `glLoadMatrix`, `setWorldClip`, and `glGetFloat(GL_MODELVIEW_MATRIX, ...)` no longer allocate short-lived matrices or point arrays on the normal path.
+- `WebGLShaderProgram` now caches attribute and uniform locations after the first lookup, avoiding repeated WebGL reflection calls during sprite-heavy rendering.
+- `Graphics` and `Image` now reuse an internal identity transform for draw delegation, and hot `Graphics` methods use explicit render-target enter/exit calls instead of allocating callback closures.
+- `Input` controller polling now reuses its seen/stale collections, avoids cloning `navigator.getGamepads()`, uses numeric controller keys instead of string keys, and replaces per-frame `filter`, `some`, `forEach`, and `Array.from` work with loops.
+- `Music.poll`, `SoundStore.clear`, `SoundStore.setMusicOn`, and `SoundStore.isMusicPlaying` no longer allocate arrays just to iterate active handles.
+- `Image.copy()` now matches Java Slick2D's subimage-copy semantics: the copy shares pixels/source rectangle but resets alpha, rotation, user name, per-corner colors, and center state. `getScaledCopy(...)` inherits that reset through `copy()`.
+- `Image.getTextureOffsetX/Y()` and `Image.getTextureWidth/Height()` are now implemented with normalized Slick texture-coordinate and flipped-axis sign parity.
+- Regression tests now cover Java `Image.copy()` draw-state reset behavior, texture-coordinate accessors for subimages and flipped copies, and WebGL same-texture batching plus forced flush ordering before solid drawing.
+- Remaining API-surface differences were checked against the three game source trees. The unimplemented `Graphics.draw/fill` shape hierarchy, `drawAnimation`, and `texture` methods were not found in the audited game calls and remain outside the current three-port scope.
+
+The Jackal current-bug inventory in `C:\js-projects\jackal-js\SLICK2D_TS_CURRENT_BUGS_2026-08-04.md` was checked after the performance audit. It reported no Jackal-blocking `slick2d-ts` defect, but identified broader Slick2D parity gaps. Confirmed repairs added in this pass:
+
+- `Graphics.drawImage(...)` now matches Java arity: no-color drawing uses `Color.white`, explicit color filters are preserved, source-rectangle overloads are implemented, destination/source-rectangle overloads are implemented, and the old TS-only width/height interpretation is removed from the `Graphics` facade.
+- `Graphics.fillRect(x,y,width,height,pattern,offX,offY)` now implements Java patterned tiling with world-clip confinement and previous-world-clip restoration.
+- `Graphics.getClip()`, `Graphics.getWorldClip()`, and `setWorldClip(clip|null)` now expose the Java-style clip record API using `ClipRect` copies.
+- `Image.drawFlash(...)` now routes through a WebGL flash/silhouette shader mode instead of ordinary tint drawing. The shader uses sampled texture alpha and flash color RGB/alpha, and the batch splits when flash mode changes.
+- `Graphics.setDrawMode(...)` now applies Java blend/color-mask state for normal, alpha-map, alpha-blend, color-multiply, add, and screen modes.
+- `Graphics.clearAlphaMap()` now performs Java's alpha-map clear sequence and restores draw mode. The Java source leaves the current color as the transparent clear color after this call, and the TypeScript tests document that source-accurate behavior.
+- Regression tests now cover these repairs: Java `Graphics.drawImage` overload arity/default tint, patterned `fillRect`, WebGL flash shader state, draw-mode WebGL state, and `clearAlphaMap`.
+
+The follow-up post-repair bug inventory in `C:\js-projects\jackal-js\SLICK2D_TS_CURRENT_BUGS_2026-08-04.md` found three remaining full-library items. Confirmed repairs added in this pass:
+
+- `Image.draw(x,y,scale,filter)` now exists as a public overload and dispatches without a rest array. It scales by the image's current logical width and height and preserves the supplied filter.
+- `Image.drawEmbedded(...)` now includes Java's full-image and source-rectangle overloads. Embedded drawing no longer routes through ordinary `draw(...)`, so it does not apply image rotation or stored image alpha. The source-rectangle embedded path also suppresses per-corner image colors, matching Java's separate embedded vertex path.
+- Internal WebGL image draw calls now accept `useCornerColors` and embedded-null-tint current-color flags so full-image draws keep Slick corner colors, source-rectangle `Image.draw(...)` and source-rectangle `drawEmbedded(...)` match Java's no-corner-color behavior, and embedded no-filter draws can inherit the current SGL color without changing ordinary `Image.draw(...)` white-filter semantics.
+- `Graphics.drawImage(...)` now uses fixed optional parameters and `arguments.length` for overload dispatch, removing the per-call rest-array allocation while preserving Java arities and keeping the non-Java width/height convenience overload out of the `Graphics` facade.
+- Regression tests now cover scale-plus-filter image drawing, source-rectangle corner-color behavior, embedded source-rectangle drawing without alpha/rotation, embedded null-tint current-color behavior, and `startUse`/`endUse` lifecycle errors.
+
 Claims intentionally not converted into desktop-exact behavior:
 
 - Native applet, AWT/Swing, LWJGL Display, filesystem, classpath, native OpenAL buffers/sources, and blocking timing behavior remain browser shims.
@@ -257,7 +297,7 @@ Claims intentionally not converted into desktop-exact behavior:
 - Fullscreen and pointer lock remain asynchronous browser APIs. The library updates its canvas and WebGL dimensions when the promise/events settle; game ports that immediately call scale recalculation after `setDisplayMode` should either await the returned promise or also recalculate from `resize`/`fullscreenchange`. Java-style ignored fullscreen calls are supported because the container observes and reports rejected fullscreen promises internally.
 - Browser-forced fullscreen exits are handled by the library by restoring the last known non-fullscreen Slick mode. A port may still add game-local UI reactions, but it must not compensate by adding title-specific fullscreen state fixes to `slick2d-ts`.
 - Shape rendering, warped/sheared image rendering, `Graphics.copyArea`, `Graphics.getArea(...): Image`, and gradient-line color interpolation are now implemented through the WebGL2 renderer even though the three audited game rendering paths do not call most of those APIs.
-- `Graphics.fillRect(..., ShapeFill)` remains explicitly unsupported because the library does not include Slick's shape-fill hierarchy and none of the three audited games call it.
+- Slick's `ShapeFill` hierarchy remains outside this library's current public surface, but this is separate from Java's patterned `fillRect(..., Image, offX, offY)` overload, which is now implemented.
 - Raw SGL texture-name methods now maintain a simple WebGL texture ID map. Fixed-function calls without a WebGL2 equivalent, such as clip planes, texture-env state, point-size state, mirror-clamp extension checks, and secondary color, remain compatibility shims and are not used by the audited games.
 - `Sound.playAt(...)` now routes coordinates through a Web Audio `PannerNode` when available; the audited games do not call it, but it no longer ignores `x/y/z` on capable browsers.
 

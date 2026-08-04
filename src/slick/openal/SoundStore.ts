@@ -62,7 +62,7 @@ export class SoundStore {
 
     /** Java Slick2D counterpart: SoundStore.clear(). */
     public clear(): void {
-        for (const handle of Array.from(this.activeHandles)) {
+        for (const handle of this.activeHandles) {
             handle.stop();
         }
         this.activeHandles.clear();
@@ -109,7 +109,7 @@ export class SoundStore {
             return;
         }
         this.musicEnabled = music;
-        for (const handle of Array.from(this.musicHandles)) {
+        for (const handle of this.musicHandles) {
             if (music) {
                 handle.resume?.();
             } else {
@@ -198,7 +198,12 @@ export class SoundStore {
 
     /** Java Slick2D counterpart: SoundStore.isMusicPlaying(). */
     public isMusicPlaying(): boolean {
-        return Array.from(this.musicHandles).some((handle) => handle.playing());
+        for (const handle of this.musicHandles) {
+            if (handle.playing()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Java Slick2D counterpart: SoundStore.stopSoundEffect(int). */

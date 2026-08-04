@@ -78,7 +78,7 @@ export class Music {
         if (Music.currentMusic && Music.currentMusic.playingFlag) {
             Music.currentMusic.poll(delta);
         }
-        for (const music of Array.from(Music.active)) {
+        for (const music of Music.active) {
             if (music !== Music.currentMusic) {
                 music.poll(delta);
             }

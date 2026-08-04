@@ -9,6 +9,7 @@ import { Renderer } from "./opengl/renderer/Renderer.js";
 import type { ImageData as SlickImageData } from "./opengl/ImageData.js";
 
 type CanvasSource = HTMLCanvasElement | OffscreenCanvas;
+const IDENTITY_TRANSFORM = identityMatrix3();
 
 function createCanvasSource(width: number, height: number): CanvasSource {
     if (typeof OffscreenCanvas !== "undefined") {
@@ -83,6 +84,7 @@ export class Image implements Renderable {
     private imageName: string | null = null;
     private destroyed = false;
     private cornerColors = new Map<number, Color>();
+    private cornerColorScratch: [Color, Color, Color, Color] = [Color.white, Color.white, Color.white, Color.white];
 
     public constructor(ref: string);
     public constructor(ref: string, trans: Color);
@@ -187,6 +189,7 @@ export class Image implements Renderable {
         image.imageName = null;
         image.destroyed = false;
         image.cornerColors = new Map<number, Color>();
+        image.cornerColorScratch = [Color.white, Color.white, Color.white, Color.white];
         return image;
     }
 
@@ -257,6 +260,8 @@ export class Image implements Renderable {
     public draw(x: number, y: number): void;
     /** Java Slick2D counterpart: Image.draw(float, float, float). */
     public draw(x: number, y: number, scale: number): void;
+    /** Java Slick2D counterpart: Image.draw(float, float, float, Color). */
+    public draw(x: number, y: number, scale: number, filter: Color): void;
     /** Java Slick2D counterpart: Image.draw(float, float, Color). */
     public draw(x: number, y: number, filter: Color): void;
     /** Java Slick2D counterpart: Image.draw(float, float, float, float). */
@@ -268,7 +273,8 @@ export class Image implements Renderable {
     /** Java Slick2D counterpart: Image.draw(float, float, float, float, float, float, float, float). */
     public draw(x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number): void;
     /** Java Slick2D counterpart: Image.draw(float, float, float, float, float, float, float, float, Color). */
-    public draw(x?: number, y?: number, a?: number | Color, b?: number, c?: number | Color, d?: number, e?: number, f?: number, g?: Color): void {
+    public draw(x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number, filter: Color): void;
+    public draw(x?: number, y?: number, a?: number | Color, b?: number | Color, c?: number | Color, d?: number, e?: number, f?: number, g?: Color): void {
         this.throwIfDestroyed();
         const drawX = x ?? 0;
         const drawY = y ?? 0;
@@ -285,6 +291,10 @@ export class Image implements Renderable {
         } else if (typeof a === "number" && b === undefined) {
             drawW = this.getWidth() * a;
             drawH = this.getHeight() * a;
+        } else if (typeof a === "number" && b instanceof Color) {
+            drawW = this.getWidth() * a;
+            drawH = this.getHeight() * a;
+            tint = b;
         } else if (typeof a === "number" && typeof b === "number" && c instanceof Color) {
             drawW = a;
             drawH = b;
@@ -297,6 +307,8 @@ export class Image implements Renderable {
             srcY = this.sourceY + b;
             srcW = c - a;
             srcH = d - b;
+            this.drawInternal(drawX, drawY, drawW, drawH, srcX, srcY, srcW, srcH, tint, false);
+            return;
         } else if (typeof a === "number" && typeof b === "number" && typeof c === "number" && typeof d === "number" && typeof e === "number" && typeof f === "number") {
             drawW = a - drawX;
             drawH = b - drawY;
@@ -305,6 +317,8 @@ export class Image implements Renderable {
             srcW = e - c;
             srcH = f - d;
             tint = g ?? null;
+            this.drawInternal(drawX, drawY, drawW, drawH, srcX, srcY, srcW, srcH, tint, false);
+            return;
         }
 
         this.drawInternal(drawX, drawY, drawW, drawH, srcX, srcY, srcW, srcH, tint);
@@ -316,8 +330,17 @@ export class Image implements Renderable {
     }
 
     /** Java Slick2D counterpart: Image.drawEmbedded(float, float, float, float). */
-    public drawEmbedded(x: number, y: number, width: number, height: number): void {
-        this.draw(x, y, width, height);
+    public drawEmbedded(x: number, y: number, width: number, height: number): void;
+    /** Java Slick2D counterpart: Image.drawEmbedded(float, float, float, float, float, float, float, float). */
+    public drawEmbedded(x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number): void;
+    /** Java Slick2D counterpart: Image.drawEmbedded(float, float, float, float, float, float, float, float, Color). */
+    public drawEmbedded(x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number, filter: Color | null): void;
+    public drawEmbedded(x: number, y: number, a: number, b: number, c?: number, d?: number, e?: number, f?: number, g: Color | null = null): void {
+        if (c === undefined || d === undefined || e === undefined || f === undefined) {
+            this.drawEmbeddedInternal(x, y, x + a, y + b, 0, 0, this.getWidth(), this.getHeight(), null, true);
+            return;
+        }
+        this.drawEmbeddedInternal(x, y, a, b, c, d, e, f, g, false);
     }
 
     /** Java Slick2D counterpart: Image.drawSheared(float, float, float, float). */
@@ -342,7 +365,7 @@ export class Image implements Renderable {
     public drawFlash(x: number, y: number, width: number, height: number): void;
     /** Java Slick2D counterpart: Image.drawFlash(float, float, float, float, Color). */
     public drawFlash(x: number, y: number, width?: number, height?: number, col: Color = Color.white): void {
-        this.draw(x, y, width ?? this.getWidth(), height ?? this.getHeight(), col);
+        this.drawFlashInternal(x, y, width ?? this.getWidth(), height ?? this.getHeight(), col);
     }
 
     /** Java Slick2D counterpart: Image.setCenterOfRotation(float, float). */
@@ -417,15 +440,7 @@ export class Image implements Renderable {
 
     /** Java Slick2D counterpart: Image.copy(). */
     public copy(): Image {
-        const copy = Image.fromShared(this.textureResource, this.sourceX, this.sourceY, this.getSourceWidth(), this.getSourceHeight(), this.flipHorizontal, this.flipVertical, this.getWidth(), this.getHeight(), this.inverted);
-        copy.alpha = this.alpha;
-        copy.rotation = this.rotation;
-        copy.centerX = this.centerX;
-        copy.centerY = this.centerY;
-        copy.centerSet = this.centerSet;
-        copy.imageName = this.imageName;
-        copy.cornerColors = new Map(Array.from(this.cornerColors.entries()).map(([key, value]) => [key, value.copy()]));
-        return copy;
+        return Image.fromShared(this.textureResource, this.sourceX, this.sourceY, this.getSourceWidth(), this.getSourceHeight(), this.flipHorizontal, this.flipVertical, this.getWidth(), this.getHeight(), this.inverted);
     }
 
     /** Java Slick2D counterpart: Image.getScaledCopy(float). */
@@ -490,6 +505,30 @@ export class Image implements Renderable {
         return this.textureResource;
     }
 
+    /** Java Slick2D counterpart: Image.getTextureOffsetX(). */
+    public getTextureOffsetX(): number {
+        const width = this.textureResource.width || 1;
+        return (this.flipHorizontal ? this.sourceX + this.getSourceWidth() : this.sourceX) / width;
+    }
+
+    /** Java Slick2D counterpart: Image.getTextureOffsetY(). */
+    public getTextureOffsetY(): number {
+        const height = this.textureResource.height || 1;
+        return (this.flipVertical ? this.sourceY + this.getSourceHeight() : this.sourceY) / height;
+    }
+
+    /** Java Slick2D counterpart: Image.getTextureWidth(). */
+    public getTextureWidth(): number {
+        const width = this.textureResource.width || 1;
+        return (this.flipHorizontal ? -this.getSourceWidth() : this.getSourceWidth()) / width;
+    }
+
+    /** Java Slick2D counterpart: Image.getTextureHeight(). */
+    public getTextureHeight(): number {
+        const height = this.textureResource.height || 1;
+        return (this.flipVertical ? -this.getSourceHeight() : this.getSourceHeight()) / height;
+    }
+
     /** Java Slick2D counterpart: Image.setTexture(Texture). */
     public setTexture(texture: WebGLTextureResource): void {
         this.textureResource = texture;
@@ -540,15 +579,14 @@ export class Image implements Renderable {
         if (this.cornerColors.size === 0) {
             return null;
         }
-        return [
-            this.cornerColors.get(Image.TOP_LEFT) ?? Color.white,
-            this.cornerColors.get(Image.TOP_RIGHT) ?? Color.white,
-            this.cornerColors.get(Image.BOTTOM_RIGHT) ?? Color.white,
-            this.cornerColors.get(Image.BOTTOM_LEFT) ?? Color.white
-        ];
+        this.cornerColorScratch[0] = this.cornerColors.get(Image.TOP_LEFT) ?? Color.white;
+        this.cornerColorScratch[1] = this.cornerColors.get(Image.TOP_RIGHT) ?? Color.white;
+        this.cornerColorScratch[2] = this.cornerColors.get(Image.BOTTOM_RIGHT) ?? Color.white;
+        this.cornerColorScratch[3] = this.cornerColors.get(Image.BOTTOM_LEFT) ?? Color.white;
+        return this.cornerColorScratch;
     }
 
-    private drawInternal(x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, tint: Color | null): void {
+    private drawInternal(x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, tint: Color | null, useCornerColors: boolean = true): void {
         const renderer = Renderer.getBackend();
         const scaleX = width / (this.getWidth() || 1);
         const scaleY = height / (this.getHeight() || 1);
@@ -562,8 +600,25 @@ export class Image implements Renderable {
         const effectiveSrcY = this.flipVertical ? srcY + srcHeight : srcY;
         const effectiveSrcW = this.flipHorizontal ? -srcWidth : srcWidth;
         const effectiveSrcH = this.flipVertical ? -srcHeight : srcHeight;
-        renderer.drawImage(this, x, y, width, height, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, identityMatrix3());
+        renderer.drawImage(this, x, y, width, height, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, IDENTITY_TRANSFORM, useCornerColors);
         renderer.popTransform();
+    }
+
+    private drawEmbeddedInternal(x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number, tint: Color | null, useCornerColors: boolean): void {
+        this.throwIfDestroyed();
+        const imageWidth = this.getWidth() || 1;
+        const imageHeight = this.getHeight() || 1;
+        const srcWidth = this.getSourceWidth();
+        const srcHeight = this.getSourceHeight();
+        const effectiveSrcX = this.flipHorizontal ? this.sourceX + srcWidth : this.sourceX;
+        const effectiveSrcY = this.flipVertical ? this.sourceY + srcHeight : this.sourceY;
+        const effectiveSrcW = this.flipHorizontal ? -srcWidth : srcWidth;
+        const effectiveSrcH = this.flipVertical ? -srcHeight : srcHeight;
+        const embeddedSrcX = effectiveSrcX + srcx / imageWidth * effectiveSrcW;
+        const embeddedSrcY = effectiveSrcY + srcy / imageHeight * effectiveSrcH;
+        const embeddedSrcW = (srcx2 - srcx) / imageWidth * effectiveSrcW;
+        const embeddedSrcH = (srcy2 - srcy) / imageHeight * effectiveSrcH;
+        Renderer.getBackend().drawImage(this, x, y, x2 - x, y2 - y, embeddedSrcX, embeddedSrcY, embeddedSrcW, embeddedSrcH, 1, tint, IDENTITY_TRANSFORM, useCornerColors, tint === null);
     }
 
     private drawWarpedInternal(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, tint: Color | null): void {
@@ -579,7 +634,28 @@ export class Image implements Renderable {
         const effectiveSrcY = this.flipVertical ? this.sourceY + srcHeight : this.sourceY;
         const effectiveSrcW = this.flipHorizontal ? -srcWidth : srcWidth;
         const effectiveSrcH = this.flipVertical ? -srcHeight : srcHeight;
-        renderer.drawImageWarped(this, x1, y1, x2, y2, x3, y3, x4, y4, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, identityMatrix3());
+        renderer.drawImageWarped(this, x1, y1, x2, y2, x3, y3, x4, y4, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, IDENTITY_TRANSFORM);
+        renderer.popTransform();
+    }
+
+    private drawFlashInternal(x: number, y: number, width: number, height: number, tint: Color): void {
+        this.throwIfDestroyed();
+        const renderer = Renderer.getBackend();
+        const scaleX = width / (this.getWidth() || 1);
+        const scaleY = height / (this.getHeight() || 1);
+        const centerX = x + this.getCenterOfRotationX() * scaleX;
+        const centerY = y + this.getCenterOfRotationY() * scaleY;
+        renderer.pushTransform();
+        if (this.rotation !== 0) {
+            renderer.rotate(centerX, centerY, this.rotation);
+        }
+        const srcWidth = this.getSourceWidth();
+        const srcHeight = this.getSourceHeight();
+        const effectiveSrcX = this.flipHorizontal ? this.sourceX + srcWidth : this.sourceX;
+        const effectiveSrcY = this.flipVertical ? this.sourceY + srcHeight : this.sourceY;
+        const effectiveSrcW = this.flipHorizontal ? -srcWidth : srcWidth;
+        const effectiveSrcH = this.flipVertical ? -srcHeight : srcHeight;
+        renderer.drawImageFlash(this, x, y, width, height, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, tint, IDENTITY_TRANSFORM);
         renderer.popTransform();
     }
 
