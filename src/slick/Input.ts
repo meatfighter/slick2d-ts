@@ -147,6 +147,13 @@ export class Input {
     public static readonly KEY_LALT = Input.KEY_LMENU;
     public static readonly KEY_RALT = Input.KEY_RMENU;
 
+    private static readonly POV_HAT_AXIS = 9;
+    private static readonly POV_HAT_TOLERANCE = 0.04;
+    private static readonly POV_HAT_UP = [-1, -5 / 7, 1];
+    private static readonly POV_HAT_RIGHT = [-5 / 7, -3 / 7, -1 / 7];
+    private static readonly POV_HAT_DOWN = [-1 / 7, 1 / 7, 3 / 7];
+    private static readonly POV_HAT_LEFT = [3 / 7, 5 / 7, 1];
+
     private static controllersDisabled = false;
     private readonly downKeys = new Set<number>();
     private readonly pressedKeys = new Set<number>();
@@ -868,19 +875,33 @@ export class Input {
     }
 
     private static isGamepadLeft(gamepad: Gamepad): boolean {
-        return (gamepad.axes[0] ?? 0) < -0.5 || gamepad.buttons[14]?.pressed === true;
+        return (gamepad.axes[0] ?? 0) < -0.5
+            || gamepad.buttons[14]?.pressed === true
+            || Input.isGamepadPovHat(gamepad, Input.POV_HAT_LEFT);
     }
 
     private static isGamepadRight(gamepad: Gamepad): boolean {
-        return (gamepad.axes[0] ?? 0) > 0.5 || gamepad.buttons[15]?.pressed === true;
+        return (gamepad.axes[0] ?? 0) > 0.5
+            || gamepad.buttons[15]?.pressed === true
+            || Input.isGamepadPovHat(gamepad, Input.POV_HAT_RIGHT);
     }
 
     private static isGamepadUp(gamepad: Gamepad): boolean {
-        return (gamepad.axes[1] ?? 0) < -0.5 || gamepad.buttons[12]?.pressed === true;
+        return (gamepad.axes[1] ?? 0) < -0.5
+            || gamepad.buttons[12]?.pressed === true
+            || Input.isGamepadPovHat(gamepad, Input.POV_HAT_UP);
     }
 
     private static isGamepadDown(gamepad: Gamepad): boolean {
-        return (gamepad.axes[1] ?? 0) > 0.5 || gamepad.buttons[13]?.pressed === true;
+        return (gamepad.axes[1] ?? 0) > 0.5
+            || gamepad.buttons[13]?.pressed === true
+            || Input.isGamepadPovHat(gamepad, Input.POV_HAT_DOWN);
+    }
+
+    private static isGamepadPovHat(gamepad: Gamepad, values: readonly number[]): boolean {
+        const value = gamepad.axes[Input.POV_HAT_AXIS];
+        return typeof value === "number"
+            && values.some((expected) => Math.abs(value - expected) <= Input.POV_HAT_TOLERANCE);
     }
 
     private static isStandardDpadButton(index: number): boolean {

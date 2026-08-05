@@ -721,7 +721,7 @@ Implementation instructions:
 
 - Preserve Slick2D's listener behavior where controller button callback indexes start at `1`.
 - Polling APIs such as `Input.isButtonPressed` must use zero-based button indexes. The observed key-binding helper decrements the listener callback value before storing it, then passes the stored value to `isButtonPressed`.
-- Direction callbacks and polling must treat standard browser Gamepad D-pad buttons as Slick POV equivalents: up `12`, down `13`, left `14`, and right `15`, in addition to axes `0` and `1` with the Slick `0.5` threshold.
+- Direction callbacks and polling must treat standard browser Gamepad D-pad buttons as Slick POV equivalents: up `12`, down `13`, left `14`, and right `15`, in addition to axes `0` and `1` with the Slick `0.5` threshold and common POV hat axis `9` eight-way values.
 - Because these D-pad buttons stand in for Java POV, they must not also emit `controllerButtonPressed` or `controllerButtonReleased` listener edges. Direct `isButtonPressed(12..15, controller)` polling may still reflect the browser Gamepad button state.
 - Track current controller down state separately from one-shot pressed records. A held control fires one press edge, a release fires the matching released callback, and a later press can fire again even if earlier one-shot state was consumed.
 
@@ -1326,7 +1326,7 @@ Implementation instructions:
 - `poll()` must clear all browser-held input state and return when the document is hidden or `document.hasFocus()` is false.
 - `setScale` and `setOffset` are required by `ScalableGame` and `ScalableGame2`; they transform browser pointer coordinates into game coordinates.
 - Gamepad direction methods must support `Input.ANY_CONTROLLER`.
-- Gamepad direction methods must check both axes and standard D-pad buttons: left axis `0 < -0.5` or button `14`, right axis `0 > 0.5` or button `15`, up axis `1 < -0.5` or button `12`, down axis `1 > 0.5` or button `13`.
+- Gamepad direction methods must check axes, standard D-pad buttons, and common POV hat encodings: left axis `0 < -0.5` or button `14`, right axis `0 > 0.5` or button `15`, up axis `1 < -0.5` or button `12`, down axis `1 > 0.5` or button `13`, plus browser hat axis `9` values for up/right/down/left and diagonals.
 - `isButton1Pressed`, `isButton2Pressed`, and `isButton3Pressed` delegate to `isButtonPressed(0/1/2, controller)`.
 - `isControlPressed(button, controller)` consumes one-shot controller control state using Slick's control indexes: left `0`, right `1`, up `2`, down `3`, button 1 `4`, button 2 `5`, button 3 `6`, and so on. `isButtonPressed(index, controller)` is the zero-based physical-button polling API and must not add the directional offset.
 - Controller listener dispatch must call directional and button release callbacks when controls transition from down to up. Button listener indexes remain one-based; one-shot polling storage remains Slick control-index based. Standard D-pad buttons `12..15` dispatch as direction controls only.
