@@ -1095,6 +1095,10 @@ export class Input {
     public static readonly KEY_8: number;
     public static readonly KEY_9: number;
     public static readonly KEY_0: number;
+    public static readonly KEY_MINUS: number;
+    public static readonly KEY_EQUALS: number;
+    public static readonly KEY_BACK: number;
+    public static readonly KEY_TAB: number;
     public static readonly KEY_Q: number;
     public static readonly KEY_W: number;
     public static readonly KEY_E: number;
@@ -1105,7 +1109,11 @@ export class Input {
     public static readonly KEY_I: number;
     public static readonly KEY_O: number;
     public static readonly KEY_P: number;
+    public static readonly KEY_LBRACKET: number;
+    public static readonly KEY_RBRACKET: number;
+    public static readonly KEY_RETURN: number;
     public static readonly KEY_ENTER: number;
+    public static readonly KEY_LCONTROL: number;
     public static readonly KEY_A: number;
     public static readonly KEY_S: number;
     public static readonly KEY_D: number;
@@ -1115,6 +1123,11 @@ export class Input {
     public static readonly KEY_J: number;
     public static readonly KEY_K: number;
     public static readonly KEY_L: number;
+    public static readonly KEY_SEMICOLON: number;
+    public static readonly KEY_APOSTROPHE: number;
+    public static readonly KEY_GRAVE: number;
+    public static readonly KEY_LSHIFT: number;
+    public static readonly KEY_BACKSLASH: number;
     public static readonly KEY_Z: number;
     public static readonly KEY_X: number;
     public static readonly KEY_C: number;
@@ -1122,7 +1135,14 @@ export class Input {
     public static readonly KEY_B: number;
     public static readonly KEY_N: number;
     public static readonly KEY_M: number;
+    public static readonly KEY_COMMA: number;
+    public static readonly KEY_PERIOD: number;
+    public static readonly KEY_SLASH: number;
+    public static readonly KEY_RSHIFT: number;
+    public static readonly KEY_MULTIPLY: number;
+    public static readonly KEY_LMENU: number;
     public static readonly KEY_SPACE: number;
+    public static readonly KEY_CAPITAL: number;
     public static readonly KEY_F1: number;
     public static readonly KEY_F2: number;
     public static readonly KEY_F3: number;
@@ -1133,12 +1153,63 @@ export class Input {
     public static readonly KEY_F8: number;
     public static readonly KEY_F9: number;
     public static readonly KEY_F10: number;
+    public static readonly KEY_NUMLOCK: number;
+    public static readonly KEY_SCROLL: number;
+    public static readonly KEY_NUMPAD7: number;
+    public static readonly KEY_NUMPAD8: number;
+    public static readonly KEY_NUMPAD9: number;
+    public static readonly KEY_SUBTRACT: number;
+    public static readonly KEY_NUMPAD4: number;
+    public static readonly KEY_NUMPAD5: number;
+    public static readonly KEY_NUMPAD6: number;
+    public static readonly KEY_ADD: number;
+    public static readonly KEY_NUMPAD1: number;
+    public static readonly KEY_NUMPAD2: number;
+    public static readonly KEY_NUMPAD3: number;
+    public static readonly KEY_NUMPAD0: number;
+    public static readonly KEY_DECIMAL: number;
     public static readonly KEY_F11: number;
     public static readonly KEY_F12: number;
+    public static readonly KEY_F13: number;
+    public static readonly KEY_F14: number;
+    public static readonly KEY_F15: number;
+    public static readonly KEY_KANA: number;
+    public static readonly KEY_CONVERT: number;
+    public static readonly KEY_NOCONVERT: number;
+    public static readonly KEY_YEN: number;
+    public static readonly KEY_NUMPADEQUALS: number;
+    public static readonly KEY_CIRCUMFLEX: number;
+    public static readonly KEY_AT: number;
+    public static readonly KEY_COLON: number;
+    public static readonly KEY_UNDERLINE: number;
+    public static readonly KEY_KANJI: number;
+    public static readonly KEY_STOP: number;
+    public static readonly KEY_AX: number;
+    public static readonly KEY_UNLABELED: number;
+    public static readonly KEY_NUMPADENTER: number;
+    public static readonly KEY_RCONTROL: number;
+    public static readonly KEY_NUMPADCOMMA: number;
+    public static readonly KEY_DIVIDE: number;
+    public static readonly KEY_SYSRQ: number;
+    public static readonly KEY_RMENU: number;
+    public static readonly KEY_PAUSE: number;
+    public static readonly KEY_HOME: number;
     public static readonly KEY_UP: number;
+    public static readonly KEY_PRIOR: number;
     public static readonly KEY_LEFT: number;
     public static readonly KEY_RIGHT: number;
+    public static readonly KEY_END: number;
     public static readonly KEY_DOWN: number;
+    public static readonly KEY_NEXT: number;
+    public static readonly KEY_INSERT: number;
+    public static readonly KEY_DELETE: number;
+    public static readonly KEY_LWIN: number;
+    public static readonly KEY_RWIN: number;
+    public static readonly KEY_APPS: number;
+    public static readonly KEY_POWER: number;
+    public static readonly KEY_SLEEP: number;
+    public static readonly KEY_LALT: number;
+    public static readonly KEY_RALT: number;
 
     public static disableControllers(): void;
     public static getKeyName(code: number): string;
@@ -1210,7 +1281,10 @@ export class Input {
 Implementation instructions:
 
 - Required by the games: key constants listed above, `clearControlPressedRecord`, `clearKeyPressedRecord`, `isButtonPressed`, `isControllerDown`, `isControllerLeft`, `isControllerRight`, `isControllerUp`, `isKeyDown`, and `isKeyPressed`.
+- `Input` must expose every public Java Slick key/mouse/controller constant with the original numeric value. It must not expose Java Slick's private controller implementation indexes (`LEFT`, `RIGHT`, `UP`, `DOWN`, `BUTTON1`...`BUTTON10`, `MAX_BUTTONS`) as public constants.
+- Browser keyboard events are mapped by `KeyboardEvent.code` when there is a clear physical-key equivalent. Legacy Java constants with no reliable browser code still exist and return stable `getKeyName` names, but must not be guessed from layout-dependent characters.
 - Mouse button constants must be `MOUSE_LEFT_BUTTON = 0`, `MOUSE_RIGHT_BUTTON = 1`, and `MOUSE_MIDDLE_BUTTON = 2`.
+- Browser pointer buttons must be translated to Slick's mouse order: browser left `0` -> Slick `0`, browser right `2` -> Slick `1`, and browser middle `1` -> Slick `2`.
 - `ANY_CONTROLLER` must be `-1`.
 - Preserve original LWJGL numeric key values. The constants used by the source games must be:
   - `KEY_ESCAPE = 0x01`

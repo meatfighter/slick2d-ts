@@ -31,6 +31,10 @@ export class Input {
     public static readonly KEY_8 = 0x09;
     public static readonly KEY_9 = 0x0A;
     public static readonly KEY_0 = 0x0B;
+    public static readonly KEY_MINUS = 0x0C;
+    public static readonly KEY_EQUALS = 0x0D;
+    public static readonly KEY_BACK = 0x0E;
+    public static readonly KEY_TAB = 0x0F;
     public static readonly KEY_Q = 0x10;
     public static readonly KEY_W = 0x11;
     public static readonly KEY_E = 0x12;
@@ -41,8 +45,11 @@ export class Input {
     public static readonly KEY_I = 0x17;
     public static readonly KEY_O = 0x18;
     public static readonly KEY_P = 0x19;
+    public static readonly KEY_LBRACKET = 0x1A;
+    public static readonly KEY_RBRACKET = 0x1B;
     public static readonly KEY_RETURN = 0x1C;
     public static readonly KEY_ENTER = 0x1C;
+    public static readonly KEY_LCONTROL = 0x1D;
     public static readonly KEY_A = 0x1E;
     public static readonly KEY_S = 0x1F;
     public static readonly KEY_D = 0x20;
@@ -52,6 +59,11 @@ export class Input {
     public static readonly KEY_J = 0x24;
     public static readonly KEY_K = 0x25;
     public static readonly KEY_L = 0x26;
+    public static readonly KEY_SEMICOLON = 0x27;
+    public static readonly KEY_APOSTROPHE = 0x28;
+    public static readonly KEY_GRAVE = 0x29;
+    public static readonly KEY_LSHIFT = 0x2A;
+    public static readonly KEY_BACKSLASH = 0x2B;
     public static readonly KEY_Z = 0x2C;
     public static readonly KEY_X = 0x2D;
     public static readonly KEY_C = 0x2E;
@@ -59,7 +71,14 @@ export class Input {
     public static readonly KEY_B = 0x30;
     public static readonly KEY_N = 0x31;
     public static readonly KEY_M = 0x32;
+    public static readonly KEY_COMMA = 0x33;
+    public static readonly KEY_PERIOD = 0x34;
+    public static readonly KEY_SLASH = 0x35;
+    public static readonly KEY_RSHIFT = 0x36;
+    public static readonly KEY_MULTIPLY = 0x37;
+    public static readonly KEY_LMENU = 0x38;
     public static readonly KEY_SPACE = 0x39;
+    public static readonly KEY_CAPITAL = 0x3A;
     public static readonly KEY_F1 = 0x3B;
     public static readonly KEY_F2 = 0x3C;
     public static readonly KEY_F3 = 0x3D;
@@ -70,12 +89,63 @@ export class Input {
     public static readonly KEY_F8 = 0x42;
     public static readonly KEY_F9 = 0x43;
     public static readonly KEY_F10 = 0x44;
+    public static readonly KEY_NUMLOCK = 0x45;
+    public static readonly KEY_SCROLL = 0x46;
+    public static readonly KEY_NUMPAD7 = 0x47;
+    public static readonly KEY_NUMPAD8 = 0x48;
+    public static readonly KEY_NUMPAD9 = 0x49;
+    public static readonly KEY_SUBTRACT = 0x4A;
+    public static readonly KEY_NUMPAD4 = 0x4B;
+    public static readonly KEY_NUMPAD5 = 0x4C;
+    public static readonly KEY_NUMPAD6 = 0x4D;
+    public static readonly KEY_ADD = 0x4E;
+    public static readonly KEY_NUMPAD1 = 0x4F;
+    public static readonly KEY_NUMPAD2 = 0x50;
+    public static readonly KEY_NUMPAD3 = 0x51;
+    public static readonly KEY_NUMPAD0 = 0x52;
+    public static readonly KEY_DECIMAL = 0x53;
     public static readonly KEY_F11 = 0x57;
     public static readonly KEY_F12 = 0x58;
+    public static readonly KEY_F13 = 0x64;
+    public static readonly KEY_F14 = 0x65;
+    public static readonly KEY_F15 = 0x66;
+    public static readonly KEY_KANA = 0x70;
+    public static readonly KEY_CONVERT = 0x79;
+    public static readonly KEY_NOCONVERT = 0x7B;
+    public static readonly KEY_YEN = 0x7D;
+    public static readonly KEY_NUMPADEQUALS = 0x8D;
+    public static readonly KEY_CIRCUMFLEX = 0x90;
+    public static readonly KEY_AT = 0x91;
+    public static readonly KEY_COLON = 0x92;
+    public static readonly KEY_UNDERLINE = 0x93;
+    public static readonly KEY_KANJI = 0x94;
+    public static readonly KEY_STOP = 0x95;
+    public static readonly KEY_AX = 0x96;
+    public static readonly KEY_UNLABELED = 0x97;
+    public static readonly KEY_NUMPADENTER = 0x9C;
+    public static readonly KEY_RCONTROL = 0x9D;
+    public static readonly KEY_NUMPADCOMMA = 0xB3;
+    public static readonly KEY_DIVIDE = 0xB5;
+    public static readonly KEY_SYSRQ = 0xB7;
+    public static readonly KEY_RMENU = 0xB8;
+    public static readonly KEY_PAUSE = 0xC5;
+    public static readonly KEY_HOME = 0xC7;
     public static readonly KEY_UP = 0xC8;
+    public static readonly KEY_PRIOR = 0xC9;
     public static readonly KEY_LEFT = 0xCB;
     public static readonly KEY_RIGHT = 0xCD;
+    public static readonly KEY_END = 0xCF;
     public static readonly KEY_DOWN = 0xD0;
+    public static readonly KEY_NEXT = 0xD1;
+    public static readonly KEY_INSERT = 0xD2;
+    public static readonly KEY_DELETE = 0xD3;
+    public static readonly KEY_LWIN = 0xDB;
+    public static readonly KEY_RWIN = 0xDC;
+    public static readonly KEY_APPS = 0xDD;
+    public static readonly KEY_POWER = 0xDE;
+    public static readonly KEY_SLEEP = 0xDF;
+    public static readonly KEY_LALT = Input.KEY_LMENU;
+    public static readonly KEY_RALT = Input.KEY_RMENU;
 
     private static controllersDisabled = false;
     private readonly downKeys = new Set<number>();
@@ -565,12 +635,13 @@ export class Input {
         if (this.paused || !this.shouldAcceptPointerEvent(event)) {
             return;
         }
+        const button = Input.mouseButtonFromEvent(event);
         this.updateMouse(event);
-        this.downMouse.add(event.button);
-        this.pressedMouse.add(event.button);
+        this.downMouse.add(button);
+        this.pressedMouse.add(button);
         for (const listener of this.mouseListeners) {
             if (isAccepting(listener)) {
-                listener.mousePressed(event.button, this.mouseX, this.mouseY);
+                listener.mousePressed(button, this.mouseX, this.mouseY);
             }
         }
     };
@@ -579,12 +650,13 @@ export class Input {
         if (this.paused || (!this.shouldAcceptPointerEvent(event) && this.downMouse.size === 0)) {
             return;
         }
+        const button = Input.mouseButtonFromEvent(event);
         this.updateMouse(event);
-        this.downMouse.delete(event.button);
+        this.downMouse.delete(button);
         for (const listener of this.mouseListeners) {
             if (isAccepting(listener)) {
-                listener.mouseReleased(event.button, this.mouseX, this.mouseY);
-                listener.mouseClicked(event.button, this.mouseX, this.mouseY, 1);
+                listener.mouseReleased(button, this.mouseX, this.mouseY);
+                listener.mouseClicked(button, this.mouseX, this.mouseY, 1);
             }
         }
     };
@@ -782,6 +854,19 @@ export class Input {
         return Input.eventCodeToKey.get(event.code) ?? 0;
     }
 
+    private static mouseButtonFromEvent(event: PointerEvent): number {
+        switch (event.button) {
+            case 0:
+                return Input.MOUSE_LEFT_BUTTON;
+            case 1:
+                return Input.MOUSE_MIDDLE_BUTTON;
+            case 2:
+                return Input.MOUSE_RIGHT_BUTTON;
+            default:
+                return event.button;
+        }
+    }
+
     private static isGamepadLeft(gamepad: Gamepad): boolean {
         return (gamepad.axes[0] ?? 0) < -0.5 || gamepad.buttons[14]?.pressed === true;
     }
@@ -886,6 +971,10 @@ export class Input {
         ["Digit8", Input.KEY_8],
         ["Digit9", Input.KEY_9],
         ["Digit0", Input.KEY_0],
+        ["Minus", Input.KEY_MINUS],
+        ["Equal", Input.KEY_EQUALS],
+        ["Backspace", Input.KEY_BACK],
+        ["Tab", Input.KEY_TAB],
         ["KeyQ", Input.KEY_Q],
         ["KeyW", Input.KEY_W],
         ["KeyE", Input.KEY_E],
@@ -896,7 +985,10 @@ export class Input {
         ["KeyI", Input.KEY_I],
         ["KeyO", Input.KEY_O],
         ["KeyP", Input.KEY_P],
+        ["BracketLeft", Input.KEY_LBRACKET],
+        ["BracketRight", Input.KEY_RBRACKET],
         ["Enter", Input.KEY_ENTER],
+        ["ControlLeft", Input.KEY_LCONTROL],
         ["KeyA", Input.KEY_A],
         ["KeyS", Input.KEY_S],
         ["KeyD", Input.KEY_D],
@@ -906,6 +998,11 @@ export class Input {
         ["KeyJ", Input.KEY_J],
         ["KeyK", Input.KEY_K],
         ["KeyL", Input.KEY_L],
+        ["Semicolon", Input.KEY_SEMICOLON],
+        ["Quote", Input.KEY_APOSTROPHE],
+        ["Backquote", Input.KEY_GRAVE],
+        ["ShiftLeft", Input.KEY_LSHIFT],
+        ["Backslash", Input.KEY_BACKSLASH],
         ["KeyZ", Input.KEY_Z],
         ["KeyX", Input.KEY_X],
         ["KeyC", Input.KEY_C],
@@ -913,7 +1010,14 @@ export class Input {
         ["KeyB", Input.KEY_B],
         ["KeyN", Input.KEY_N],
         ["KeyM", Input.KEY_M],
+        ["Comma", Input.KEY_COMMA],
+        ["Period", Input.KEY_PERIOD],
+        ["Slash", Input.KEY_SLASH],
+        ["ShiftRight", Input.KEY_RSHIFT],
+        ["NumpadMultiply", Input.KEY_MULTIPLY],
+        ["AltLeft", Input.KEY_LMENU],
         ["Space", Input.KEY_SPACE],
+        ["CapsLock", Input.KEY_CAPITAL],
         ["F1", Input.KEY_F1],
         ["F2", Input.KEY_F2],
         ["F3", Input.KEY_F3],
@@ -924,16 +1028,67 @@ export class Input {
         ["F8", Input.KEY_F8],
         ["F9", Input.KEY_F9],
         ["F10", Input.KEY_F10],
+        ["NumLock", Input.KEY_NUMLOCK],
+        ["ScrollLock", Input.KEY_SCROLL],
+        ["Numpad7", Input.KEY_NUMPAD7],
+        ["Numpad8", Input.KEY_NUMPAD8],
+        ["Numpad9", Input.KEY_NUMPAD9],
+        ["NumpadSubtract", Input.KEY_SUBTRACT],
+        ["Numpad4", Input.KEY_NUMPAD4],
+        ["Numpad5", Input.KEY_NUMPAD5],
+        ["Numpad6", Input.KEY_NUMPAD6],
+        ["NumpadAdd", Input.KEY_ADD],
+        ["Numpad1", Input.KEY_NUMPAD1],
+        ["Numpad2", Input.KEY_NUMPAD2],
+        ["Numpad3", Input.KEY_NUMPAD3],
+        ["Numpad0", Input.KEY_NUMPAD0],
+        ["NumpadDecimal", Input.KEY_DECIMAL],
         ["F11", Input.KEY_F11],
         ["F12", Input.KEY_F12],
+        ["F13", Input.KEY_F13],
+        ["F14", Input.KEY_F14],
+        ["F15", Input.KEY_F15],
+        ["KanaMode", Input.KEY_KANA],
+        ["Convert", Input.KEY_CONVERT],
+        ["NonConvert", Input.KEY_NOCONVERT],
+        ["IntlYen", Input.KEY_YEN],
+        ["NumpadEqual", Input.KEY_NUMPADEQUALS],
+        ["NumpadEnter", Input.KEY_NUMPADENTER],
+        ["ControlRight", Input.KEY_RCONTROL],
+        ["NumpadComma", Input.KEY_NUMPADCOMMA],
+        ["NumpadDivide", Input.KEY_DIVIDE],
+        ["PrintScreen", Input.KEY_SYSRQ],
+        ["AltRight", Input.KEY_RMENU],
+        ["Pause", Input.KEY_PAUSE],
+        ["Home", Input.KEY_HOME],
         ["ArrowUp", Input.KEY_UP],
+        ["PageUp", Input.KEY_PRIOR],
         ["ArrowLeft", Input.KEY_LEFT],
         ["ArrowRight", Input.KEY_RIGHT],
-        ["ArrowDown", Input.KEY_DOWN]
+        ["End", Input.KEY_END],
+        ["ArrowDown", Input.KEY_DOWN],
+        ["PageDown", Input.KEY_NEXT],
+        ["Insert", Input.KEY_INSERT],
+        ["Delete", Input.KEY_DELETE],
+        ["MetaLeft", Input.KEY_LWIN],
+        ["MetaRight", Input.KEY_RWIN],
+        ["ContextMenu", Input.KEY_APPS],
+        ["Power", Input.KEY_POWER],
+        ["Sleep", Input.KEY_SLEEP]
     ]);
 
     private static readonly keyNames = new Map<number, string>(
-        Array.from(Input.eventCodeToKey.entries()).map(([name, code]) => [code, name])
+        [
+            [Input.KEY_CIRCUMFLEX, "KEY_CIRCUMFLEX"],
+            [Input.KEY_AT, "KEY_AT"],
+            [Input.KEY_COLON, "KEY_COLON"],
+            [Input.KEY_UNDERLINE, "KEY_UNDERLINE"],
+            [Input.KEY_KANJI, "KEY_KANJI"],
+            [Input.KEY_STOP, "KEY_STOP"],
+            [Input.KEY_AX, "KEY_AX"],
+            [Input.KEY_UNLABELED, "KEY_UNLABELED"],
+            ...Array.from(Input.eventCodeToKey.entries()).map(([name, code]) => [code, name] as [number, string])
+        ]
     );
 
     private static readonly defaultPreventedKeys = new Set<number>([
@@ -942,6 +1097,10 @@ export class Input {
         Input.KEY_4,
         Input.KEY_6,
         Input.KEY_8,
+        Input.KEY_NUMPAD2,
+        Input.KEY_NUMPAD4,
+        Input.KEY_NUMPAD6,
+        Input.KEY_NUMPAD8,
         Input.KEY_W,
         Input.KEY_A,
         Input.KEY_S,
@@ -952,6 +1111,7 @@ export class Input {
         Input.KEY_L,
         Input.KEY_P,
         Input.KEY_RETURN,
+        Input.KEY_NUMPADENTER,
         Input.KEY_SPACE,
         Input.KEY_UP,
         Input.KEY_LEFT,
