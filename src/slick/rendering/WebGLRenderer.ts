@@ -38,10 +38,15 @@ void main() {
 const SOLID_FRAGMENT = `#version 300 es
 precision mediump float;
 uniform vec4 u_color;
+uniform float u_invert;
 in vec4 v_color;
 out vec4 outColor;
 void main() {
-    outColor = v_color * u_color;
+    vec4 color = v_color * u_color;
+    if (u_invert > 0.5) {
+        color.rgb = 1.0 - color.rgb;
+    }
+    outColor = color;
 }`;
 
 const TEXTURE_VERTEX = `#version 300 es
@@ -61,16 +66,22 @@ precision mediump float;
 uniform sampler2D u_texture;
 uniform vec4 u_color;
 uniform float u_flash;
+uniform float u_invert;
 in vec2 v_texCoord;
 in vec4 v_color;
 out vec4 outColor;
 void main() {
     vec4 texel = texture(u_texture, v_texCoord);
+    vec4 color;
     if (u_flash > 0.5) {
-        outColor = vec4(v_color.rgb * u_color.rgb, texel.a * v_color.a * u_color.a);
+        color = vec4(v_color.rgb * u_color.rgb, texel.a * v_color.a * u_color.a);
     } else {
-        outColor = texel * v_color * u_color;
+        color = texel * v_color * u_color;
     }
+    if (u_invert > 0.5) {
+        color.rgb = 1.0 - color.rgb;
+    }
+    outColor = color;
 }`;
 
 const WHITE_COLOR: Color = { r: 1, g: 1, b: 1, a: 1 } as Color;
@@ -144,6 +155,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private height = 1;
     private lineWidth = 1;
     private globalAlphaScale = 1;
+    private colorInverted = false;
     private currentColor = [1, 1, 1, 1];
     private transformStack: Matrix3[] = [identityMatrix3()];
     private readonly matrixPool: Matrix3[] = [];
@@ -152,6 +164,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private textureBatchVertexCount = 0;
     private textureBatchTexture: WebGLTexture | null = null;
     private textureBatchFlash = false;
+    private textureBatchInverted = false;
     private readonly solidQuadVertices = new Float32Array(36);
     private dynamicSolidVertices = new Float32Array(0);
     private readonly modelViewScratch = new Float32Array(16);
@@ -173,6 +186,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Initializes the renderer with a canvas and WebGL2 context attributes. */
     public initialize(canvas: HTMLCanvasElement, options: RenderBackendOptions): void {
+        this.colorInverted = false;
+        this.textureBatchInverted = false;
         this.canvas = canvas;
         const gl = canvas.getContext("webgl2", {
             alpha: options.alpha ?? true,
@@ -194,6 +209,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
     /** Begins a frame by binding the default target, setting viewport, and clearing. */
     public beginFrame(width: number, height: number, background: Color): void {
         this.flushTextureBatch();
+        this.colorInverted = false;
+        this.textureBatchInverted = false;
         this.width = Math.max(1, width);
         this.height = Math.max(1, height);
         this.currentTarget = null;
@@ -444,6 +461,20 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.applyActiveClip();
     }
 
+    /** Browser extension: toggles RGB inversion for subsequent draw calls. */
+    public setColorInverted(inverted: boolean): void {
+        if (this.colorInverted === inverted) {
+            return;
+        }
+        this.flushTextureBatch();
+        this.colorInverted = inverted;
+    }
+
+    /** Browser extension: reports the active RGB inversion state. */
+    public isColorInverted(): boolean {
+        return this.colorInverted;
+    }
+
     /** Saves the current matrix. */
     public pushTransform(): void {
         const matrix = this.matrixPool.pop() ?? identityMatrix3();
@@ -527,6 +558,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.textureBatchVertexCount = 0;
         this.textureBatchTexture = null;
         this.textureBatchFlash = false;
+        this.textureBatchInverted = false;
+        this.colorInverted = false;
         this.gl = null;
         this.solidProgram = null;
         this.textureProgram = null;
@@ -554,6 +587,11 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.currentTarget?.dispose(gl);
         this.textures.clear();
         this.currentTextureId = 0;
+        this.textureBatchVertexCount = 0;
+        this.textureBatchTexture = null;
+        this.textureBatchFlash = false;
+        this.textureBatchInverted = false;
+        this.colorInverted = false;
         this.gl = null;
         this.buffer = null;
         this.canvas = null;
@@ -568,6 +606,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
     /** Java Slick2D counterpart: SGL.initDisplay(int, int). */
     public initDisplay(width: number, height: number): void {
         this.flushTextureBatch();
+        this.colorInverted = false;
+        this.textureBatchInverted = false;
         this.width = Math.max(1, width);
         this.height = Math.max(1, height);
         this.gl?.viewport(0, 0, this.width, this.height);
@@ -1070,7 +1110,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
         alphaScale: number,
         flash: boolean
     ): void {
-        if (this.textureBatchTexture !== null && (this.textureBatchTexture !== texture || this.textureBatchFlash !== flash)) {
+        if (
+            this.textureBatchTexture !== null
+            && (
+                this.textureBatchTexture !== texture
+                || this.textureBatchFlash !== flash
+                || this.textureBatchInverted !== this.colorInverted
+            )
+        ) {
             this.flushTextureBatch();
         }
         if (this.textureBatchVertexCount + 6 > TEXTURE_BATCH_VERTEX_CAPACITY) {
@@ -1078,6 +1125,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         }
         this.textureBatchTexture = texture;
         this.textureBatchFlash = flash;
+        this.textureBatchInverted = this.colorInverted;
         const vertices = this.textureBatchVertices;
         const base = this.textureBatchVertexCount;
         this.writeTextureVertex(vertices, base, matrix, x1, y1, u1, v1, topLeft, tint, alphaScale);
@@ -1118,11 +1166,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
             gl.uniform4f(colorLocation, 1, 1, 1, 1);
             const flashLocation = textureProgram.getUniformLocation(gl, "u_flash");
             gl.uniform1f(flashLocation, this.textureBatchFlash ? 1 : 0);
+            const invertLocation = textureProgram.getUniformLocation(gl, "u_invert");
+            gl.uniform1f(invertLocation, this.textureBatchInverted ? 1 : 0);
             gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
         }
         this.textureBatchVertexCount = 0;
         this.textureBatchTexture = null;
         this.textureBatchFlash = false;
+        this.textureBatchInverted = false;
     }
 
     private drawSolidPolygon(points: Array<[number, number]>, color: Color, transform: Matrix3): void {
@@ -1184,6 +1235,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
         gl.vertexAttribPointer(colorAttrib, 4, gl.FLOAT, false, 24, 8);
         const colorLocation = solidProgram.getUniformLocation(gl, "u_color");
         gl.uniform4f(colorLocation, 1, 1, 1, this.globalAlphaScale);
+        const invertLocation = solidProgram.getUniformLocation(gl, "u_invert");
+        gl.uniform1f(invertLocation, this.colorInverted ? 1 : 0);
         gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
         this.batch.markDirty();
     }

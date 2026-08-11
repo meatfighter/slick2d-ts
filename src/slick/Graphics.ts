@@ -133,6 +133,16 @@ export class Graphics {
         Renderer.get().flush();
     }
 
+    /** Browser extension: toggles RGB inversion for subsequent renderer draw calls. */
+    public setColorInverted(inverted: boolean): void {
+        Renderer.getBackend().setColorInverted(inverted);
+    }
+
+    /** Browser extension: reports the active renderer RGB inversion state. */
+    public isColorInverted(): boolean {
+        return Renderer.getBackend().isColorInverted();
+    }
+
     /** Java Slick2D counterpart: Graphics.getFont(). */
     public getFont(): Font {
         return this.font;

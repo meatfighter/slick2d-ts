@@ -38,6 +38,8 @@ export interface RenderBackend {
     clearClip(): void;
     setWorldClip(x: number, y: number, width: number, height: number, transform: Matrix3): void;
     clearWorldClip(): void;
+    setColorInverted(inverted: boolean): void;
+    isColorInverted(): boolean;
     pushTransform(): void;
     popTransform(): void;
     translate(x: number, y: number): void;

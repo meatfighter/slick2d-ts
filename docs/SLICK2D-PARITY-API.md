@@ -992,6 +992,8 @@ export class Graphics {
     public setDrawMode(mode: number): void;
     public clearAlphaMap(): void;
     public flush(): void;
+    public setColorInverted(inverted: boolean): void;
+    public isColorInverted(): boolean;
     public getFont(): Font;
     public setFont(font: Font): void;
     public resetFont(): void;
@@ -1066,6 +1068,8 @@ Implementation instructions:
 - `clearWorldClip` removes the world clip.
 - `setDrawMode` must apply Java Slick2D's WebGL state: normal uses `SRC_ALPHA, ONE_MINUS_SRC_ALPHA`; alpha-map disables blending and masks RGB; alpha-blend uses `DST_ALPHA, ONE_MINUS_DST_ALPHA` and masks alpha; color-multiply uses `ONE_MINUS_SRC_COLOR, SRC_COLOR`; add uses `ONE, ONE`; screen uses `ONE, ONE_MINUS_SRC_COLOR`.
 - `clearAlphaMap` must switch to alpha-map mode, load identity transform, fill the full context with transparent color, and restore the previous draw mode. Java Slick2D's source leaves the current color as the transparent clear color after this call.
+- `setColorInverted` and `isColorInverted` are browser extensions, not Java Slick2D parity APIs. They expose active `WebGLRenderer` state through the `Graphics` facade and invert RGB only for subsequent solid, image, font, and flash draw calls. Alpha and clear color are not inverted.
+- Color inversion is sharp global renderer state. Texture batches must split when inversion changes, queued texture batches must use the inversion state captured when queued, and the renderer must reset inversion to false after flushing at `beginFrame(...)`, plus initialization, disposal, and context-loss cleanup.
 - `getArea` returns an offscreen `Image` containing pixels copied from the current render target.
 - `getArea(..., target)` writes RGBA bytes into the supplied buffer for cursor compatibility code.
 - `copyArea(target, x, y)` copies from the active framebuffer into a writable `Image(width,height)` render-target texture using `gl.copyTexSubImage2D`, then calls `target.ensureInverted()`, matching Slick's copied texture orientation behavior.

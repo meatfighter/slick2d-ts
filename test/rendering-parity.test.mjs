@@ -47,6 +47,9 @@ class FakeCanvas {
 class FakeBatchGL {
     constructor() {
         this.ARRAY_BUFFER = 0x8892;
+        this.COLOR_BUFFER_BIT = 0x4000;
+        this.FRAMEBUFFER = 0x8D40;
+        this.SCISSOR_TEST = 0x0C11;
         this.STREAM_DRAW = 0x88E0;
         this.TEXTURE_2D = 0x0DE1;
         this.FLOAT = 0x1406;
@@ -57,6 +60,9 @@ class FakeBatchGL {
     }
 
     bindBuffer() {
+    }
+
+    bindFramebuffer() {
     }
 
     bindTexture() {
@@ -73,6 +79,15 @@ class FakeBatchGL {
         this.drawArraysCalls.push({ mode, first, count });
     }
 
+    clear() {
+    }
+
+    clearColor() {
+    }
+
+    disable() {
+    }
+
     enableVertexAttribArray() {
     }
 
@@ -84,6 +99,9 @@ class FakeBatchGL {
     }
 
     useProgram() {
+    }
+
+    scissor() {
     }
 
     vertexAttribPointer() {
@@ -429,12 +447,128 @@ test("WebGLRenderer flash image draws use flash shader mode and split normal bat
     renderer.drawImageFlash(image, 8, 0, 8, 8, 0, 0, 8, 8, Color.red, transform);
 
     assert.equal(gl.drawArraysCalls.length, 1);
-    assert.deepEqual(gl.uniform1fCalls[0], { location: "u_flash", value: 0 });
+    assert.deepEqual(gl.uniform1fCalls.filter((call) => call.location === "u_flash"), [
+        { location: "u_flash", value: 0 }
+    ]);
 
     renderer.flush();
 
     assert.equal(gl.drawArraysCalls.length, 2);
-    assert.deepEqual(gl.uniform1fCalls[1], { location: "u_flash", value: 1 });
+    assert.deepEqual(gl.uniform1fCalls.filter((call) => call.location === "u_flash"), [
+        { location: "u_flash", value: 0 },
+        { location: "u_flash", value: 1 }
+    ]);
+});
+
+test("WebGLRenderer color inversion drives solid and texture shader uniforms", () => {
+    const gl = new FakeBatchGL();
+    const renderer = new WebGLRenderer();
+    renderer.gl = gl;
+    renderer.textureProgram = fakeProgram();
+    renderer.solidProgram = fakeProgram();
+    renderer.buffer = {};
+    renderer.initDisplay(64, 64);
+
+    renderer.setColorInverted(true);
+    renderer.fillRect(0, 0, 4, 4, new Color(0.2, 0.3, 0.4, 0.5));
+
+    assert.equal(renderer.isColorInverted(), true);
+    assert.deepEqual(gl.uniform1fCalls.at(-1), { location: "u_invert", value: 1 });
+
+    const texture = {};
+    const image = fakeImageForTexture(texture);
+    const transform = identityMatrix3();
+    renderer.drawImageWarped(image, 0, 0, 8, 0, 8, 8, 0, 8, 0, 0, 8, 8, 0.25, Color.red, transform);
+    assert.equal(renderer.textureBatchVertices[7], 0.25);
+    renderer.flush();
+
+    assert.deepEqual(gl.uniform1fCalls.at(-1), { location: "u_invert", value: 1 });
+
+    renderer.setColorInverted(false);
+    renderer.fillRect(0, 0, 4, 4, new Color(0.2, 0.3, 0.4, 0.5));
+
+    assert.equal(renderer.isColorInverted(), false);
+    assert.deepEqual(gl.uniform1fCalls.at(-1), { location: "u_invert", value: 0 });
+});
+
+test("WebGLRenderer splits texture batches on color inversion changes", () => {
+    const gl = new FakeBatchGL();
+    const renderer = new WebGLRenderer();
+    renderer.gl = gl;
+    renderer.textureProgram = fakeProgram();
+    renderer.solidProgram = fakeProgram();
+    renderer.buffer = {};
+    renderer.initDisplay(64, 64);
+
+    const texture = {};
+    const image = fakeImageForTexture(texture);
+    const transform = identityMatrix3();
+
+    renderer.setColorInverted(true);
+    renderer.drawImageWarped(image, 0, 0, 8, 0, 8, 8, 0, 8, 0, 0, 8, 8, 1, null, transform);
+    renderer.setColorInverted(false);
+
+    assert.equal(gl.drawArraysCalls.length, 1);
+    assert.deepEqual(gl.uniform1fCalls.at(-1), { location: "u_invert", value: 1 });
+
+    renderer.drawImageWarped(image, 8, 0, 16, 0, 16, 8, 8, 8, 0, 0, 8, 8, 1, null, transform);
+    renderer.flush();
+
+    assert.equal(gl.drawArraysCalls.length, 2);
+    assert.deepEqual(gl.drawArraysCalls[0], { mode: gl.TRIANGLES, first: 0, count: 6 });
+    assert.deepEqual(gl.drawArraysCalls[1], { mode: gl.TRIANGLES, first: 0, count: 6 });
+    assert.deepEqual(gl.uniform1fCalls.filter((call) => call.location === "u_invert"), [
+        { location: "u_invert", value: 1 },
+        { location: "u_invert", value: 0 }
+    ]);
+});
+
+test("WebGLRenderer color inversion resets at safe renderer lifecycle boundaries", () => {
+    const gl = new FakeBatchGL();
+    const renderer = new WebGLRenderer();
+    renderer.gl = gl;
+    renderer.textureProgram = fakeProgram();
+    renderer.solidProgram = fakeProgram();
+    renderer.buffer = {};
+    renderer.initDisplay(64, 64);
+
+    const texture = {};
+    const image = fakeImageForTexture(texture);
+    const transform = identityMatrix3();
+
+    renderer.setColorInverted(true);
+    renderer.drawImageWarped(image, 0, 0, 8, 0, 8, 8, 0, 8, 0, 0, 8, 8, 1, null, transform);
+    renderer.beginFrame(64, 64, Color.black);
+
+    assert.equal(renderer.isColorInverted(), false);
+    assert.deepEqual(gl.uniform1fCalls.filter((call) => call.location === "u_invert"), [
+        { location: "u_invert", value: 1 }
+    ]);
+
+    renderer.setColorInverted(true);
+    renderer.initDisplay(64, 64);
+    assert.equal(renderer.isColorInverted(), false);
+
+    renderer.setColorInverted(true);
+    renderer.handleContextLost();
+    assert.equal(renderer.isColorInverted(), false);
+
+    renderer.setColorInverted(true);
+    renderer.dispose();
+    assert.equal(renderer.isColorInverted(), false);
+});
+
+test("Graphics color inversion facade controls the active renderer state", () => {
+    const renderer = Renderer.getBackend();
+    const graphics = new Graphics(32, 16);
+    try {
+        graphics.setColorInverted(true);
+        assert.equal(graphics.isColorInverted(), true);
+        assert.equal(renderer.isColorInverted(), true);
+    } finally {
+        graphics.setColorInverted(false);
+    }
+    assert.equal(renderer.isColorInverted(), false);
 });
 
 test("WebGLRenderer preserves Java embedded null-tint current-color semantics", () => {
