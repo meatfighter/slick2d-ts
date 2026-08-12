@@ -62,6 +62,8 @@ export class AppGameContainer extends GameContainer {
     private started = false;
     private destroyed = false;
     private animationFrame = 0;
+    private loopReady = false;
+    private loopSuspended = false;
     private lastFrameTime = 0;
     private framesThisSecond = 0;
     private fpsWindowStart = 0;
@@ -91,6 +93,37 @@ export class AppGameContainer extends GameContainer {
     /** Browser parity helper: reports async frame/resource errors to the host page. */
     public setErrorHandler(handler: AppGameContainerErrorHandler | null): void {
         this.errorHandler = handler;
+    }
+
+    /** Browser lifecycle helper: stops the RAF-backed loop without changing Java pause state. */
+    public setLoopSuspended(suspended: boolean): void {
+        if (suspended) {
+            this.loopSuspended = true;
+            this.cancelScheduledFrame();
+            this.storedDelta = 0;
+            return;
+        }
+        if (!this.loopSuspended) {
+            return;
+        }
+        this.loopSuspended = false;
+        this.resetLoopResumeTiming();
+        this.scheduleNextFrame();
+    }
+
+    /** Browser lifecycle helper: reports whether the RAF-backed loop is suspended. */
+    public isLoopSuspended(): boolean {
+        return this.loopSuspended;
+    }
+
+    /** Browser lifecycle helper: shorthand for setLoopSuspended(true). */
+    public suspendLoop(): void {
+        this.setLoopSuspended(true);
+    }
+
+    /** Browser lifecycle helper: shorthand for setLoopSuspended(false). */
+    public resumeLoop(): void {
+        this.setLoopSuspended(false);
     }
 
     /** Java Slick2D counterpart: AppGameContainer.setTitle(String). */
@@ -188,17 +221,16 @@ export class AppGameContainer extends GameContainer {
     /** Java Slick2D counterpart: AppGameContainer.reinit(). */
     public override async reinit(): Promise<void> {
         const shouldResumeLoop = this.started && !this.destroyed;
-        if (this.animationFrame !== 0) {
-            cancelAnimationFrame(this.animationFrame);
-            this.animationFrame = 0;
-        }
+        this.loopReady = false;
+        this.cancelScheduledFrame();
         try {
             this.rebuildSystemForReinit();
             await this.game.init(this);
             await ResourceLoader.waitForAll();
             this.resetFrameBookkeeping();
+            this.loopReady = shouldResumeLoop;
             if (shouldResumeLoop && !this.destroyed) {
-                this.animationFrame = requestAnimationFrame(this.loop);
+                this.scheduleNextFrame();
             }
         } catch (error) {
             const reported = this.toError(error, "Failed to reinitialize AppGameContainer");
@@ -221,6 +253,7 @@ export class AppGameContainer extends GameContainer {
         }
         this.destroyed = false;
         this.started = true;
+        this.loopReady = false;
         try {
             this.canvas = this.resolveCanvas();
             this.canvas.width = this.width;
@@ -247,7 +280,8 @@ export class AppGameContainer extends GameContainer {
             await this.game.init(this);
             await ResourceLoader.waitForAll();
             this.resetFrameBookkeeping();
-            this.animationFrame = requestAnimationFrame(this.loop);
+            this.loopReady = true;
+            this.scheduleNextFrame();
         } catch (error) {
             const reported = this.toError(error, "Failed to start AppGameContainer");
             this.destroy();
@@ -332,12 +366,11 @@ export class AppGameContainer extends GameContainer {
     public destroy(): void {
         this.destroyed = true;
         this.started = false;
+        this.loopReady = false;
+        this.loopSuspended = false;
         this.waitingForResources = false;
         this.resourceError = null;
-        if (this.animationFrame !== 0) {
-            cancelAnimationFrame(this.animationFrame);
-            this.animationFrame = 0;
-        }
+        this.cancelScheduledFrame();
         if (typeof document !== "undefined") {
             this.exitBrowserFullscreenForDestroy();
         }
@@ -380,7 +413,8 @@ export class AppGameContainer extends GameContainer {
     }
 
     private readonly loop = (time: number): void => {
-        if (this.destroyed) {
+        this.animationFrame = 0;
+        if (this.destroyed || this.loopSuspended || !this.loopReady) {
             return;
         }
         try {
@@ -403,11 +437,11 @@ export class AppGameContainer extends GameContainer {
         const visible = typeof document === "undefined" || document.visibilityState !== "hidden";
         if (this.updateOnlyWhenVisible && !visible) {
             this.lastFrameTime = time;
-            this.animationFrame = requestAnimationFrame(this.loop);
+            this.scheduleNextFrame();
             return;
         }
         if (!this.shouldProcessTargetFrame(time)) {
-            this.animationFrame = requestAnimationFrame(this.loop);
+            this.scheduleNextFrame();
             return;
         }
         const rawDelta = Math.max(0, Math.trunc(time - this.lastFrameTime));
@@ -417,6 +451,9 @@ export class AppGameContainer extends GameContainer {
         Music.poll(delta);
         SoundStore.get().poll(delta);
         this.updateGame(delta);
+        if (this.destroyed || this.loopSuspended) {
+            return;
+        }
         let waitForResources = ResourceLoader.hasPending();
         if (this.hasFocus() || this.getAlwaysRender()) {
             if (this.clearEachFrame) {
@@ -444,7 +481,7 @@ export class AppGameContainer extends GameContainer {
             this.waitForQueuedResources();
             return;
         }
-        this.animationFrame = requestAnimationFrame(this.loop);
+        this.scheduleNextFrame();
     }
 
     private shouldProcessTargetFrame(time: number): boolean {
@@ -517,6 +554,33 @@ export class AppGameContainer extends GameContainer {
         this.fps = 0;
         this.waitingForResources = false;
         this.resourceError = null;
+    }
+
+    private resetLoopResumeTiming(): void {
+        this.lastFrameTime = this.now();
+        this.storedDelta = 0;
+        this.framesThisSecond = 0;
+        this.fpsWindowStart = this.lastFrameTime;
+        this.fps = 0;
+    }
+
+    private scheduleNextFrame(): void {
+        if (this.destroyed
+            || this.loopSuspended
+            || !this.started
+            || !this.loopReady
+            || this.waitingForResources
+            || this.animationFrame !== 0) {
+            return;
+        }
+        this.animationFrame = requestAnimationFrame(this.loop);
+    }
+
+    private cancelScheduledFrame(): void {
+        if (this.animationFrame !== 0) {
+            cancelAnimationFrame(this.animationFrame);
+            this.animationFrame = 0;
+        }
     }
 
     private readonly handleWindowResize = (): void => {
@@ -674,7 +738,7 @@ export class AppGameContainer extends GameContainer {
                 this.waitingForResources = false;
                 if (!this.destroyed) {
                     this.lastFrameTime = this.now();
-                    this.animationFrame = requestAnimationFrame(this.loop);
+                    this.scheduleNextFrame();
                 }
             })
             .catch((error) => {

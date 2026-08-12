@@ -254,6 +254,188 @@ test("default Jackal path updates once with the raw frame delta", () => {
     assert.deepEqual(calls.deltas, [17]);
 });
 
+test("loop suspension cancels an existing RAF", () => {
+    installBrowserGlobals();
+    const { container } = createContainer();
+    const canceled = [];
+    globalThis.cancelAnimationFrame = (id) => {
+        canceled.push(id);
+    };
+    container.animationFrame = 9;
+    container.storedDelta = 44;
+
+    container.setLoopSuspended(true);
+
+    assert.deepEqual(canceled, [9]);
+    assert.equal(container.animationFrame, 0);
+    assert.equal(container.storedDelta, 0);
+    assert.equal(container.isLoopSuspended(), true);
+});
+
+test("suspended RAF callback clears the frame id and performs no work", () => {
+    installBrowserGlobals();
+    const { calls, container } = createContainer();
+    const store = SoundStore.get();
+    const oldInputPoll = container.input.poll;
+    const oldMusicPoll = Music.poll;
+    const oldSoundPoll = store.poll;
+    const backend = Renderer.getBackend();
+    const oldBeginFrame = backend.beginFrame;
+    const oldEndFrame = backend.endFrame;
+    let inputPolls = 0;
+    let musicPolls = 0;
+    let soundPolls = 0;
+    let beginFrames = 0;
+    let endFrames = 0;
+
+    container.input.poll = () => {
+        inputPolls += 1;
+    };
+    Music.poll = () => {
+        musicPolls += 1;
+    };
+    store.poll = () => {
+        soundPolls += 1;
+    };
+    backend.beginFrame = () => {
+        beginFrames += 1;
+    };
+    backend.endFrame = () => {
+        endFrames += 1;
+    };
+
+    try {
+        container.animationFrame = 12;
+        container.setLoopSuspended(true);
+        container.animationFrame = 12;
+
+        container.loop(1000);
+
+        assert.equal(container.animationFrame, 0);
+        assert.equal(calls.updates, 0);
+        assert.equal(calls.renders, 0);
+        assert.equal(inputPolls, 0);
+        assert.equal(musicPolls, 0);
+        assert.equal(soundPolls, 0);
+        assert.equal(beginFrames, 0);
+        assert.equal(endFrames, 0);
+    } finally {
+        container.input.poll = oldInputPoll;
+        Music.poll = oldMusicPoll;
+        store.poll = oldSoundPoll;
+        backend.beginFrame = oldBeginFrame;
+        backend.endFrame = oldEndFrame;
+    }
+});
+
+test("loop resume resets timing and schedules exactly one RAF when ready", () => {
+    installBrowserGlobals();
+    const { container } = createContainer();
+    const frames = [];
+    globalThis.requestAnimationFrame = (callback) => {
+        frames.push(callback);
+        return 33;
+    };
+    container.started = true;
+    container.loopReady = true;
+    container.loopSuspended = true;
+    container.storedDelta = 44;
+    container.framesThisSecond = 7;
+    container.fps = 12;
+    container.fpsWindowStart = 123;
+
+    container.setLoopSuspended(false);
+    container.setLoopSuspended(false);
+
+    assert.equal(container.isLoopSuspended(), false);
+    assert.equal(container.animationFrame, 33);
+    assert.equal(container.storedDelta, 0);
+    assert.equal(container.framesThisSecond, 0);
+    assert.equal(container.fps, 0);
+    assert.equal(container.fpsWindowStart, container.lastFrameTime);
+    assert.equal(frames.length, 1);
+});
+
+test("loop resume does not schedule until the container is ready", () => {
+    installBrowserGlobals();
+    const { container } = createContainer();
+    let frames = 0;
+    globalThis.requestAnimationFrame = () => {
+        frames += 1;
+        return 33;
+    };
+
+    container.loopSuspended = true;
+    container.loopReady = true;
+    container.started = false;
+    container.destroyed = false;
+    container.waitingForResources = false;
+    container.setLoopSuspended(false);
+    assert.equal(frames, 0);
+
+    container.loopSuspended = true;
+    container.loopReady = false;
+    container.started = true;
+    container.destroyed = false;
+    container.waitingForResources = false;
+    container.setLoopSuspended(false);
+    assert.equal(frames, 0);
+
+    container.loopSuspended = true;
+    container.loopReady = true;
+    container.started = true;
+    container.destroyed = true;
+    container.waitingForResources = false;
+    container.setLoopSuspended(false);
+    assert.equal(frames, 0);
+
+    container.loopSuspended = true;
+    container.loopReady = true;
+    container.started = true;
+    container.destroyed = false;
+    container.waitingForResources = true;
+    container.setLoopSuspended(false);
+    assert.equal(frames, 0);
+});
+
+test("resource completion does not restart the RAF loop while suspended", async () => {
+    installBrowserGlobals();
+    const { container } = createContainer();
+    const frames = [];
+    let resolveResource;
+    const tracked = ResourceLoader.track(new Promise((resolve) => {
+        resolveResource = resolve;
+    }), "images/suspended.png");
+    globalThis.requestAnimationFrame = (callback) => {
+        frames.push(callback);
+        return 55;
+    };
+    container.started = true;
+    container.loopReady = true;
+
+    try {
+        container.loopFrame(16);
+        assert.equal(container.waitingForResources, true);
+
+        container.setLoopSuspended(true);
+        resolveResource();
+        await tracked;
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.equal(container.waitingForResources, false);
+        assert.equal(container.animationFrame, 0);
+        assert.equal(frames.length, 0);
+
+        container.setLoopSuspended(false);
+
+        assert.equal(container.animationFrame, 55);
+        assert.equal(frames.length, 1);
+    } finally {
+        ResourceLoader.clearCache();
+    }
+});
+
 test("InternalTextureLoader.clear disposes registered texture resources", () => {
     installBrowserGlobals();
     const loader = InternalTextureLoader.get();

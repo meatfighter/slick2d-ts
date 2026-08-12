@@ -575,6 +575,7 @@ Implement these rules:
 - `setDisplayMode` and `setFullscreen` may return `Promise<void>` because browser fullscreen changes are asynchronous. When a promise is returned, dimensions and the WebGL display must be refreshed after it settles.
 - `AppGameContainer` must listen to `fullscreenchange` and `resize`, update canvas backing size and CSS size, then reinitialize the WebGL display dimensions.
 - `AppGameContainer` must default to Java's `updateOnlyWhenVisible=true` behavior. Hidden frames skip update/render unless `setUpdateOnlyWhenVisible(false)` is called, and hidden time must not accumulate into the first visible update delta.
+- `AppGameContainer.setLoopSuspended(...)` is a browser lifecycle helper, not a Java pause replacement. While active, it must cancel and suppress the RAF loop so input polling, audio polling, updates, rendering, frame submission, FPS accounting, and catch-up delta accumulation all stop until resumed.
 - Fullscreen entry/exit failures must reject with `SlickException`. Display-mode requests that resized the canvas before a failed fullscreen request must restore the previous logical and canvas dimensions.
 - Returned fullscreen/display-mode promises must be internally observed by `AppGameContainer` so a direct Java-style caller that ignores the returned promise does not create a browser `unhandledrejection`. The rejection must still be returned to explicit `await` callers, while ignored failures are routed to `AppGameContainer.setErrorHandler(handler)` or `Log.error`.
 - After browser-applied display size changes, the container must mark `Display.wasResized()` and call `containerSizeChanged(container)` when the active game exposes that Java-style helper.
@@ -1618,6 +1619,10 @@ export class AppGameContainer extends GameContainer {
     public constructor(game: Game);
     public constructor(game: Game, width: number, height: number, fullscreen: boolean);
     public setErrorHandler(handler: AppGameContainerErrorHandler | null): void;
+    public setLoopSuspended(suspended: boolean): void;
+    public isLoopSuspended(): boolean;
+    public suspendLoop(): void;
+    public resumeLoop(): void;
     public supportsAlphaInBackBuffer(): boolean;
     public setTitle(title: string): void;
     public setDisplayMode(width: number, height: number, fullscreen: boolean): void | Promise<void>;
@@ -1648,6 +1653,7 @@ Implementation instructions:
 
 - Required by the games: constructor, `setAlwaysRender`, `setClearEachFrame`, `setDisplayMode`, `setShowFPS`, `setSmoothDeltas`, `setSoundOn`, `setVSync`, and `start`.
 - `start` creates or binds the canvas, initializes input/audio/rendering, calls `game.init`, resolves resources queued during init, and begins the browser loop.
+- `setLoopSuspended(true)` cancels any pending RAF and leaves Java `setPaused(...)`, `setAlwaysRender(...)`, resource state, audio enable flags, display size, fullscreen state, and the current canvas pixels unchanged. `setLoopSuspended(false)` resets frame timing and schedules one RAF only after the container has started, completed startup/reinit resource barriers, is not destroyed, and is not waiting for queued resources.
 - The RAF loop must match Java close behavior: check `Display.isCloseRequested()` first, and call `game.closeRequested()` only inside that branch.
 - The container default must match Java `AppGameContainer`: `isUpdatingOnlyWhenVisible()` returns true before any setter call. When hidden and that flag is true, skip update/render and reset frame timing so hidden elapsed time is not delivered to the next visible update.
 - For visible or explicitly update-while-hidden frames, the RAF loop must mirror Java `GameContainer.updateAndRender(delta)` scheduling: apply smooth deltas, poll input, call `Music.poll(delta)` and `SoundStore.get().poll(delta)` before the pause branch, accumulate `storedDelta`, apply minimum/maximum logic interval splitting, call `game.update(container, 0)` while paused, render when `hasFocus()` or `getAlwaysRender()` is true, and call `Display.sync(targetFrameRate)` after processed frames when `targetFrameRate != -1`.
