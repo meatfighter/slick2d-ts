@@ -107,3 +107,17 @@ test("world clip intersects scaled viewport and survives inner clear", () => {
 
     assert.deepEqual(gl.scissors.at(-1), [30, 0, 240, 180]);
 });
+
+test("WebGLRenderer converts logical clips to high-DPI framebuffer scissors", () => {
+    const { gl, renderer } = createRenderer(200, 100);
+    renderer.initDisplay(200, 100, 300, 150);
+
+    renderer.setClip(10, 20, 40, 30);
+
+    assert.deepEqual(gl.viewports.at(-1), [0, 0, 300, 150]);
+    assert.deepEqual(gl.scissors.at(-1), [15, 75, 60, 45]);
+
+    renderer.glScissor(8, 12, 20, 10);
+
+    assert.deepEqual(gl.scissors.at(-1), [12, 18, 30, 15]);
+});

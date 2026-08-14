@@ -82,6 +82,7 @@ No game-title-specific modules are exported. The project names appear only as au
 - Matched Java's `findFreeSource()` loop bound by keeping both source 0 and the last logical source unavailable to sound effects.
 - Implemented `SoundStore.stopSoundEffect(id)` for logical source IDs and made `setMaxSources(...)` stop any effect that would land in the newly unavailable last slot.
 - Fixed no-argument `Music.play()` and `Music.loop()` to reset the individual music volume to `1`, matching Java's `play(1.0f, 1.0f)` and `loop(1.0f, 1.0f)` delegates.
+- Fixed looped `Music` resume offsets so global music-off/music-on and pause/resume wrap elapsed positions inside the audio buffer instead of clamping to the end; pending async starts now honor the latest `setPosition(...)` request before playback begins.
 - Replaced direct `FastTrig` `Math.sin`/`Math.cos` calls with Java Slick2D's angle-reduction implementation and `cos(x) = sin(x + PI/2)` rule.
 - Updated `docs/SLICK2D-PARITY-API.md` to match the implementation and verified Java behavior.
 
@@ -307,6 +308,7 @@ Claims intentionally not converted into desktop-exact behavior:
 These differences are intentional and must be kept during game ports:
 
 - WebGL2 is the rendering backend. Do not port Slick's desktop renderer internals or add Phaser/Pixi/Three to the core library.
+- Browser canvases use a high-DPI backing store by default, capped at DPR `2`. Java-style container/display/input/scaling APIs remain in logical CSS pixels; `AppGameContainer.getBackingWidth()` / `getBackingHeight()` expose backing pixels for browser hosts that need them.
 - Web Audio API is the audio backend. The Slick `streamingHint` constructor parameter is accepted for parity but does not switch to `HTMLAudioElement`.
 - Web Audio sources remain one-shot browser nodes, but `SoundStore` now provides Java-visible logical source slots, capacity, exhaustion/drop behavior, and source IDs for compatibility.
 - Gamepad API backs controller polling and callbacks. Listener button callbacks stay one-based; stored polling mappings stay zero-based.

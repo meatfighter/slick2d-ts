@@ -153,6 +153,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private batch = new WebGLBatch();
     private width = 1;
     private height = 1;
+    private backingWidth = 1;
+    private backingHeight = 1;
+    private backingScaleX = 1;
+    private backingScaleY = 1;
+    private defaultWidth = 1;
+    private defaultHeight = 1;
+    private defaultBackingWidth = 1;
+    private defaultBackingHeight = 1;
     private lineWidth = 1;
     private globalAlphaScale = 1;
     private colorInverted = false;
@@ -185,7 +193,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private worldClip: ScreenClip | null = null;
 
     /** Initializes the renderer with a canvas and WebGL2 context attributes. */
-    public initialize(canvas: HTMLCanvasElement, options: RenderBackendOptions): void {
+    public initialize(canvas: HTMLCanvasElement, options: RenderBackendOptions, logicalWidth: number = canvas.width, logicalHeight: number = canvas.height, backingWidth: number = canvas.width, backingHeight: number = canvas.height): void {
         this.colorInverted = false;
         this.textureBatchInverted = false;
         this.canvas = canvas;
@@ -203,23 +211,23 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.buffer = gl.createBuffer();
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-        this.initDisplay(canvas.width, canvas.height);
+        this.initDisplay(logicalWidth, logicalHeight, backingWidth, backingHeight);
     }
 
     /** Begins a frame by binding the default target, setting viewport, and clearing. */
-    public beginFrame(width: number, height: number, background: Color): void {
+    public beginFrame(width: number, height: number, background: Color, backingWidth: number = this.defaultBackingWidth, backingHeight: number = this.defaultBackingHeight): void {
         this.flushTextureBatch();
         this.colorInverted = false;
         this.textureBatchInverted = false;
-        this.width = Math.max(1, width);
-        this.height = Math.max(1, height);
+        this.setDefaultDimensions(width, height, backingWidth, backingHeight);
+        this.useDefaultDimensions();
         this.currentTarget = null;
         const gl = this.gl;
         if (!gl) {
             return;
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.viewport(0, 0, this.width, this.height);
+        gl.viewport(0, 0, this.backingWidth, this.backingHeight);
         gl.clearColor(background.r, background.g, background.b, background.a);
         gl.clear(gl.COLOR_BUFFER_BIT);
         this.transformStack.length = 1;
@@ -248,14 +256,12 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (target) {
             target.ensure(gl);
             gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
-            this.width = target.width;
-            this.height = target.height;
+            this.setActiveDimensions(target.width, target.height, target.width, target.height);
         } else {
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-            this.width = this.canvas?.width ?? this.width;
-            this.height = this.canvas?.height ?? this.height;
+            this.useDefaultDimensions();
         }
-        gl.viewport(0, 0, this.width, this.height);
+        gl.viewport(0, 0, this.backingWidth, this.backingHeight);
     }
 
     /** Draws a textured quad. */
@@ -413,7 +419,31 @@ export class WebGLRenderer implements RenderBackend, SGL {
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER, sourceFramebuffer);
         gl.bindTexture(gl.TEXTURE_2D, target.texture);
-        gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, Math.trunc(x), Math.trunc(this.height - y - target.height), target.width, target.height);
+        const sourceX0 = Math.floor(x * this.backingScaleX);
+        const sourceX1 = Math.ceil((x + target.width) * this.backingScaleX);
+        const sourceY0 = Math.floor((this.height - y - target.height) * this.backingScaleY);
+        const sourceY1 = Math.ceil((this.height - y) * this.backingScaleY);
+        const sourceMatchesTargetSize = (sourceX1 - sourceX0) === target.width
+            && (sourceY1 - sourceY0) === target.height;
+        if (sourceMatchesTargetSize || typeof gl.blitFramebuffer !== "function") {
+            gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, sourceX0, sourceY0, target.width, target.height);
+        } else {
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, sourceFramebuffer);
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, target.framebuffer);
+            gl.blitFramebuffer(
+                sourceX0,
+                sourceY0,
+                sourceX1,
+                sourceY1,
+                0,
+                0,
+                target.width,
+                target.height,
+                gl.COLOR_BUFFER_BIT,
+                gl.NEAREST
+            );
+            gl.bindFramebuffer(gl.FRAMEBUFFER, sourceFramebuffer);
+        }
         target.textureResource.applyFilter(gl);
         this.batch.markDirty();
     }
@@ -536,7 +566,34 @@ export class WebGLRenderer implements RenderBackend, SGL {
             target.fill(0);
             return;
         }
-        gl.readPixels(x, this.height - y - height, width, height, gl.RGBA, gl.UNSIGNED_BYTE, target);
+        const sourceX0 = Math.floor(x * this.backingScaleX);
+        const sourceX1 = Math.ceil((x + width) * this.backingScaleX);
+        const sourceY0 = Math.floor((this.height - y - height) * this.backingScaleY);
+        const sourceY1 = Math.ceil((this.height - y) * this.backingScaleY);
+        const sourceWidth = Math.max(0, sourceX1 - sourceX0);
+        const sourceHeight = Math.max(0, sourceY1 - sourceY0);
+        if (sourceWidth === width && sourceHeight === height) {
+            gl.readPixels(sourceX0, sourceY0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, target);
+            return;
+        }
+        if (sourceWidth === 0 || sourceHeight === 0) {
+            target.fill(0);
+            return;
+        }
+        const source = new Uint8Array(sourceWidth * sourceHeight * 4);
+        gl.readPixels(sourceX0, sourceY0, sourceWidth, sourceHeight, gl.RGBA, gl.UNSIGNED_BYTE, source);
+        for (let row = 0; row < height; row++) {
+            const sourceRow = Math.min(sourceHeight - 1, Math.max(0, Math.floor((row + 0.5) * sourceHeight / height)));
+            for (let column = 0; column < width; column++) {
+                const sourceColumn = Math.min(sourceWidth - 1, Math.max(0, Math.floor((column + 0.5) * sourceWidth / width)));
+                const sourceOffset = (sourceRow * sourceWidth + sourceColumn) * 4;
+                const targetOffset = (row * width + column) * 4;
+                target[targetOffset] = source[sourceOffset];
+                target[targetOffset + 1] = source[sourceOffset + 1];
+                target[targetOffset + 2] = source[sourceOffset + 2];
+                target[targetOffset + 3] = source[sourceOffset + 3];
+            }
+        }
     }
 
     /** Binds a decoded WebGL texture resource to the active texture unit. */
@@ -569,7 +626,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
     /** Handles browser WebGL context restoration. */
     public handleContextRestored(): void {
         if (this.canvas) {
-            this.initialize(this.canvas, {});
+            this.initialize(
+                this.canvas,
+                {},
+                this.defaultWidth,
+                this.defaultHeight,
+                this.defaultBackingWidth,
+                this.defaultBackingHeight
+            );
         }
     }
 
@@ -604,18 +668,23 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     /** Java Slick2D counterpart: SGL.initDisplay(int, int). */
-    public initDisplay(width: number, height: number): void {
+    public initDisplay(width: number, height: number, backingWidth: number = width, backingHeight: number = height): void {
         this.flushTextureBatch();
         this.colorInverted = false;
         this.textureBatchInverted = false;
-        this.width = Math.max(1, width);
-        this.height = Math.max(1, height);
-        this.gl?.viewport(0, 0, this.width, this.height);
+        this.setDefaultDimensions(width, height, backingWidth, backingHeight);
+        this.useDefaultDimensions();
+        this.gl?.viewport(0, 0, this.backingWidth, this.backingHeight);
     }
 
     /** Java Slick2D counterpart: SGL.enterOrtho(int, int). */
     public enterOrtho(xsize: number, ysize: number): void {
-        this.initDisplay(xsize, ysize);
+        this.flushTextureBatch();
+        this.colorInverted = false;
+        this.textureBatchInverted = false;
+        this.setDefaultDimensions(xsize, ysize, this.defaultBackingWidth, this.defaultBackingHeight);
+        this.useDefaultDimensions();
+        this.gl?.viewport(0, 0, this.backingWidth, this.backingHeight);
         this.glLoadIdentity();
     }
 
@@ -634,7 +703,11 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.screenClip = null;
         this.worldClip = null;
         this.gl?.enable(this.gl.SCISSOR_TEST);
-        this.gl?.scissor(x, y, width, height);
+        const x0 = Math.floor(x * this.backingScaleX);
+        const x1 = Math.ceil((x + width) * this.backingScaleX);
+        const y0 = Math.floor(y * this.backingScaleY);
+        const y1 = Math.ceil((y + height) * this.backingScaleY);
+        this.gl?.scissor(x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0));
     }
 
     /** Java Slick2D counterpart: SGL.glLineWidth(float). */
@@ -1318,6 +1391,31 @@ export class WebGLRenderer implements RenderBackend, SGL {
         return this.scratchColor;
     }
 
+    private setDefaultDimensions(width: number, height: number, backingWidth: number, backingHeight: number): void {
+        this.defaultWidth = Math.max(1, width);
+        this.defaultHeight = Math.max(1, height);
+        this.defaultBackingWidth = Math.max(1, backingWidth);
+        this.defaultBackingHeight = Math.max(1, backingHeight);
+    }
+
+    private useDefaultDimensions(): void {
+        this.setActiveDimensions(
+            this.defaultWidth,
+            this.defaultHeight,
+            this.defaultBackingWidth,
+            this.defaultBackingHeight
+        );
+    }
+
+    private setActiveDimensions(width: number, height: number, backingWidth: number, backingHeight: number): void {
+        this.width = Math.max(1, width);
+        this.height = Math.max(1, height);
+        this.backingWidth = Math.max(1, backingWidth);
+        this.backingHeight = Math.max(1, backingHeight);
+        this.backingScaleX = this.backingWidth / this.width;
+        this.backingScaleY = this.backingHeight / this.height;
+    }
+
     private applyActiveClip(): void {
         const gl = this.gl;
         if (!gl) {
@@ -1329,9 +1427,11 @@ export class WebGLRenderer implements RenderBackend, SGL {
             return;
         }
         gl.enable(gl.SCISSOR_TEST);
-        const width = Math.max(0, Math.floor(clip.width));
-        const height = Math.max(0, Math.floor(clip.height));
-        gl.scissor(Math.floor(clip.x), Math.floor(this.height - clip.y - clip.height), width, height);
+        const x0 = Math.floor(clip.x * this.backingScaleX);
+        const x1 = Math.ceil((clip.x + clip.width) * this.backingScaleX);
+        const y0 = Math.floor((this.height - clip.y - clip.height) * this.backingScaleY);
+        const y1 = Math.ceil((this.height - clip.y) * this.backingScaleY);
+        gl.scissor(x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0));
     }
 
     private static normalizeClip(x: number, y: number, width: number, height: number): ScreenClip {

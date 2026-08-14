@@ -184,7 +184,9 @@ export class Music {
 
     /** Java Slick2D counterpart: Music.setPosition(float). */
     public setPosition(position: number): boolean {
-        this.positionOffset = Math.max(0, position);
+        this.positionOffset = this.buffer
+            ? this.normalizeOffset(this.buffer, position, this.looped)
+            : this.sanitizeOffset(position);
         if (this.source) {
             this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
         }
@@ -197,7 +199,10 @@ export class Music {
         if (!context || !this.source) {
             return this.positionOffset;
         }
-        return this.positionOffset + (context.currentTime - this.startedAt) * this.playbackRate;
+        const position = this.positionOffset + (context.currentTime - this.startedAt) * this.playbackRate;
+        return this.buffer
+            ? this.normalizeOffset(this.buffer, position, this.looped)
+            : this.sanitizeOffset(position);
     }
 
     /** Java Slick2D counterpart: Music.fade(int, float, boolean). */
@@ -222,6 +227,9 @@ export class Music {
         Music.currentMusic = this;
         this.looped = loop;
         this.playbackRate = Math.max(0.25, Math.min(4, pitch));
+        this.positionOffset = this.buffer
+            ? this.normalizeOffset(this.buffer, offset, loop)
+            : this.sanitizeOffset(offset);
         this.setVolume(volume);
         this.paused = false;
         this.playingFlag = true;
@@ -233,13 +241,13 @@ export class Music {
                 return;
             }
             this.buffer = buffer;
+            this.positionOffset = this.normalizeOffset(buffer, this.positionOffset, loop);
             if (!SoundStore.get().musicOn()) {
                 this.globallySuspended = true;
-                this.positionOffset = Math.max(0, Math.min(offset, buffer.duration));
                 return;
             }
             this.globallySuspended = false;
-            this.startSource(buffer, loop, offset);
+            this.startSource(buffer, loop, this.positionOffset);
         }).catch((error) => {
             if (token === this.startToken && Music.currentMusic === this) {
                 this.playingFlag = false;
@@ -330,7 +338,7 @@ export class Music {
         this.gain.gain.value = this.volume;
         source.connect(this.gain);
         this.gain.connect(bus);
-        this.positionOffset = Math.max(0, Math.min(offset, buffer.duration));
+        this.positionOffset = this.normalizeOffset(buffer, offset, loop);
         this.startedAt = context.currentTime;
         this.stopRequested = false;
         source.onended = () => {
@@ -356,6 +364,25 @@ export class Music {
         };
         source.start(0, this.positionOffset);
         Music.active.add(this);
+    }
+
+    private sanitizeOffset(offset: number): number {
+        return Number.isFinite(offset) ? Math.max(0, offset) : 0;
+    }
+
+    private normalizeOffset(buffer: AudioBuffer, offset: number, loop: boolean): number {
+        const sanitized = this.sanitizeOffset(offset);
+        const duration = buffer.duration;
+        if (!Number.isFinite(duration)) {
+            return sanitized;
+        }
+        if (duration <= 0) {
+            return 0;
+        }
+        if (loop) {
+            return sanitized % duration;
+        }
+        return Math.min(sanitized, duration);
     }
 
     private suspendForMusicOff(): void {

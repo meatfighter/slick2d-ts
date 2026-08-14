@@ -501,8 +501,8 @@ Internal renderer files must expose a small private backend API that the Slick c
 
 ```ts
 export interface RenderBackend {
-    initialize(canvas: HTMLCanvasElement, options: RenderBackendOptions): void;
-    beginFrame(width: number, height: number, background: Color): void;
+    initialize(canvas: HTMLCanvasElement, options: RenderBackendOptions, logicalWidth?: number, logicalHeight?: number, backingWidth?: number, backingHeight?: number): void;
+    beginFrame(width: number, height: number, background: Color, backingWidth?: number, backingHeight?: number): void;
     endFrame(): void;
     setRenderTarget(target: WebGLRenderTarget | null): void;
     drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors?: boolean, useCurrentColorForNullTint?: boolean): void;
@@ -563,6 +563,7 @@ Implement these rules:
 - `Music` must preserve Java Slick2D's single global current music channel. Starting one `Music` stops/swaps the previous current instance, updates listener state, and makes `oldMusic.playing()` return false immediately.
 - `Music.stop()` and `pause()` must invalidate pending async starts so a decoded buffer cannot start after the game has stopped or changed modes.
 - `GameContainer.setMusicOn(false)` / `SoundStore.setMusicOn(false)` suspends audible active music, not just mutes it. It must not call public `Music.pause()` semantics, and it must preserve the current music instance and `Music.playing()` state. Setting music on again resumes from the stored position when possible.
+- Looped `Music` resume and seek offsets must be normalized with modulo buffer duration before creating a replacement Web Audio source; non-looped offsets remain clamped to the buffer duration. Pending async starts must use the latest stored `Music.setPosition(...)` offset rather than the original closed-over play/loop offset.
 - `Music.play()` or `loop()` while global music is off still registers that track as current and prepares it; audible Web Audio playback waits until global music is enabled.
 - Browser autoplay restrictions must be handled by deferring playback until audio is unlocked by a user gesture.
 - `playing()` must report whether the sound or music instance is currently active.
@@ -576,6 +577,7 @@ Implement these rules:
 - `AppGameContainer` must listen to `fullscreenchange` and `resize`, update canvas backing size and CSS size, then reinitialize the WebGL display dimensions.
 - `AppGameContainer` must default to Java's `updateOnlyWhenVisible=true` behavior. Hidden frames skip update/render unless `setUpdateOnlyWhenVisible(false)` is called, and hidden time must not accumulate into the first visible update delta.
 - `AppGameContainer.setLoopSuspended(...)` is a browser lifecycle helper, not a Java pause replacement. While active, it must cancel and suppress the RAF loop so input polling, audio polling, updates, rendering, frame submission, FPS accounting, and catch-up delta accumulation all stop until resumed.
+- `AppGameContainer` must use a high-DPI canvas backing store by default in browsers. Public Slick display, container, input, and scaling APIs remain in logical CSS pixels; only the canvas backing store and default WebGL viewport use device pixels. The default effective DPR is capped at `2`, with browser helper methods to opt out or lower/raise the cap.
 - Fullscreen entry/exit failures must reject with `SlickException`. Display-mode requests that resized the canvas before a failed fullscreen request must restore the previous logical and canvas dimensions.
 - Returned fullscreen/display-mode promises must be internally observed by `AppGameContainer` so a direct Java-style caller that ignores the returned promise does not create a browser `unhandledrejection`. The rejection must still be returned to explicit `await` callers, while ignored failures are routed to `AppGameContainer.setErrorHandler(handler)` or `Log.error`.
 - After browser-applied display size changes, the container must mark `Display.wasResized()` and call `containerSizeChanged(container)` when the active game exposes that Java-style helper.
@@ -1595,7 +1597,7 @@ Implementation instructions:
 - `getBuildVersion()` loads the resource named exactly `version` through `ResourceLoader.getResourceAsStream("version")`, parses Java `.properties` key `build`, logs `Slick Build #${build}`, and returns the parsed integer. On any failure it logs `Unable to determine Slick build number` and returns `-1`, matching Java Slick2D.
 - Store a reference to the `Game`, `Input`, and primary `Graphics`.
 - `getWidth` and `getHeight` return logical game size, not necessarily CSS pixel size.
-- `getScreenWidth` and `getScreenHeight` return the actual canvas backing size.
+- `getScreenWidth` and `getScreenHeight` return the logical browser display size used by Java-style display APIs. Browser backing pixels are exposed through `AppGameContainer.getBackingWidth()` and `getBackingHeight()`.
 - `setClearEachFrame` controls whether the canvas is cleared before each render.
 - `setAlwaysRender` controls rendering while unfocused. Paused containers still render when `hasFocus()` is true, matching Java `GameContainer.updateAndRender(...)`.
 - `setSmoothDeltas` must default to false. When true and `getFPS() != 0`, the RAF loop must replace the raw frame delta with `Math.trunc(1000 / getFPS())`, matching Java integer division.
@@ -1619,6 +1621,12 @@ export class AppGameContainer extends GameContainer {
     public constructor(game: Game);
     public constructor(game: Game, width: number, height: number, fullscreen: boolean);
     public setErrorHandler(handler: AppGameContainerErrorHandler | null): void;
+    public setHighDpiEnabled(enabled: boolean): void;
+    public isHighDpiEnabled(): boolean;
+    public setMaxDevicePixelRatio(maxDevicePixelRatio: number): void;
+    public getDevicePixelRatio(): number;
+    public getBackingWidth(): number;
+    public getBackingHeight(): number;
     public setLoopSuspended(suspended: boolean): void;
     public isLoopSuspended(): boolean;
     public suspendLoop(): void;
@@ -1653,6 +1661,7 @@ Implementation instructions:
 
 - Required by the games: constructor, `setAlwaysRender`, `setClearEachFrame`, `setDisplayMode`, `setShowFPS`, `setSmoothDeltas`, `setSoundOn`, `setVSync`, and `start`.
 - `start` creates or binds the canvas, initializes input/audio/rendering, calls `game.init`, resolves resources queued during init, and begins the browser loop.
+- High-DPI rendering is enabled by default. `setHighDpiEnabled(false)` returns the canvas to a 1:1 logical/backing buffer, `setMaxDevicePixelRatio(...)` controls the cap, `getDevicePixelRatio()` reports the effective DPR, and `getBackingWidth()` / `getBackingHeight()` report the current canvas backing dimensions.
 - `setLoopSuspended(true)` cancels any pending RAF and leaves Java `setPaused(...)`, `setAlwaysRender(...)`, resource state, audio enable flags, display size, fullscreen state, and the current canvas pixels unchanged. `setLoopSuspended(false)` resets frame timing and schedules one RAF only after the container has started, completed startup/reinit resource barriers, is not destroyed, and is not waiting for queued resources.
 - The RAF loop must match Java close behavior: check `Display.isCloseRequested()` first, and call `game.closeRequested()` only inside that branch.
 - The container default must match Java `AppGameContainer`: `isUpdatingOnlyWhenVisible()` returns true before any setter call. When hidden and that flag is true, skip update/render and reset frame timing so hidden elapsed time is not delivered to the next visible update.
@@ -2075,7 +2084,7 @@ export interface SGL {
     readonly GL_MODELVIEW_MATRIX: number;
 
     flush(): void;
-    initDisplay(width: number, height: number): void;
+    initDisplay(width: number, height: number, backingWidth?: number, backingHeight?: number): void;
     enterOrtho(xsize: number, ysize: number): void;
     glClearColor(r: number, g: number, b: number, a: number): void;
     glClipPlane(plane: number, buffer: Float64Array): void;

@@ -111,6 +111,43 @@ class FakeBatchGL {
     }
 }
 
+class FakeCopyGL {
+    constructor() {
+        this.COLOR_BUFFER_BIT = 0x4000;
+        this.DRAW_FRAMEBUFFER = 0x8CA9;
+        this.FRAMEBUFFER = 0x8D40;
+        this.FRAMEBUFFER_BINDING = 0x8CA6;
+        this.NEAREST = 0x2600;
+        this.READ_FRAMEBUFFER = 0x8CA8;
+        this.TEXTURE_2D = 0x0DE1;
+        this.bindFramebufferCalls = [];
+        this.blitFramebufferCalls = [];
+        this.copyTexSubImage2DCalls = [];
+    }
+
+    bindFramebuffer(target, framebuffer) {
+        this.bindFramebufferCalls.push([target, framebuffer]);
+    }
+
+    bindTexture() {
+    }
+
+    blitFramebuffer(...args) {
+        this.blitFramebufferCalls.push(args);
+    }
+
+    copyTexSubImage2D(...args) {
+        this.copyTexSubImage2DCalls.push(args);
+    }
+
+    getParameter(parameter) {
+        return parameter === this.FRAMEBUFFER_BINDING ? "source-framebuffer" : null;
+    }
+
+    viewport() {
+    }
+}
+
 function fakeProgram() {
     return {
         program: {},
@@ -428,6 +465,50 @@ test("WebGLRenderer batches same-texture image quads until a Slick flush boundar
     assert.equal(gl.drawArraysCalls.length, 3);
     assert.deepEqual(gl.drawArraysCalls[1], { mode: gl.TRIANGLES, first: 0, count: 6 });
     assert.deepEqual(gl.drawArraysCalls[2], { mode: gl.TRIANGLES, first: 0, count: 6 });
+});
+
+test("WebGLRenderer high-DPI backing size does not change logical projection", () => {
+    const gl = new FakeBatchGL();
+    const renderer = new WebGLRenderer();
+    renderer.gl = gl;
+    renderer.textureProgram = fakeProgram();
+    renderer.solidProgram = fakeProgram();
+    renderer.buffer = {};
+    renderer.initDisplay(100, 50, 200, 100);
+
+    const texture = {};
+    const image = fakeImageForTexture(texture);
+    renderer.drawImageWarped(image, 0, 0, 100, 0, 100, 50, 0, 50, 0, 0, 16, 16, 1, null, identityMatrix3());
+
+    assert.equal(renderer.textureBatchVertices[0], -1);
+    assert.equal(renderer.textureBatchVertices[1], 1);
+    assert.equal(renderer.textureBatchVertices[8], 1);
+    assert.equal(renderer.textureBatchVertices[9], 1);
+    assert.equal(renderer.textureBatchVertices[16], 1);
+    assert.equal(renderer.textureBatchVertices[17], -1);
+});
+
+test("WebGLRenderer copyArea resolves high-DPI source rectangles into logical render targets", () => {
+    const gl = new FakeCopyGL();
+    const renderer = new WebGLRenderer();
+    renderer.gl = gl;
+    renderer.initDisplay(10, 10, 20, 20);
+    const target = {
+        framebuffer: "target-framebuffer",
+        height: 2,
+        texture: "target-texture",
+        textureResource: {
+            applyFilter: () => undefined
+        },
+        width: 3,
+        ensure: () => undefined
+    };
+
+    renderer.copyAreaToRenderTarget(target, 2, 3);
+
+    assert.deepEqual(gl.copyTexSubImage2DCalls, []);
+    assert.deepEqual(gl.blitFramebufferCalls, [[4, 10, 10, 14, 0, 0, 3, 2, gl.COLOR_BUFFER_BIT, gl.NEAREST]]);
+    assert.deepEqual(gl.bindFramebufferCalls.at(-1), [gl.FRAMEBUFFER, "source-framebuffer"]);
 });
 
 test("WebGLRenderer flash image draws use flash shader mode and split normal batches", () => {

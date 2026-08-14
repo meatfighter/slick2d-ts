@@ -38,7 +38,9 @@ class PixelReadbackGL {
 
     readPixels(x, y, width, height, format, type, target) {
         this.lastRead = [x, y, width, height, format, type];
-        target.set([1, 0, 254, 255]);
+        for (let offset = 0; offset < target.byteLength; offset += 4) {
+            target.set([1, 0, 254, 255], offset);
+        }
     }
 
     viewport() {
@@ -116,6 +118,21 @@ test("Graphics.getPixel reads framebuffer bytes through the explicit int path", 
     const color = new Graphics(10, 10).getPixel(3, 4);
 
     assert.deepEqual(gl.lastRead, [3, 5, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE]);
+    assert.equal(color.getRed(), 1);
+    assert.equal(color.getGreen(), 0);
+    assert.equal(color.getBlue(), 254);
+    assert.equal(color.getAlpha(), 255);
+});
+
+test("Graphics.getPixel reads high-DPI framebuffer bytes from the logical pixel area", () => {
+    const gl = new PixelReadbackGL();
+    const renderer = Renderer.getBackend();
+    renderer.gl = gl;
+    renderer.initDisplay(10, 10, 20, 20);
+
+    const color = new Graphics(10, 10).getPixel(3, 4);
+
+    assert.deepEqual(gl.lastRead, [6, 10, 2, 2, gl.RGBA, gl.UNSIGNED_BYTE]);
     assert.equal(color.getRed(), 1);
     assert.equal(color.getGreen(), 0);
     assert.equal(color.getBlue(), 254);

@@ -165,6 +165,71 @@ test("browser-forced fullscreen exit restores the last windowed canvas mode", as
     assert.deepEqual(game.resizeCalls.at(-1), [800, 600]);
 });
 
+test("high-DPI sizing keeps display APIs logical and canvas backing capped", () => {
+    installBrowserGlobals();
+    globalThis.window.devicePixelRatio = 2.5;
+    const { canvas, container } = createContainer(320, 200);
+
+    container.applyCanvasSize(320, 200);
+
+    assert.equal(container.getWidth(), 320);
+    assert.equal(container.getHeight(), 200);
+    assert.equal(container.getScreenWidth(), 320);
+    assert.equal(container.getScreenHeight(), 200);
+    assert.equal(Display.getWidth(), 320);
+    assert.equal(Display.getHeight(), 200);
+    assert.equal(container.getDevicePixelRatio(), 2);
+    assert.equal(container.getBackingWidth(), 640);
+    assert.equal(container.getBackingHeight(), 400);
+    assert.equal(canvas.width, 640);
+    assert.equal(canvas.height, 400);
+    assert.equal(canvas.style.width, "320px");
+    assert.equal(canvas.style.height, "200px");
+
+    container.setMaxDevicePixelRatio(1.5);
+
+    assert.equal(container.getDevicePixelRatio(), 1.5);
+    assert.equal(canvas.width, 480);
+    assert.equal(canvas.height, 300);
+
+    container.setHighDpiEnabled(false);
+
+    assert.equal(container.getDevicePixelRatio(), 1);
+    assert.equal(canvas.width, 320);
+    assert.equal(canvas.height, 200);
+});
+
+test("high-DPI fullscreen restore preserves logical size and backing size separately", async () => {
+    installBrowserGlobals();
+    globalThis.window.devicePixelRatio = 2;
+    const { canvas, container, game } = createContainer();
+
+    await Promise.resolve(container.setDisplayMode(1280, 720, true));
+
+    assert.equal(container.getWidth(), 1920);
+    assert.equal(container.getHeight(), 1080);
+    assert.equal(container.getBackingWidth(), 3840);
+    assert.equal(container.getBackingHeight(), 2160);
+    assert.equal(canvas.width, 3840);
+    assert.equal(canvas.height, 2160);
+    assert.equal(canvas.style.width, "100vw");
+    assert.equal(canvas.style.height, "100vh");
+
+    globalThis.document.fullscreenElement = null;
+    container.handleFullscreenChange();
+
+    assert.equal(container.isFullscreen(), false);
+    assert.equal(container.getWidth(), 800);
+    assert.equal(container.getHeight(), 600);
+    assert.equal(container.getBackingWidth(), 1600);
+    assert.equal(container.getBackingHeight(), 1200);
+    assert.equal(canvas.width, 1600);
+    assert.equal(canvas.height, 1200);
+    assert.equal(canvas.style.width, "800px");
+    assert.equal(canvas.style.height, "600px");
+    assert.deepEqual(game.resizeCalls.at(-1), [800, 600]);
+});
+
 test("explicit fullscreen exit applies the restored size once", async () => {
     installBrowserGlobals();
     const { container, game } = createContainer();

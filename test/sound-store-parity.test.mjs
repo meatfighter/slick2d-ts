@@ -3,25 +3,32 @@ import { afterEach, test } from "node:test";
 import { AL, Music, ResourceLoader, Sound, SoundStore } from "../dist/index.js";
 
 class FakeAudioBuffer {
+    static duration = 60;
+
     constructor() {
-        this.duration = 60;
+        this.duration = FakeAudioBuffer.duration;
     }
 }
 
 class FakeAudioSource {
+    static created = [];
+
     constructor() {
         this.buffer = null;
         this.loop = false;
         this.onended = null;
         this.playbackRate = { value: 1 };
+        this.startCalls = [];
         this.started = false;
         this.stopped = false;
+        FakeAudioSource.created.push(this);
     }
 
     connect() {
     }
 
-    start() {
+    start(when = 0, offset = 0) {
+        this.startCalls.push({ when, offset });
         this.started = true;
     }
 
@@ -106,12 +113,15 @@ function registerTone() {
 }
 
 async function settleAudioStart() {
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let i = 0; i < 8; i++) {
+        await Promise.resolve();
+    }
 }
 
 afterEach(() => {
     AL.destroy();
+    FakeAudioBuffer.duration = 60;
+    FakeAudioSource.created = [];
     FakeAudioContext.decodeError = null;
     FakeAudioContext.lastPanner = null;
     FakeAudioContext.resumeCalls = 0;
@@ -401,6 +411,68 @@ test("Music explicit-volume play and loop preserve the supplied volume", async (
     music.loop(1, 0.5);
 
     assert.equal(music.getVolume(), 0.5);
+});
+
+test("looped Music global music-off resume wraps elapsed position inside the buffer", async () => {
+    installAudioGlobals();
+    registerTone();
+    FakeAudioBuffer.duration = 10;
+    const store = SoundStore.get();
+    AL.create();
+    const music = new Music("tone.ogg");
+    await music.ready();
+
+    music.loop();
+    await settleAudioStart();
+    store.getAudioContext().currentTime = 23.5;
+
+    store.setMusicOn(false);
+    assert.equal(music.playing(), true);
+
+    store.setMusicOn(true);
+    await settleAudioStart();
+
+    const source = FakeAudioSource.created[FakeAudioSource.created.length - 1];
+    assert.equal(source.startCalls[0].offset, 3.5);
+    assert.equal(music.getPosition(), 3.5);
+});
+
+test("non-looped Music global music-off resume clamps elapsed position to the buffer", async () => {
+    installAudioGlobals();
+    registerTone();
+    FakeAudioBuffer.duration = 10;
+    const store = SoundStore.get();
+    AL.create();
+    const music = new Music("tone.ogg");
+    await music.ready();
+
+    music.play();
+    await settleAudioStart();
+    store.getAudioContext().currentTime = 23.5;
+
+    store.setMusicOn(false);
+    store.setMusicOn(true);
+    await settleAudioStart();
+
+    const source = FakeAudioSource.created[FakeAudioSource.created.length - 1];
+    assert.equal(source.startCalls[0].offset, 10);
+    assert.equal(music.getPosition(), 10);
+});
+
+test("Music pending async start uses the latest requested position", async () => {
+    installAudioGlobals();
+    registerTone();
+    FakeAudioBuffer.duration = 20;
+    AL.create();
+    const music = new Music("tone.ogg");
+
+    music.loop();
+    music.setPosition(12.5);
+    await music.ready();
+    await settleAudioStart();
+
+    const source = FakeAudioSource.created[FakeAudioSource.created.length - 1];
+    assert.equal(source.startCalls[0].offset, 12.5);
 });
 
 test("SoundStore.unlock resumes audio from a user gesture and supports restart after destroy", async () => {

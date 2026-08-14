@@ -23,6 +23,9 @@ type DisplaySnapshot = {
     height: number;
     screenWidth: number;
     screenHeight: number;
+    displayPixelRatio: number;
+    backingWidth: number;
+    backingHeight: number;
     fullscreen: boolean;
     lastWindowedWidth: number;
     lastWindowedHeight: number;
@@ -64,6 +67,11 @@ export class AppGameContainer extends GameContainer {
     private animationFrame = 0;
     private loopReady = false;
     private loopSuspended = false;
+    private highDpiEnabled = true;
+    private maxDevicePixelRatio = 2;
+    private displayPixelRatio = 1;
+    private backingWidth = 640;
+    private backingHeight = 480;
     private lastFrameTime = 0;
     private framesThisSecond = 0;
     private fpsWindowStart = 0;
@@ -82,6 +90,8 @@ export class AppGameContainer extends GameContainer {
         this.fullscreen = fullscreen;
         this.updateOnlyWhenVisible = true;
         this.setDimensions(width, height);
+        this.backingWidth = this.width;
+        this.backingHeight = this.height;
         this.lastWindowedDisplayMode = { width, height };
     }
 
@@ -93,6 +103,47 @@ export class AppGameContainer extends GameContainer {
     /** Browser parity helper: reports async frame/resource errors to the host page. */
     public setErrorHandler(handler: AppGameContainerErrorHandler | null): void {
         this.errorHandler = handler;
+    }
+
+    /** Browser rendering helper: controls whether the canvas backing store uses device pixels. */
+    public setHighDpiEnabled(enabled: boolean): void {
+        if (this.highDpiEnabled === enabled) {
+            return;
+        }
+        this.highDpiEnabled = enabled;
+        this.refreshCurrentCanvasBacking();
+    }
+
+    /** Browser rendering helper: reports whether high-DPI backing-store rendering is enabled. */
+    public isHighDpiEnabled(): boolean {
+        return this.highDpiEnabled;
+    }
+
+    /** Browser rendering helper: caps the effective device pixel ratio used for the canvas backing store. */
+    public setMaxDevicePixelRatio(maxDevicePixelRatio: number): void {
+        const normalized = Number.isFinite(maxDevicePixelRatio)
+            ? Math.max(1, maxDevicePixelRatio)
+            : 1;
+        if (this.maxDevicePixelRatio === normalized) {
+            return;
+        }
+        this.maxDevicePixelRatio = normalized;
+        this.refreshCurrentCanvasBacking();
+    }
+
+    /** Browser rendering helper: returns the effective device pixel ratio used by the current canvas. */
+    public getDevicePixelRatio(): number {
+        return this.displayPixelRatio;
+    }
+
+    /** Browser rendering helper: returns the current canvas backing-store width in device pixels. */
+    public getBackingWidth(): number {
+        return this.backingWidth;
+    }
+
+    /** Browser rendering helper: returns the current canvas backing-store height in device pixels. */
+    public getBackingHeight(): number {
+        return this.backingHeight;
     }
 
     /** Browser lifecycle helper: stops the RAF-backed loop without changing Java pause state. */
@@ -136,6 +187,11 @@ export class AppGameContainer extends GameContainer {
     public setDisplayMode(width: number, height: number, fullscreen: boolean): void | Promise<void> {
         const snapshot = this.captureDisplaySnapshot();
         this.setDimensions(width, height);
+        if (!this.canvas) {
+            this.displayPixelRatio = 1;
+            this.backingWidth = Math.max(1, Math.trunc(width));
+            this.backingHeight = Math.max(1, Math.trunc(height));
+        }
         if (!fullscreen) {
             this.setLastWindowedDisplayMode(width, height);
         }
@@ -256,10 +312,7 @@ export class AppGameContainer extends GameContainer {
         this.loopReady = false;
         try {
             this.canvas = this.resolveCanvas();
-            this.canvas.width = this.width;
-            this.canvas.height = this.height;
-            this.canvas.style.width = `${this.width}px`;
-            this.canvas.style.height = `${this.height}px`;
+            this.applySizedCanvas(this.width, this.height, `${this.width}px`, `${this.height}px`, false);
             this.canvas.tabIndex = this.canvas.tabIndex < 0 ? 0 : this.canvas.tabIndex;
             this.canvas.focus();
             Mouse.setElement(this.canvas);
@@ -269,13 +322,14 @@ export class AppGameContainer extends GameContainer {
             Display.create();
             Display.setTitle(this.title);
             window.addEventListener("resize", this.handleWindowResize);
+            window.visualViewport?.addEventListener("resize", this.handleWindowResize);
             document.addEventListener("fullscreenchange", this.handleFullscreenChange);
             document.addEventListener("visibilitychange", this.handleVisibilityChange);
             Renderer.getBackend().initialize(this.canvas, {
                 alpha: true,
                 antialias: this.multiSample > 0,
                 stencil: GameContainer.stencil
-            });
+            }, this.width, this.height, this.backingWidth, this.backingHeight);
             AL.create();
             await this.game.init(this);
             await ResourceLoader.waitForAll();
@@ -354,12 +408,12 @@ export class AppGameContainer extends GameContainer {
 
     /** Java Slick2D counterpart: AppGameContainer.getScreenHeight(). */
     public override getScreenHeight(): number {
-        return this.canvas?.height ?? this.screenHeight;
+        return this.screenHeight;
     }
 
     /** Java Slick2D counterpart: AppGameContainer.getScreenWidth(). */
     public override getScreenWidth(): number {
-        return this.canvas?.width ?? this.screenWidth;
+        return this.screenWidth;
     }
 
     /** Java Slick2D counterpart: AppGameContainer.destroy(). */
@@ -379,6 +433,7 @@ export class AppGameContainer extends GameContainer {
         Mouse.setElement(null);
         if (typeof window !== "undefined") {
             window.removeEventListener("resize", this.handleWindowResize);
+            window.visualViewport?.removeEventListener("resize", this.handleWindowResize);
         }
         if (typeof document !== "undefined") {
             document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
@@ -403,6 +458,10 @@ export class AppGameContainer extends GameContainer {
         }
         if (this.canvas) {
             this.applyCanvasSize(mode.getWidth(), mode.getHeight());
+        } else {
+            this.displayPixelRatio = 1;
+            this.backingWidth = Math.max(1, Math.trunc(mode.getWidth()));
+            this.backingHeight = Math.max(1, Math.trunc(mode.getHeight()));
         }
     }
 
@@ -457,9 +516,9 @@ export class AppGameContainer extends GameContainer {
         let waitForResources = ResourceLoader.hasPending();
         if (this.hasFocus() || this.getAlwaysRender()) {
             if (this.clearEachFrame) {
-                Renderer.getBackend().beginFrame(this.width, this.height, this.graphics.getBackground());
+                Renderer.getBackend().beginFrame(this.width, this.height, this.graphics.getBackground(), this.backingWidth, this.backingHeight);
             } else {
-                Renderer.getBackend().beginFrame(this.width, this.height, Color.transparent);
+                Renderer.getBackend().beginFrame(this.width, this.height, Color.transparent, this.backingWidth, this.backingHeight);
             }
             Graphics.setCurrent(this.graphics);
             this.game.render(this, this.graphics);
@@ -530,9 +589,9 @@ export class AppGameContainer extends GameContainer {
                 alpha: true,
                 antialias: this.multiSample > 0,
                 stencil: GameContainer.stencil
-            });
+            }, this.width, this.height, this.backingWidth, this.backingHeight);
         } else {
-            Renderer.getBackend().initDisplay(this.width, this.height);
+            Renderer.getBackend().initDisplay(this.width, this.height, this.backingWidth, this.backingHeight);
         }
         AL.create();
         Display.setActiveContainer(this);
@@ -587,6 +646,8 @@ export class AppGameContainer extends GameContainer {
         try {
             if (this.isFullscreen()) {
                 this.applyBrowserDisplaySize();
+            } else {
+                this.refreshCurrentCanvasBacking();
             }
         } catch (error) {
             this.reportError(error);
@@ -614,6 +675,7 @@ export class AppGameContainer extends GameContainer {
     private readonly handleVisibilityChange = (): void => {
         if (typeof document !== "undefined" && document.visibilityState !== "hidden") {
             this.lastFrameTime = this.now();
+            this.refreshCurrentCanvasBacking();
         }
     };
 
@@ -674,14 +736,18 @@ export class AppGameContainer extends GameContainer {
         if (!this.canvas || typeof window === "undefined") {
             return;
         }
-        const width = Math.max(1, Math.trunc(window.innerWidth || this.width));
-        const height = Math.max(1, Math.trunc(window.innerHeight || this.height));
+        const viewport = window.visualViewport;
+        const width = Math.max(1, Math.trunc(viewport?.width || window.innerWidth || this.width));
+        const height = Math.max(1, Math.trunc(viewport?.height || window.innerHeight || this.height));
         this.applySizedCanvas(width, height, "100vw", "100vh", true);
     }
 
     private applyWindowedDisplayMode(width: number = this.lastWindowedDisplayMode.width, height: number = this.lastWindowedDisplayMode.height, notify: boolean = true): void {
         if (!this.canvas) {
             this.setDimensions(width, height);
+            this.displayPixelRatio = 1;
+            this.backingWidth = Math.max(1, Math.trunc(width));
+            this.backingHeight = Math.max(1, Math.trunc(height));
             return;
         }
         this.applySizedCanvas(width, height, `${width}px`, `${height}px`, notify);
@@ -691,24 +757,53 @@ export class AppGameContainer extends GameContainer {
         if (!this.canvas) {
             return;
         }
-        const normalizedWidth = Math.max(1, Math.trunc(width));
-        const normalizedHeight = Math.max(1, Math.trunc(height));
-        const changed = this.width !== normalizedWidth
-            || this.height !== normalizedHeight
-            || this.canvas.width !== normalizedWidth
-            || this.canvas.height !== normalizedHeight
+        const logicalWidth = Math.max(1, Math.trunc(width));
+        const logicalHeight = Math.max(1, Math.trunc(height));
+        const dpr = this.resolveDisplayPixelRatio();
+        const backingWidth = Math.max(1, Math.round(logicalWidth * dpr));
+        const backingHeight = Math.max(1, Math.round(logicalHeight * dpr));
+        const logicalOrStyleChanged = this.width !== logicalWidth
+            || this.height !== logicalHeight
             || this.canvas.style.width !== styleWidth
             || this.canvas.style.height !== styleHeight;
-        this.setDimensions(normalizedWidth, normalizedHeight);
-        this.canvas.width = normalizedWidth;
-        this.canvas.height = normalizedHeight;
+        this.setDimensions(logicalWidth, logicalHeight);
+        this.displayPixelRatio = dpr;
+        this.backingWidth = backingWidth;
+        this.backingHeight = backingHeight;
+        if (this.canvas.width !== backingWidth) {
+            this.canvas.width = backingWidth;
+        }
+        if (this.canvas.height !== backingHeight) {
+            this.canvas.height = backingHeight;
+        }
         this.canvas.style.width = styleWidth;
         this.canvas.style.height = styleHeight;
-        Renderer.getBackend().initDisplay(normalizedWidth, normalizedHeight);
-        if (notify && changed) {
-            Display.markResized(normalizedWidth, normalizedHeight);
+        Renderer.getBackend().initDisplay(logicalWidth, logicalHeight, backingWidth, backingHeight);
+        if (notify && logicalOrStyleChanged) {
+            Display.markResized(logicalWidth, logicalHeight);
             this.notifyContainerSizeChanged();
         }
+    }
+
+    private refreshCurrentCanvasBacking(): void {
+        if (!this.canvas) {
+            this.displayPixelRatio = 1;
+            this.backingWidth = this.width;
+            this.backingHeight = this.height;
+            Renderer.getBackend().initDisplay(this.width, this.height, this.backingWidth, this.backingHeight);
+            return;
+        }
+        const styleWidth = this.canvas.style.width || `${this.width}px`;
+        const styleHeight = this.canvas.style.height || `${this.height}px`;
+        this.applySizedCanvas(this.width, this.height, styleWidth, styleHeight, false);
+    }
+
+    private resolveDisplayPixelRatio(): number {
+        if (!this.highDpiEnabled || typeof window === "undefined") {
+            return 1;
+        }
+        const raw = Number.isFinite(window.devicePixelRatio) ? window.devicePixelRatio : 1;
+        return Math.max(1, Math.min(raw || 1, this.maxDevicePixelRatio));
     }
 
     private setLastWindowedDisplayMode(width: number, height: number): void {
@@ -790,6 +885,9 @@ export class AppGameContainer extends GameContainer {
             height: this.height,
             screenWidth: this.screenWidth,
             screenHeight: this.screenHeight,
+            displayPixelRatio: this.displayPixelRatio,
+            backingWidth: this.backingWidth,
+            backingHeight: this.backingHeight,
             fullscreen: this.fullscreen,
             lastWindowedWidth: this.lastWindowedDisplayMode.width,
             lastWindowedHeight: this.lastWindowedDisplayMode.height,
@@ -805,6 +903,9 @@ export class AppGameContainer extends GameContainer {
         this.height = snapshot.height;
         this.screenWidth = snapshot.screenWidth;
         this.screenHeight = snapshot.screenHeight;
+        this.displayPixelRatio = snapshot.displayPixelRatio;
+        this.backingWidth = snapshot.backingWidth;
+        this.backingHeight = snapshot.backingHeight;
         this.fullscreen = snapshot.fullscreen;
         this.setLastWindowedDisplayMode(snapshot.lastWindowedWidth, snapshot.lastWindowedHeight);
         this.graphics.setDimensions(this.width, this.height);
@@ -813,8 +914,8 @@ export class AppGameContainer extends GameContainer {
             this.canvas.height = snapshot.canvasHeight;
             this.canvas.style.width = snapshot.canvasStyleWidth;
             this.canvas.style.height = snapshot.canvasStyleHeight;
-            Renderer.getBackend().initDisplay(snapshot.canvasWidth, snapshot.canvasHeight);
-            Display.markResized(snapshot.canvasWidth, snapshot.canvasHeight);
+            Renderer.getBackend().initDisplay(this.width, this.height, snapshot.canvasWidth, snapshot.canvasHeight);
+            Display.markResized(this.width, this.height);
         }
         this.notifyContainerSizeChanged();
     }

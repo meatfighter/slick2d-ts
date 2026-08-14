@@ -21,8 +21,8 @@ export interface RenderBackendOptions {
  * This is not a public replacement for Slick2D APIs.
  */
 export interface RenderBackend {
-    initialize(canvas: HTMLCanvasElement, options: RenderBackendOptions): void;
-    beginFrame(width: number, height: number, background: Color): void;
+    initialize(canvas: HTMLCanvasElement, options: RenderBackendOptions, logicalWidth?: number, logicalHeight?: number, backingWidth?: number, backingHeight?: number): void;
+    beginFrame(width: number, height: number, background: Color, backingWidth?: number, backingHeight?: number): void;
     endFrame(): void;
     setRenderTarget(target: WebGLRenderTarget | null): void;
     drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors?: boolean, useCurrentColorForNullTint?: boolean): void;

@@ -58,7 +58,7 @@ export interface SGL {
     /** Java Slick2D counterpart: SGL.flush(). */
     flush(): void;
     /** Java Slick2D counterpart: SGL.initDisplay(int, int). */
-    initDisplay(width: number, height: number): void;
+    initDisplay(width: number, height: number, backingWidth?: number, backingHeight?: number): void;
     /** Java Slick2D counterpart: SGL.enterOrtho(int, int). */
     enterOrtho(xsize: number, ysize: number): void;
     /** Java Slick2D counterpart: SGL.glClearColor(float, float, float, float). */
