@@ -248,6 +248,11 @@ export abstract class GameContainer {
         return SoundStore.get().soundsOn();
     }
 
+    /** Browser/PWA helper: stops active sound effects without changing music or sound toggles. */
+    public stopSoundEffects(): void {
+        SoundStore.get().stopSoundEffects();
+    }
+
     /** Java Slick2D counterpart: GameContainer.setMusicOn(boolean). */
     public setMusicOn(on: boolean): void {
         SoundStore.get().setMusicOn(on);

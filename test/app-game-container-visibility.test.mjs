@@ -30,10 +30,12 @@ class FakeCanvas {
 
 function installBrowserGlobals(visibilityState = "visible") {
     const document = {
+        addEventListener: () => undefined,
         body: {},
         documentElement: {},
         fullscreenElement: null,
         hasFocus: () => true,
+        removeEventListener: () => undefined,
         visibilityState
     };
     Object.defineProperty(globalThis, "document", {
@@ -433,6 +435,60 @@ test("resource completion does not restart the RAF loop while suspended", async 
         assert.equal(frames.length, 1);
     } finally {
         ResourceLoader.clearCache();
+    }
+});
+
+test("AppGameContainer.destroy uses the default audio teardown path by default", () => {
+    installBrowserGlobals();
+    const { container } = createContainer();
+    const events = [];
+    const oldDestroy = AL.destroy;
+    const oldDestroyPreservingAudioCache = AL.destroyPreservingAudioCache;
+
+    AL.destroy = () => {
+        events.push("destroy");
+    };
+    AL.destroyPreservingAudioCache = () => {
+        events.push("destroyPreservingAudioCache");
+    };
+
+    try {
+        assert.equal(container.isPreservingAudioCacheOnDestroy(), false);
+
+        container.destroy();
+
+        assert.deepEqual(events, ["destroy"]);
+    } finally {
+        AL.destroy = oldDestroy;
+        AL.destroyPreservingAudioCache = oldDestroyPreservingAudioCache;
+    }
+});
+
+test("AppGameContainer.destroy can preserve decoded audio cache on request", () => {
+    installBrowserGlobals();
+    const { container } = createContainer();
+    const events = [];
+    const oldDestroy = AL.destroy;
+    const oldDestroyPreservingAudioCache = AL.destroyPreservingAudioCache;
+
+    AL.destroy = () => {
+        events.push("destroy");
+    };
+    AL.destroyPreservingAudioCache = () => {
+        events.push("destroyPreservingAudioCache");
+    };
+
+    try {
+        container.setPreserveAudioCacheOnDestroy(true);
+
+        assert.equal(container.isPreservingAudioCacheOnDestroy(), true);
+
+        container.destroy();
+
+        assert.deepEqual(events, ["destroyPreservingAudioCache"]);
+    } finally {
+        AL.destroy = oldDestroy;
+        AL.destroyPreservingAudioCache = oldDestroyPreservingAudioCache;
     }
 });
 

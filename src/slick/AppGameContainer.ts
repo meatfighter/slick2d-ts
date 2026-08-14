@@ -80,6 +80,7 @@ export class AppGameContainer extends GameContainer {
     private resourceError: unknown = null;
     private errorHandler: AppGameContainerErrorHandler | null = null;
     private lastWindowedDisplayMode!: WindowedDisplayMode;
+    private preserveAudioCacheOnDestroy = false;
 
     public constructor(game: Game);
     public constructor(game: Game, width: number, height: number, fullscreen: boolean);
@@ -175,6 +176,16 @@ export class AppGameContainer extends GameContainer {
     /** Browser lifecycle helper: shorthand for setLoopSuspended(false). */
     public resumeLoop(): void {
         this.setLoopSuspended(false);
+    }
+
+    /** Browser/PWA helper: controls whether destroy() preserves decoded audio and the AudioContext. */
+    public setPreserveAudioCacheOnDestroy(preserve: boolean): void {
+        this.preserveAudioCacheOnDestroy = preserve;
+    }
+
+    /** Browser/PWA helper: reports whether destroy() preserves decoded audio and the AudioContext. */
+    public isPreservingAudioCacheOnDestroy(): boolean {
+        return this.preserveAudioCacheOnDestroy;
     }
 
     /** Java Slick2D counterpart: AppGameContainer.setTitle(String). */
@@ -440,7 +451,11 @@ export class AppGameContainer extends GameContainer {
             document.removeEventListener("visibilitychange", this.handleVisibilityChange);
         }
         Renderer.getBackend().dispose();
-        AL.destroy();
+        if (this.preserveAudioCacheOnDestroy) {
+            AL.destroyPreservingAudioCache();
+        } else {
+            AL.destroy();
+        }
         Display.destroy();
         Display.setActiveContainer(null);
     }

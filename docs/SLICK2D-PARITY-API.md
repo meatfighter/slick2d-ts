@@ -556,6 +556,9 @@ Implement these rules:
 - `Sound.playAt(pitch, volume, x, y, z)` must pass coordinates to a Web Audio `PannerNode` when the browser backend provides one. If `createPanner()` is unavailable or fails, fall back to non-positioned playback while preserving Java-visible play/drop/latest-source behavior.
 - `Sound.playing()` and `Sound.stop()` must observe only the latest logical source started by that `Sound`, not every overlapping source previously spawned by the same instance.
 - If `SoundStore.playSound(...)` returns `null` for a `Sound.play(...)`, `playAt(...)`, or `loop(...)` attempt, that failed attempt must replace the remembered source with "none"; later `Sound.playing()` returns false and `Sound.stop()` does not stop the older source.
+- `SoundStore.stopSoundEffects()` and `GameContainer.stopSoundEffects()` are browser/PWA lifecycle helpers, not Java gameplay APIs. They must stop active non-music sound-effect handles, release effect source slots, and leave music handles, music state, decoded buffers, audio context, and sound/music toggles unchanged.
+- `SoundStore.preloadAudioBuffers(refs, onProgress?)` is a browser/PWA lifecycle helper for menu-time audio warmup. It must deduplicate refs, queue each decode through `preloadAudioBuffer(ref)`, report per-ref completion progress, reuse cached or in-flight buffer promises, and keep using `ResourceLoader.track()` so `ResourceLoader.waitForAll()` remains authoritative.
+- `SoundStore.stopAllPlayback()`, `resetPlaybackState()`, and `clearDecodedBuffers()` split the browser cleanup levels. `clear()` must retain existing full-clean behavior by stopping playback and clearing decoded buffers.
 - `SoundStore` must model Java's audio initialization gate. Pre-init `setSoundsOn(...)` and `setMusicOn(...)` are no-ops; the first successful `init()` sets `soundWorks=true`, `sounds=true`, and `music=true`.
 - Sound effects must use a finite logical source pool. Source 0 is reserved for music and the final logical source is also unavailable to effects, matching Java's `i < sourceCount - 1` search bound. Drop the play request when no searched source is free.
 - `setSoundVolume(...)` affects future sound-effect source gain only. It must not update already-playing sound-effect gain through a global bus.
@@ -565,7 +568,7 @@ Implement these rules:
 - `GameContainer.setMusicOn(false)` / `SoundStore.setMusicOn(false)` suspends audible active music, not just mutes it. It must not call public `Music.pause()` semantics, and it must preserve the current music instance and `Music.playing()` state. Setting music on again resumes from the stored position when possible.
 - Looped `Music` resume and seek offsets must be normalized with modulo buffer duration before creating a replacement Web Audio source; non-looped offsets remain clamped to the buffer duration. Pending async starts must use the latest stored `Music.setPosition(...)` offset rather than the original closed-over play/loop offset.
 - `Music.play()` or `loop()` while global music is off still registers that track as current and prepares it; audible Web Audio playback waits until global music is enabled.
-- Browser autoplay restrictions must be handled by deferring playback until audio is unlocked by a user gesture.
+- Browser autoplay restrictions must be handled by deferring audible playback until audio is unlocked by a user gesture. Browser hosts may queue fetch/decode warmup before that gesture, but they should still call `SoundStore.get().unlock()` directly from the Start/Continue click before expecting playback.
 - `playing()` must report whether the sound or music instance is currently active.
 
 ### Fullscreen, Cursor, and Input
@@ -1553,6 +1556,7 @@ export abstract class GameContainer {
     public isUpdatingOnlyWhenVisible(): boolean;
     public setSoundOn(on: boolean): void;
     public isSoundOn(): boolean;
+    public stopSoundEffects(): void;
     public setMusicOn(on: boolean): void;
     public isMusicOn(): boolean;
     public setSoundVolume(volume: number): void;
@@ -1631,6 +1635,8 @@ export class AppGameContainer extends GameContainer {
     public isLoopSuspended(): boolean;
     public suspendLoop(): void;
     public resumeLoop(): void;
+    public setPreserveAudioCacheOnDestroy(preserve: boolean): void;
+    public isPreservingAudioCacheOnDestroy(): boolean;
     public supportsAlphaInBackBuffer(): boolean;
     public setTitle(title: string): void;
     public setDisplayMode(width: number, height: number, fullscreen: boolean): void | Promise<void>;
@@ -1663,6 +1669,7 @@ Implementation instructions:
 - `start` creates or binds the canvas, initializes input/audio/rendering, calls `game.init`, resolves resources queued during init, and begins the browser loop.
 - High-DPI rendering is enabled by default. `setHighDpiEnabled(false)` returns the canvas to a 1:1 logical/backing buffer, `setMaxDevicePixelRatio(...)` controls the cap, `getDevicePixelRatio()` reports the effective DPR, and `getBackingWidth()` / `getBackingHeight()` report the current canvas backing dimensions.
 - `setLoopSuspended(true)` cancels any pending RAF and leaves Java `setPaused(...)`, `setAlwaysRender(...)`, resource state, audio enable flags, display size, fullscreen state, and the current canvas pixels unchanged. `setLoopSuspended(false)` resets frame timing and schedules one RAF only after the container has started, completed startup/reinit resource barriers, is not destroyed, and is not waiting for queued resources.
+- `setPreserveAudioCacheOnDestroy(true)` is a browser/PWA helper. The default is `false`. When enabled, `destroy()` still stops playback, releases input/rendering/display state, and marks `AL.isCreated()` false, but preserves `SoundStore` decoded audio buffers and the existing `AudioContext` for a later container start.
 - The RAF loop must match Java close behavior: check `Display.isCloseRequested()` first, and call `game.closeRequested()` only inside that branch.
 - The container default must match Java `AppGameContainer`: `isUpdatingOnlyWhenVisible()` returns true before any setter call. When hidden and that flag is true, skip update/render and reset frame timing so hidden elapsed time is not delivered to the next visible update.
 - For visible or explicitly update-while-hidden frames, the RAF loop must mirror Java `GameContainer.updateAndRender(delta)` scheduling: apply smooth deltas, poll input, call `Music.poll(delta)` and `SoundStore.get().poll(delta)` before the pause branch, accumulate `storedDelta`, apply minimum/maximum logic interval splitting, call `game.update(container, 0)` while paused, render when `hasFocus()` or `getAlwaysRender()` is true, and call `Display.sync(targetFrameRate)` after processed frames when `targetFrameRate != -1`.
@@ -1681,7 +1688,7 @@ Implementation instructions:
 - A browser-forced `fullscreenchange` to non-fullscreen must set `fullscreen=false`, restore the stored last-windowed canvas backing size and CSS pixel size, call `Display.markResized(width, height)`, invoke `containerSizeChanged(container)` on the active game if that method exists, and restore any transparent fullscreen cursor hide through `Mouse`.
 - Explicit `setDisplayMode(width, height, false)` must not double-notify resize-aware games when the browser `fullscreenchange` observes the same already-restored size.
 - After `applyCanvasSize`, `applyBrowserDisplaySize`, fullscreenchange, or resize updates the final backing size, call `Display.markResized(width, height)` and invoke `containerSizeChanged(container)` on the active game if that method exists.
-- `destroy` stops the loop, restores windowed canvas size/CSS if the canvas is fullscreen, restores transparent fullscreen cursors before clearing the Mouse element, requests `document.exitFullscreen()` fire-and-forget when needed, clears the input prevent-default element, releases event listeners, disposes the renderer backend, calls `AL.destroy()`, calls `Display.destroy()`, and unregisters the active container.
+- `destroy` stops the loop, restores windowed canvas size/CSS if the canvas is fullscreen, restores transparent fullscreen cursors before clearing the Mouse element, requests `document.exitFullscreen()` fire-and-forget when needed, clears the input prevent-default element, releases event listeners, disposes the renderer backend, calls `AL.destroy()` or browser-only `AL.destroyPreservingAudioCache()` depending on `setPreserveAudioCacheOnDestroy(...)`, calls `Display.destroy()`, and unregisters the active container.
 - `supportsAlphaInBackBuffer` returns whether the backing canvas supports alpha.
 - `hasFocus()` must return false when `document.hasFocus()` is false; a stale canvas `activeElement` must not override browser focus loss.
 - The constructor without dimensions must use Slick2D's default `640x480` unless project configuration overrides it.
@@ -2189,10 +2196,17 @@ export interface AudioPlaybackHandle {
     getGain?(): number;
 }
 
+export type AudioPreloadProgress = {
+    ref: string;
+    loaded: number;
+    total: number;
+};
+
 export class SoundStore {
     public static get(): SoundStore;
     public clear(): void;
     public destroy(): void;
+    public destroyPreservingAudioCache(): void;
     public disable(): void;
     public setDeferredLoading(deferred: boolean): void;
     public isDeferredLoading(): boolean;
@@ -2210,6 +2224,10 @@ export class SoundStore {
     public poll(delta: number): void;
     public isMusicPlaying(): boolean;
     public stopSoundEffect(id: number): void;
+    public stopSoundEffects(): void;
+    public stopAllPlayback(): void;
+    public resetPlaybackState(): void;
+    public clearDecodedBuffers(): void;
     public getSourceCount(): number;
     public setMaxSources(max: number): void;
     public getAudioContext(): AudioContext | null;
@@ -2218,6 +2236,7 @@ export class SoundStore {
     public getMusicBus(): GainNode | null;
     public loadAudioBuffer(ref: string): Promise<AudioBuffer>;
     public preloadAudioBuffer(ref: string): Promise<void>;
+    public preloadAudioBuffers(refs: Iterable<string>, onProgress?: (progress: AudioPreloadProgress) => void): Promise<void>;
     public playSound(ref: string, pitch: number, volume: number, loop: boolean, onEnded?: () => void): AudioPlaybackHandle | null;
     public track(handle: AudioPlaybackHandle): void;
     public untrack(handle: AudioPlaybackHandle): void;
@@ -2231,6 +2250,7 @@ Implementation instructions:
 - `get()` returns a singleton, matching Java.
 - `clear` stops active audio and releases cached audio resources owned by the active container scope.
 - `destroy` is the browser/OpenAL lifecycle reset used by `AL.destroy()`: it stops active handles, clears decoded buffers, drops the `AudioContext`/buses, and returns the store to Java's pre-init observable state.
+- `destroyPreservingAudioCache()` is a browser/PWA lifecycle helper. It stops active playback, resets playback bookkeeping and Java-visible init/on flags, and preserves decoded buffers, the existing usable `AudioContext`, audio buses, and stored volume values for a later `AL.create()`.
 - `init` is guarded like Java. Before successful init, `soundWorks()`, `soundsOn()`, and `musicOn()` are false, and `setMusicOn(...)` / `setSoundsOn(...)` do nothing. First successful init sets sound effects and music on.
 - `setMusicOn(false)` after init calls `suspend()` on tracked music handles when available and stores enough state for `setMusicOn(true)` to resume. This mirrors Java `pauseLoop()`/`restartLoop()` behavior, must not call public `Music.pause()` semantics for `Music` handles, and must not be implemented as volume-only muting.
 - `setSoundsOn(false)` after init prevents future sound effects from starting; active effect handles may continue unless `clear()` or `stop()` is called, matching the narrower Java sound toggle behavior used by the games.
@@ -2239,6 +2259,7 @@ Implementation instructions:
 - `loadAudioBuffer(ref)` loads bytes through `ResourceLoader.loadResource(ref)`, decodes them through the shared `AudioContext`, caches the in-flight/completed decode promise, deletes failed cache entries, and rejects with `SlickException`.
 - `unlock()` is the browser user-gesture helper for PWA menus. It creates or resumes the shared `AudioContext`, initializes Slick sound/music flags if audio was not already working, preserves existing on/off toggles when audio is already initialized, and resolves `true` only when the context is usable.
 - `preloadAudioBuffer(ref)` tracks `loadAudioBuffer(ref)` through `ResourceLoader.track()` and is what `Sound` and `Music` constructors must call.
+- `preloadAudioBuffers(refs, onProgress?)` is a browser/PWA warmup helper. It deduplicates refs, queues each ref through `preloadAudioBuffer(ref)`, reports completion progress as `{ ref, loaded, total }`, rejects on the first load/decode failure using existing `SlickException` style, and reuses existing decoded or in-flight buffer promises.
 - `playSound(ref, pitch, volume, loop, onEnded)` is the shared effect playback helper. It keeps `Sound.play()` non-async, reserves a logical source immediately, starts after the decode promise resolves, clamps playback rate to the supported browser range, applies `Math.max(0, volume * soundVolume)` to the source gain with no audible floor, and logs load/playback errors.
 - `track(handle)` and `untrack(handle)` register externally-created music handles so `clear`, `isMusicPlaying`, and music toggles can operate over both effects and music.
 - Source IDs are compatibility-only numbers. Source 0 is reserved for music; sound effects use logical sources `1..getSourceCount()-2`.
@@ -2246,6 +2267,10 @@ Implementation instructions:
 - `setMaxSources(max)` must stop and drop any handle that would occupy the newly unavailable final source after a resize.
 - `getSourceCount()` returns configured logical capacity, not the number of currently active browser audio handles.
 - `stopSoundEffect(id)` stops the handle currently assigned to that logical source ID when one exists.
+- `stopSoundEffects()` is a browser/PWA lifecycle helper. It stops all currently active non-music effect handles, including overlapping handles from the same `Sound`, and must not call `clear()`, clear decoded buffers, destroy or recreate the `AudioContext`, toggle `soundsOn()`/`musicOn()`, or disturb the active `Music`.
+- `stopAllPlayback()` stops active music and sound-effect handles, releases source slots, clears active handle sets, and must not clear decoded buffers or close the `AudioContext`.
+- `resetPlaybackState()` clears active handle/source bookkeeping without clearing decoded buffers. Callers should stop playback before using it directly.
+- `clearDecodedBuffers()` clears the decoded Web Audio buffer cache without closing the `AudioContext` or changing playback flags.
 
 ### `lwjgl.openal.AL`
 
@@ -2253,6 +2278,7 @@ Implementation instructions:
 export class AL {
     public static create(): void;
     public static destroy(): void;
+    public static destroyPreservingAudioCache(): void;
     public static isCreated(): boolean;
 }
 ```
@@ -2263,7 +2289,8 @@ Implementation instructions:
 - Required by copied Slick2D `AppGameContainer.destroy()` and `SoundStore.init()` paths.
 - `create()` marks the browser audio subsystem as requested and initializes the shared `AudioContext` when possible. If autoplay rules prevent immediate resume, keep the context in a suspended/unlocked-pending state and let `Sound`/`Music` complete unlock on the next user gesture.
 - `destroy()` calls `SoundStore.destroy()`, stops active sounds/music, releases browser audio nodes owned by the active container scope, resets the Java pre-init sound flags, and marks AL as not created.
-- `AppGameContainer.destroy()` must call `AL.destroy()` so host teardown paths that bypass `game.closeRequested()` still stop audio.
+- `destroyPreservingAudioCache()` is a browser/PWA helper. It calls `SoundStore.destroyPreservingAudioCache()` and marks AL as not created while leaving decoded buffers and the usable `AudioContext` available for a later `create()`.
+- `AppGameContainer.destroy()` must call `AL.destroy()` by default, or `AL.destroyPreservingAudioCache()` only when the browser/PWA preserve flag is enabled, so host teardown paths that bypass `game.closeRequested()` still stop audio.
 - `isCreated()` returns the state set by `create()` and `destroy()`.
 
 ### `lwjgl.Sys`

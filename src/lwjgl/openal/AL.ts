@@ -20,6 +20,12 @@ export class AL {
         AL.created = false;
     }
 
+    /** Browser/PWA helper: tears down logical OpenAL state while preserving decoded audio cache. */
+    public static destroyPreservingAudioCache(): void {
+        SoundStore.get().destroyPreservingAudioCache();
+        AL.created = false;
+    }
+
     /** Java LWJGL counterpart: AL.isCreated(). */
     public static isCreated(): boolean {
         return AL.created;

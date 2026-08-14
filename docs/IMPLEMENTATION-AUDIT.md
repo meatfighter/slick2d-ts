@@ -81,6 +81,8 @@ No game-title-specific modules are exported. The project names appear only as au
 - Fixed failed `Sound.play()` / `Sound.loop()` attempts to clear the remembered latest source, matching Java `AudioImpl` when `SoundStore` returns `-1`.
 - Matched Java's `findFreeSource()` loop bound by keeping both source 0 and the last logical source unavailable to sound effects.
 - Implemented `SoundStore.stopSoundEffect(id)` for logical source IDs and made `setMaxSources(...)` stop any effect that would land in the newly unavailable last slot.
+- Added browser/PWA `SoundStore.stopSoundEffects()` and `GameContainer.stopSoundEffects()` helpers that stop active non-music effect handles, including overlapping effects, without clearing music, decoded buffers, audio context, or sound/music toggle state.
+- Added browser/PWA audio warmup and preserved-cache teardown helpers: `SoundStore.preloadAudioBuffers(...)`, cleanup-level split methods, `AL.destroyPreservingAudioCache()`, and `AppGameContainer.setPreserveAudioCacheOnDestroy(...)`.
 - Fixed no-argument `Music.play()` and `Music.loop()` to reset the individual music volume to `1`, matching Java's `play(1.0f, 1.0f)` and `loop(1.0f, 1.0f)` delegates.
 - Fixed looped `Music` resume offsets so global music-off/music-on and pause/resume wrap elapsed positions inside the audio buffer instead of clamping to the end; pending async starts now honor the latest `setPosition(...)` request before playback begins.
 - Replaced direct `FastTrig` `Math.sin`/`Math.cos` calls with Java Slick2D's angle-reduction implementation and `cos(x) = sin(x + PI/2)` rule.
@@ -315,7 +317,7 @@ These differences are intentional and must be kept during game ports:
 - Browser resource fetch/decode is asynchronous. Any Java code that synchronously parses resource bytes must preload those refs before construction, then read through `ResourceLoader.getResourceAsStream`.
 - Dynamic Java-style loading screens may construct resources during `update`; `AppGameContainer` renders that progress frame, then waits for `ResourceLoader.hasPending()` work before the next update.
 - `Display.sync(...)` remains nonblocking in the browser. `GameContainer.setTargetFrameRate(...)` is honored by RAF pacing in `AppGameContainer`, while `Display.sync(targetFPS)` records the processed-frame cap request for compatibility.
-- Browser autoplay policy still requires a user gesture before reliable audio decode/playback. The host page should focus the canvas and call `SoundStore.get().unlock()` from the Start button handler before entering the game loop.
+- Browser autoplay policy still requires a user gesture before reliable audible playback. The host page may queue audio fetch/decode warmup before Start, but should focus the canvas and call `SoundStore.get().unlock()` from the Start button handler before entering the game loop.
 - Host pages should install `AppGameContainer.setErrorHandler()` when they need a splash/loading UI to display queued resource failures. The library still surfaces unhandled errors if no handler is installed.
 - DOM controls used for a browser menu should live outside the active canvas focus path or pause the container; either way, Slick input now ignores their keyboard and pointer events.
 - Cursor hiding now works at the canvas/native-cursor shim level, and forced fullscreen exit or denied fullscreen entry restores the visible cursor saved before the transparent hide. A PWA menu or hamburger overlay can still override cursor visibility with ordinary DOM/CSS outside the canvas.
@@ -330,6 +332,7 @@ The library is ready as a parity base for TS ports of the three games, provided 
 - preloads atlas XML/DEF files, image files, binary map files, and audio refs before Java-style synchronous constructors/readers need them;
 - uses `ResourceLoader.preloadResources(manifest, onProgress)` or an equivalent app loader before constructing code that synchronously parses XML/DEF/binary bytes;
 - awaits `Sound.ready()` / `Music.ready()` or relies on the `AppGameContainer` dynamic resource barrier before leaving loading modes that construct audio after `init`;
+- optionally uses `SoundStore.get().preloadAudioBuffers(audioRefs, onProgress)` for browser menu-time audio warmup, and opts into `AppGameContainer.setPreserveAudioCacheOnDestroy(true)` only when decoded audio should survive return-to-menu/restart in the same page session;
 - calls `SoundStore.get().unlock()` from a user gesture before expecting browser audio to play;
 - uses `JavaNumbers` at converted Java integer division, remainder, cast, byte, char, float, round, and packed-value boundaries;
 - treats fullscreen toggles as browser-async: await `setDisplayMode` when caller code needs post-fullscreen sequencing, while direct Java-style ignored calls are allowed because the container observes rejected promises internally; still handle resize/fullscreen events;

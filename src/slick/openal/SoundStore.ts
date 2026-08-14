@@ -12,6 +12,12 @@ type AudioPosition = {
     z: number;
 };
 
+export type AudioPreloadProgress = {
+    ref: string;
+    loaded: number;
+    total: number;
+};
+
 /**
  * Browser Web Audio playback handle.
  */
@@ -62,13 +68,8 @@ export class SoundStore {
 
     /** Java Slick2D counterpart: SoundStore.clear(). */
     public clear(): void {
-        for (const handle of this.activeHandles) {
-            handle.stop();
-        }
-        this.activeHandles.clear();
-        this.musicHandles.clear();
-        this.buffers.clear();
-        this.resetSoundSources();
+        this.stopAllPlayback();
+        this.clearDecodedBuffers();
     }
 
     /** Browser parity helper: resets the Web Audio/OpenAL lifecycle for AL.destroy(). */
@@ -78,6 +79,15 @@ export class SoundStore {
         this.context = null;
         this.soundBus = null;
         this.musicBus = null;
+        this.inited = false;
+        this.soundWorksFlag = false;
+        this.musicEnabled = false;
+        this.soundsEnabled = false;
+    }
+
+    /** Browser/PWA helper: resets playback and flags while preserving decoded buffers and the AudioContext. */
+    public destroyPreservingAudioCache(): void {
+        this.stopAllPlayback();
         this.inited = false;
         this.soundWorksFlag = false;
         this.musicEnabled = false;
@@ -212,6 +222,37 @@ export class SoundStore {
         this.soundSources[sourceId]?.stop();
     }
 
+    /** Browser/PWA helper: stops active sound effects without clearing music or decoded buffers. */
+    public stopSoundEffects(): void {
+        const handles = Array.from(this.activeHandles);
+        for (const handle of handles) {
+            if (!this.musicHandles.has(handle)) {
+                handle.stop();
+            }
+        }
+    }
+
+    /** Browser/PWA helper: stops active music and sound effects without clearing decoded buffers. */
+    public stopAllPlayback(): void {
+        const handles = Array.from(this.activeHandles);
+        for (const handle of handles) {
+            handle.stop();
+        }
+        this.resetPlaybackState();
+    }
+
+    /** Browser/PWA helper: clears playback bookkeeping without clearing decoded buffers. */
+    public resetPlaybackState(): void {
+        this.activeHandles.clear();
+        this.musicHandles.clear();
+        this.resetSoundSources();
+    }
+
+    /** Browser/PWA helper: clears decoded Web Audio buffers without changing the AudioContext. */
+    public clearDecodedBuffers(): void {
+        this.buffers.clear();
+    }
+
     /** Java Slick2D counterpart: SoundStore.getSourceCount(). */
     public getSourceCount(): number {
         return this.maxSources;
@@ -242,7 +283,12 @@ export class SoundStore {
     /** Browser parity helper: returns the lazily-created AudioContext. */
     public getAudioContext(): AudioContext | null {
         if (this.context) {
-            return this.context;
+            if (this.context.state !== "closed") {
+                return this.context;
+            }
+            this.context = null;
+            this.soundBus = null;
+            this.musicBus = null;
         }
         const Ctor = globalThis.AudioContext ?? (globalThis as WebAudioGlobal).webkitAudioContext;
         if (!Ctor) {
@@ -326,6 +372,27 @@ export class SoundStore {
         const tracked = ResourceLoader.track(this.loadAudioBuffer(ref).then(() => undefined), ref);
         void tracked.catch(() => undefined);
         return tracked;
+    }
+
+    /** Browser/PWA helper: queues and tracks a deduplicated batch of audio decodes. */
+    public async preloadAudioBuffers(refs: Iterable<string>, onProgress?: (progress: AudioPreloadProgress) => void): Promise<void> {
+        const uniqueRefs = Array.from(new Set(refs));
+        const total = uniqueRefs.length;
+        let loaded = 0;
+        if (total === 0) {
+            return;
+        }
+        await Promise.all(uniqueRefs.map(async (ref) => {
+            try {
+                await this.preloadAudioBuffer(ref);
+                loaded++;
+                onProgress?.({ ref, loaded, total });
+            } catch (error) {
+                throw error instanceof SlickException
+                    ? error
+                    : new SlickException(`Failed to preload audio: ${ref}`, error);
+            }
+        }));
     }
 
     /** Browser parity helper: plays a decoded sound effect through Web Audio. */
