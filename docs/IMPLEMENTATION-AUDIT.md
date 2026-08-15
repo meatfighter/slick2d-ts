@@ -268,6 +268,7 @@ The performance/parity audit on 2026-08-04 was checked against Java Slick2D `Ima
 - `WebGLShaderProgram` now caches attribute and uniform locations after the first lookup, avoiding repeated WebGL reflection calls during sprite-heavy rendering.
 - `Graphics` and `Image` now reuse an internal identity transform for draw delegation, and hot `Graphics` methods use explicit render-target enter/exit calls instead of allocating callback closures.
 - `Input` controller polling now reuses its seen/stale collections, avoids cloning `navigator.getGamepads()`, uses numeric controller keys instead of string keys, and replaces per-frame `filter`, `some`, `forEach`, and `Array.from` work with loops.
+- `Input` now caches one browser Gamepad snapshot per active poll frame, reuses it across controller helper methods, lazily refreshes before the first poll, and dispatches controller listener edges without allocating per-poll arrow callbacks.
 - `Music.poll`, `SoundStore.clear`, `SoundStore.setMusicOn`, and `SoundStore.isMusicPlaying` no longer allocate arrays just to iterate active handles.
 - `Image.copy()` now matches Java Slick2D's subimage-copy semantics: the copy shares pixels/source rectangle but resets alpha, rotation, user name, per-corner colors, and center state. `getScaledCopy(...)` inherits that reset through `copy()`.
 - `Image.getTextureOffsetX/Y()` and `Image.getTextureWidth/Height()` are now implemented with normalized Slick texture-coordinate and flipped-axis sign parity.

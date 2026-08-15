@@ -1337,6 +1337,7 @@ Implementation instructions:
 - `setScale` and `setOffset` are required by `ScalableGame` and `ScalableGame2`; they transform browser pointer coordinates into game coordinates.
 - Gamepad direction methods must support `Input.ANY_CONTROLLER`.
 - Gamepad direction methods must check axes, standard D-pad buttons, and common POV hat encodings: left axis `0 < -0.5` or button `14`, right axis `0 > 0.5` or button `15`, up axis `1 < -0.5` or button `12`, down axis `1 > 0.5` or button `13`, plus browser hat axis `9` values for up/right/down/left and diagonals.
+- `poll()` must refresh a frame-scoped browser Gamepad snapshot at most once on the active controller path. Controller helper methods must reuse that snapshot during the frame and lazily refresh before the first poll so pre-loop callers still behave sensibly.
 - `isButton1Pressed`, `isButton2Pressed`, and `isButton3Pressed` delegate to `isButtonPressed(0/1/2, controller)`.
 - `isControlPressed(button, controller)` consumes one-shot controller control state using Slick's control indexes: left `0`, right `1`, up `2`, down `3`, button 1 `4`, button 2 `5`, button 3 `6`, and so on. `isButtonPressed(index, controller)` is the zero-based physical-button polling API and must not add the directional offset.
 - Controller listener dispatch must call directional and button release callbacks when controls transition from down to up. Button listener indexes remain one-based; one-shot polling storage remains Slick control-index based. Standard D-pad buttons `12..15` dispatch as direction controls only.
