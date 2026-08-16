@@ -5,6 +5,14 @@
     "license": "BSD-3-Clause",
     "type": "module",
     "private": true,
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/meatfighter/slick2d-ts.git"
+    },
+    "bugs": {
+        "url": "https://github.com/meatfighter/slick2d-ts/issues"
+    },
+    "homepage": "https://github.com/meatfighter/slick2d-ts#readme",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "exports": {
