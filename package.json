@@ -4,6 +4,7 @@
     "description": "A TypeScript/WebGL parity layer for the Slick2D APIs used by the audited Java games.",
     "license": "GPL-3.0-only",
     "type": "module",
+    "private": true,
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "exports": {
@@ -22,7 +23,6 @@
     },
     "files": [
         "dist",
-        "docs",
         "LICENSE",
         "README.md"
     ],

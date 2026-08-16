@@ -1,8 +1,8 @@
 # slick2d-ts
 
-`slick2d-ts` is a TypeScript/WebGL compatibility layer for porting Java Slick2D and LWJGL-style games to modern browsers.
+`slick2d-ts` is a TypeScript/WebGL browser port of [Slick2D](https://github.com/joshmarcus/slick2d), built for porting Java Slick2D and LWJGL-style games to modern browsers.
 
-The goal is API and behavior parity for Java game ports that already depend on Slick2D shapes such as `Game`, `BasicGame`, `AppGameContainer`, `Graphics`, `Image`, `Input`, `Sound`, `Music`, sprite sheets, and a small set of LWJGL/OpenGL/OpenAL shims. It is not a complete desktop Slick2D runtime or a general-purpose game engine.
+The goal is API and behavior parity for Java game ports that already depend on Slick2D shapes such as `Game`, `BasicGame`, `AppGameContainer`, `Graphics`, `Image`, `Input`, `Sound`, `Music`, sprite sheets, and a small set of LWJGL/OpenGL/OpenAL shims. It is not a full Slick2D port, a complete desktop runtime, or a general-purpose game engine.
 
 ## Features
 
@@ -50,10 +50,6 @@ If `Display.setParent(...)` is not used, the container creates a canvas and appe
 Java Slick2D APIs are synchronous in places where browsers are not. Image, audio, XML, atlas, and binary assets should be preloaded through `ResourceLoader` before code paths that synchronously parse or consume those bytes.
 
 Fullscreen, audio unlock, and canvas sizing follow browser security and lifecycle rules. Host pages should call audio unlock helpers from a user gesture when reliable first-play audio matters.
-
-## Documentation
-
-The detailed compatibility contract lives in [docs/SLICK2D-PARITY-API.md](docs/SLICK2D-PARITY-API.md).
 
 ## Development
 
