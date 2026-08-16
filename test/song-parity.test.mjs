@@ -48,7 +48,7 @@ test("Song.play sets playing only after the selected start call", () => {
     assert.equal(song.playing, true);
 });
 
-test("Song preserves Jackal's no-intro intro2 replay lifecycle", () => {
+test("Song preserves the no-primary-intro replay lifecycle", () => {
     const events = [];
     const intro2 = fakeMusic("intro2", events);
     const loop = fakeMusic("loop", events);

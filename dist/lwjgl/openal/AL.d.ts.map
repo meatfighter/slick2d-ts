@@ -1,0 +1,1 @@
+{"version":3,"file":"AL.d.ts","sourceRoot":"","sources":["../../../src/lwjgl/openal/AL.ts"],"names":[],"mappings":"AAEA;;;;GAIG;AACH,qBAAa,EAAE;IACX,OAAO,CAAC,MAAM,CAAC,OAAO,CAAS;IAE/B,2CAA2C;WAC7B,MAAM,IAAI,IAAI;IAK5B,4CAA4C;WAC9B,OAAO,IAAI,IAAI;IAK7B,gGAAgG;WAClF,2BAA2B,IAAI,IAAI;IAKjD,8CAA8C;WAChC,SAAS,IAAI,OAAO;CAGrC"}

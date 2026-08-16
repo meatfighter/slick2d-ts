@@ -74,7 +74,7 @@ export class Color {
      * Java Slick2D counterpart: Color(float, float, float, float) and Color(int).
      *
      * Creates a mutable RGBA color. Packed integers are interpreted as 0xAARRGGBB;
-     * an alpha byte of 0 means 255 for compatibility with the audited code.
+     * an alpha byte of 0 means 255 for compatibility with existing Java ports.
      */
     public constructor(rOrPackedOrColor: number | Color, g?: number, b?: number, a?: number) {
         if (rOrPackedOrColor instanceof Color) {

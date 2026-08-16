@@ -1,0 +1,1 @@
+{"version":3,"file":"LWJGLException.js","sourceRoot":"","sources":["../../src/lwjgl/LWJGLException.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AACH,MAAM,OAAO,cAAe,SAAQ,KAAK;IACrB,KAAK,CAAW;IAEhC;;;;OAIG;IACH,YAAmB,OAAe,EAAE,KAAe;QAC/C,KAAK,CAAC,OAAO,CAAC,CAAC;QACf,IAAI,CAAC,IAAI,GAAG,gBAAgB,CAAC;QAC7B,IAAI,CAAC,KAAK,GAAG,KAAK,CAAC;IACvB,CAAC;CACJ"}

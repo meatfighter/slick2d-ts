@@ -1,0 +1,1 @@
+{"version":3,"file":"MusicListener.d.ts","sourceRoot":"","sources":["../../src/slick/MusicListener.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,KAAK,EAAE,MAAM,YAAY,CAAC;AAExC;;;;GAIG;AACH,MAAM,WAAW,aAAa;IAC1B,iEAAiE;IACjE,UAAU,CAAC,KAAK,EAAE,KAAK,GAAG,IAAI,CAAC;IAC/B,0EAA0E;IAC1E,YAAY,CAAC,KAAK,EAAE,KAAK,EAAE,QAAQ,EAAE,KAAK,GAAG,IAAI,CAAC;CACrD"}

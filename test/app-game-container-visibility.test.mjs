@@ -237,7 +237,7 @@ test("smooth deltas use Java FPS-derived timing when FPS is known", () => {
     assert.deepEqual(calls.deltas, [20]);
 });
 
-test("default Jackal path updates once with the raw frame delta", () => {
+test("default loop path updates once with the raw frame delta", () => {
     installBrowserGlobals();
     const { calls, container } = createContainer();
 

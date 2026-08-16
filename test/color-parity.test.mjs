@@ -70,7 +70,7 @@ test("explicit Color int and float constructors preserve Java overload intent", 
     assert.equal(floatColor.toInt(), 0xffff0000);
 });
 
-test("Jackal-style fade table uses Java integer division before Color.fromInts", () => {
+test("fade table uses Java integer division before Color.fromInts", () => {
     const alphas = Array.from({ length: 23 }, (_value, index) => {
         const alpha = Math.trunc((255 * index) / (23 - 1));
         return Color.fromInts(0, 0, 0, alpha).getAlpha();

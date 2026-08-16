@@ -375,7 +375,7 @@ export class ResourceLoader {
     }
 
     private static resolveLocation(location: string, ref: string): URL {
-        const baseHref = globalThis.location?.href ?? "http://localhost/";
+        const baseHref = globalThis.location?.href ?? "https://example.invalid/";
         if (location.length === 0) {
             return new URL(ref, baseHref);
         }

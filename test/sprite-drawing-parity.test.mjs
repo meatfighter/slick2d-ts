@@ -149,7 +149,7 @@ test("drawSized is the explicit top-left width-height convenience helper", () =>
     assert.equal(image.draws[0].alpha, 0.4);
 });
 
-test("drawOffset draws at Jackal local coordinates inside active transforms", () => {
+test("drawOffset draws at local coordinates inside active transforms", () => {
     const image = new FakeImage();
 
     SpriteDrawing.withRotation(100, 100, 90, () => {
@@ -173,7 +173,7 @@ test("drawOffset alpha overload draws local coordinates and resets alpha", () =>
     assert.equal(image.getAlpha(), 1);
 });
 
-test("drawCameraOffset keeps camera subtraction out of the Jackal-named helper", () => {
+test("drawCameraOffset keeps camera subtraction out of drawOffset", () => {
     const image = new FakeImage();
 
     SpriteDrawing.drawCameraOffset(image, 100, 100, 10, 20);

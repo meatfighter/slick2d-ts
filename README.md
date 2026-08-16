@@ -65,4 +65,5 @@ Use `npm run format` to apply the project Prettier style.
 
 ## License
 
-GPL-3.0-only. See [LICENSE](LICENSE).
+BSD-3-Clause. See [LICENSE](LICENSE). Slick2D upstream attribution is included
+in [NOTICE.md](NOTICE.md).

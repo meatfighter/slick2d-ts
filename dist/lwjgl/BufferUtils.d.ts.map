@@ -1,0 +1,1 @@
+{"version":3,"file":"BufferUtils.d.ts","sourceRoot":"","sources":["../../src/lwjgl/BufferUtils.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AACH,qBAAa,WAAW;IACpB,iEAAiE;WACnD,gBAAgB,CAAC,IAAI,EAAE,MAAM,GAAG,UAAU;IAIxD,gEAAgE;WAClD,eAAe,CAAC,IAAI,EAAE,MAAM,GAAG,UAAU;IAIvD,kEAAkE;WACpD,iBAAiB,CAAC,IAAI,EAAE,MAAM,GAAG,YAAY;IAI3D,mEAAmE;WACrD,kBAAkB,CAAC,IAAI,EAAE,MAAM,GAAG,YAAY;CAG/D"}

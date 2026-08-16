@@ -1,0 +1,1 @@
+{"version":3,"file":"InputListener.d.ts","sourceRoot":"","sources":["../../src/slick/InputListener.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,kBAAkB,EAAE,MAAM,yBAAyB,CAAC;AAClE,OAAO,KAAK,EAAE,WAAW,EAAE,MAAM,kBAAkB,CAAC;AACpD,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,oBAAoB,CAAC;AAExD;;;;GAIG;AACH,MAAM,WAAW,aAAc,SAAQ,aAAa,EAAE,WAAW,EAAE,kBAAkB;CAAG"}
