@@ -53,7 +53,7 @@ export class BinaryReader {
         const b = this.readRequired();
         const c = this.readRequired();
         const d = this.readRequired();
-        return ((a << 24) | (b << 16) | (c << 8) | d) | 0;
+        return (a << 24) | (b << 16) | (c << 8) | d | 0;
     }
 
     /** Java counterpart: DataInputStream.readLong(). */

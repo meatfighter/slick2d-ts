@@ -5,7 +5,7 @@ import { ResourceLoader } from "./util/ResourceLoader.js";
  * Java Slick2D counterpart: org.newdawn.slick.Sound.
  *
  * Short sound effect wrapper with Slick-compatible play/stop methods.
-    */
+ */
 export class Sound {
     private readonly ref: string;
     private readonly readyPromise: Promise<void>;
@@ -35,9 +35,10 @@ export class Sound {
                 const registered = refOrUrlOrInput.arrayBuffer().then((bytes) => {
                     ResourceLoader.registerResource(this.ref, bytes);
                 });
-                this.readyPromise = ResourceLoader.track(registered
-                    .then(() => SoundStore.get().loadAudioBuffer(this.ref))
-                    .then(() => undefined), this.ref);
+                this.readyPromise = ResourceLoader.track(
+                    registered.then(() => SoundStore.get().loadAudioBuffer(this.ref)).then(() => undefined),
+                    this.ref
+                );
                 void this.readyPromise.catch(() => undefined);
             }
         }
@@ -74,11 +75,18 @@ export class Sound {
     /** Java Slick2D counterpart: Sound.playAt(float, float, float, float, float). */
     public playAt(pitch: number, volume: number, x: number, y: number, z: number): void {
         const effectiveVolume = volume * SoundStore.get().getSoundVolume();
-        const handle = SoundStore.get().playSound(this.ref, pitch, effectiveVolume, false, () => {
-            if (this.active === handle) {
-                this.active = null;
-            }
-        }, { x, y, z });
+        const handle = SoundStore.get().playSound(
+            this.ref,
+            pitch,
+            effectiveVolume,
+            false,
+            () => {
+                if (this.active === handle) {
+                    this.active = null;
+                }
+            },
+            { x, y, z }
+        );
         if (!handle) {
             this.active = null;
             return;

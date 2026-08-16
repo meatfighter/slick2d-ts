@@ -30,12 +30,12 @@ export class Input {
     public static readonly KEY_6 = 0x07;
     public static readonly KEY_7 = 0x08;
     public static readonly KEY_8 = 0x09;
-    public static readonly KEY_9 = 0x0A;
-    public static readonly KEY_0 = 0x0B;
-    public static readonly KEY_MINUS = 0x0C;
-    public static readonly KEY_EQUALS = 0x0D;
-    public static readonly KEY_BACK = 0x0E;
-    public static readonly KEY_TAB = 0x0F;
+    public static readonly KEY_9 = 0x0a;
+    public static readonly KEY_0 = 0x0b;
+    public static readonly KEY_MINUS = 0x0c;
+    public static readonly KEY_EQUALS = 0x0d;
+    public static readonly KEY_BACK = 0x0e;
+    public static readonly KEY_TAB = 0x0f;
     public static readonly KEY_Q = 0x10;
     public static readonly KEY_W = 0x11;
     public static readonly KEY_E = 0x12;
@@ -46,13 +46,13 @@ export class Input {
     public static readonly KEY_I = 0x17;
     public static readonly KEY_O = 0x18;
     public static readonly KEY_P = 0x19;
-    public static readonly KEY_LBRACKET = 0x1A;
-    public static readonly KEY_RBRACKET = 0x1B;
-    public static readonly KEY_RETURN = 0x1C;
-    public static readonly KEY_ENTER = 0x1C;
-    public static readonly KEY_LCONTROL = 0x1D;
-    public static readonly KEY_A = 0x1E;
-    public static readonly KEY_S = 0x1F;
+    public static readonly KEY_LBRACKET = 0x1a;
+    public static readonly KEY_RBRACKET = 0x1b;
+    public static readonly KEY_RETURN = 0x1c;
+    public static readonly KEY_ENTER = 0x1c;
+    public static readonly KEY_LCONTROL = 0x1d;
+    public static readonly KEY_A = 0x1e;
+    public static readonly KEY_S = 0x1f;
     public static readonly KEY_D = 0x20;
     public static readonly KEY_F = 0x21;
     public static readonly KEY_G = 0x22;
@@ -63,12 +63,12 @@ export class Input {
     public static readonly KEY_SEMICOLON = 0x27;
     public static readonly KEY_APOSTROPHE = 0x28;
     public static readonly KEY_GRAVE = 0x29;
-    public static readonly KEY_LSHIFT = 0x2A;
-    public static readonly KEY_BACKSLASH = 0x2B;
-    public static readonly KEY_Z = 0x2C;
-    public static readonly KEY_X = 0x2D;
-    public static readonly KEY_C = 0x2E;
-    public static readonly KEY_V = 0x2F;
+    public static readonly KEY_LSHIFT = 0x2a;
+    public static readonly KEY_BACKSLASH = 0x2b;
+    public static readonly KEY_Z = 0x2c;
+    public static readonly KEY_X = 0x2d;
+    public static readonly KEY_C = 0x2e;
+    public static readonly KEY_V = 0x2f;
     public static readonly KEY_B = 0x30;
     public static readonly KEY_N = 0x31;
     public static readonly KEY_M = 0x32;
@@ -79,12 +79,12 @@ export class Input {
     public static readonly KEY_MULTIPLY = 0x37;
     public static readonly KEY_LMENU = 0x38;
     public static readonly KEY_SPACE = 0x39;
-    public static readonly KEY_CAPITAL = 0x3A;
-    public static readonly KEY_F1 = 0x3B;
-    public static readonly KEY_F2 = 0x3C;
-    public static readonly KEY_F3 = 0x3D;
-    public static readonly KEY_F4 = 0x3E;
-    public static readonly KEY_F5 = 0x3F;
+    public static readonly KEY_CAPITAL = 0x3a;
+    public static readonly KEY_F1 = 0x3b;
+    public static readonly KEY_F2 = 0x3c;
+    public static readonly KEY_F3 = 0x3d;
+    public static readonly KEY_F4 = 0x3e;
+    public static readonly KEY_F5 = 0x3f;
     public static readonly KEY_F6 = 0x40;
     public static readonly KEY_F7 = 0x41;
     public static readonly KEY_F8 = 0x42;
@@ -95,12 +95,12 @@ export class Input {
     public static readonly KEY_NUMPAD7 = 0x47;
     public static readonly KEY_NUMPAD8 = 0x48;
     public static readonly KEY_NUMPAD9 = 0x49;
-    public static readonly KEY_SUBTRACT = 0x4A;
-    public static readonly KEY_NUMPAD4 = 0x4B;
-    public static readonly KEY_NUMPAD5 = 0x4C;
-    public static readonly KEY_NUMPAD6 = 0x4D;
-    public static readonly KEY_ADD = 0x4E;
-    public static readonly KEY_NUMPAD1 = 0x4F;
+    public static readonly KEY_SUBTRACT = 0x4a;
+    public static readonly KEY_NUMPAD4 = 0x4b;
+    public static readonly KEY_NUMPAD5 = 0x4c;
+    public static readonly KEY_NUMPAD6 = 0x4d;
+    public static readonly KEY_ADD = 0x4e;
+    public static readonly KEY_NUMPAD1 = 0x4f;
     public static readonly KEY_NUMPAD2 = 0x50;
     public static readonly KEY_NUMPAD3 = 0x51;
     public static readonly KEY_NUMPAD0 = 0x52;
@@ -112,9 +112,9 @@ export class Input {
     public static readonly KEY_F15 = 0x66;
     public static readonly KEY_KANA = 0x70;
     public static readonly KEY_CONVERT = 0x79;
-    public static readonly KEY_NOCONVERT = 0x7B;
-    public static readonly KEY_YEN = 0x7D;
-    public static readonly KEY_NUMPADEQUALS = 0x8D;
+    public static readonly KEY_NOCONVERT = 0x7b;
+    public static readonly KEY_YEN = 0x7d;
+    public static readonly KEY_NUMPADEQUALS = 0x8d;
     public static readonly KEY_CIRCUMFLEX = 0x90;
     public static readonly KEY_AT = 0x91;
     public static readonly KEY_COLON = 0x92;
@@ -123,28 +123,28 @@ export class Input {
     public static readonly KEY_STOP = 0x95;
     public static readonly KEY_AX = 0x96;
     public static readonly KEY_UNLABELED = 0x97;
-    public static readonly KEY_NUMPADENTER = 0x9C;
-    public static readonly KEY_RCONTROL = 0x9D;
-    public static readonly KEY_NUMPADCOMMA = 0xB3;
-    public static readonly KEY_DIVIDE = 0xB5;
-    public static readonly KEY_SYSRQ = 0xB7;
-    public static readonly KEY_RMENU = 0xB8;
-    public static readonly KEY_PAUSE = 0xC5;
-    public static readonly KEY_HOME = 0xC7;
-    public static readonly KEY_UP = 0xC8;
-    public static readonly KEY_PRIOR = 0xC9;
-    public static readonly KEY_LEFT = 0xCB;
-    public static readonly KEY_RIGHT = 0xCD;
-    public static readonly KEY_END = 0xCF;
-    public static readonly KEY_DOWN = 0xD0;
-    public static readonly KEY_NEXT = 0xD1;
-    public static readonly KEY_INSERT = 0xD2;
-    public static readonly KEY_DELETE = 0xD3;
-    public static readonly KEY_LWIN = 0xDB;
-    public static readonly KEY_RWIN = 0xDC;
-    public static readonly KEY_APPS = 0xDD;
-    public static readonly KEY_POWER = 0xDE;
-    public static readonly KEY_SLEEP = 0xDF;
+    public static readonly KEY_NUMPADENTER = 0x9c;
+    public static readonly KEY_RCONTROL = 0x9d;
+    public static readonly KEY_NUMPADCOMMA = 0xb3;
+    public static readonly KEY_DIVIDE = 0xb5;
+    public static readonly KEY_SYSRQ = 0xb7;
+    public static readonly KEY_RMENU = 0xb8;
+    public static readonly KEY_PAUSE = 0xc5;
+    public static readonly KEY_HOME = 0xc7;
+    public static readonly KEY_UP = 0xc8;
+    public static readonly KEY_PRIOR = 0xc9;
+    public static readonly KEY_LEFT = 0xcb;
+    public static readonly KEY_RIGHT = 0xcd;
+    public static readonly KEY_END = 0xcf;
+    public static readonly KEY_DOWN = 0xd0;
+    public static readonly KEY_NEXT = 0xd1;
+    public static readonly KEY_INSERT = 0xd2;
+    public static readonly KEY_DELETE = 0xd3;
+    public static readonly KEY_LWIN = 0xdb;
+    public static readonly KEY_RWIN = 0xdc;
+    public static readonly KEY_APPS = 0xdd;
+    public static readonly KEY_POWER = 0xde;
+    public static readonly KEY_SLEEP = 0xdf;
     public static readonly KEY_LALT = Input.KEY_LMENU;
     public static readonly KEY_RALT = Input.KEY_RMENU;
 
@@ -212,8 +212,7 @@ export class Input {
      *
      * Creates an input adapter for a container of the supplied height.
      */
-    public constructor(private height: number) {
-    }
+    public constructor(private height: number) {}
 
     /** Browser parity helper: attaches DOM listeners to an element/window. */
     public bindToElement(target: TargetElement): void {
@@ -552,12 +551,10 @@ export class Input {
     }
 
     /** Java Slick2D counterpart: Input.consumeEvent(). */
-    public consumeEvent(): void {
-    }
+    public consumeEvent(): void {}
 
     /** Java Slick2D counterpart: Input.considerDoubleClick(int, int, int). */
-    public considerDoubleClick(_button: number, _x: number, _y: number): void {
-    }
+    public considerDoubleClick(_button: number, _x: number, _y: number): void {}
 
     /** Java Slick2D counterpart: Input.poll(int, int). */
     public poll(_width: number, height: number): void {
@@ -737,12 +734,8 @@ export class Input {
 
     private updateMouse(event: PointerEvent): void {
         const currentTarget = event.currentTarget;
-        const target = typeof Element !== "undefined" && currentTarget instanceof Element
-            ? currentTarget
-            : this.preventDefaultElement;
-        const rect = target && "getBoundingClientRect" in target
-            ? target.getBoundingClientRect()
-            : { left: 0, top: 0 };
+        const target = typeof Element !== "undefined" && currentTarget instanceof Element ? currentTarget : this.preventDefaultElement;
+        const rect = target && "getBoundingClientRect" in target ? target.getBoundingClientRect() : { left: 0, top: 0 };
         this.absoluteMouseX = Math.floor(event.clientX - rect.left);
         this.absoluteMouseY = Math.floor(event.clientY - rect.top);
         this.mouseX = Math.floor(this.absoluteMouseX * this.scaleX + this.offsetX);
@@ -877,27 +870,19 @@ export class Input {
     }
 
     private static isGamepadLeft(gamepad: Gamepad): boolean {
-        return (gamepad.axes[0] ?? 0) < -0.5
-            || gamepad.buttons[14]?.pressed === true
-            || Input.isGamepadPovHat(gamepad, Input.POV_HAT_LEFT);
+        return (gamepad.axes[0] ?? 0) < -0.5 || gamepad.buttons[14]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_LEFT);
     }
 
     private static isGamepadRight(gamepad: Gamepad): boolean {
-        return (gamepad.axes[0] ?? 0) > 0.5
-            || gamepad.buttons[15]?.pressed === true
-            || Input.isGamepadPovHat(gamepad, Input.POV_HAT_RIGHT);
+        return (gamepad.axes[0] ?? 0) > 0.5 || gamepad.buttons[15]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_RIGHT);
     }
 
     private static isGamepadUp(gamepad: Gamepad): boolean {
-        return (gamepad.axes[1] ?? 0) < -0.5
-            || gamepad.buttons[12]?.pressed === true
-            || Input.isGamepadPovHat(gamepad, Input.POV_HAT_UP);
+        return (gamepad.axes[1] ?? 0) < -0.5 || gamepad.buttons[12]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_UP);
     }
 
     private static isGamepadDown(gamepad: Gamepad): boolean {
-        return (gamepad.axes[1] ?? 0) > 0.5
-            || gamepad.buttons[13]?.pressed === true
-            || Input.isGamepadPovHat(gamepad, Input.POV_HAT_DOWN);
+        return (gamepad.axes[1] ?? 0) > 0.5 || gamepad.buttons[13]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_DOWN);
     }
 
     private static isGamepadPovHat(gamepad: Gamepad, values: readonly number[]): boolean {
@@ -983,10 +968,12 @@ export class Input {
         if (!this.preventDefaultElement) {
             return true;
         }
-        return active === this.preventDefaultElement
-            || active === document.body
-            || active === document.documentElement
-            || event.target === this.preventDefaultElement;
+        return (
+            active === this.preventDefaultElement ||
+            active === document.body ||
+            active === document.documentElement ||
+            event.target === this.preventDefaultElement
+        );
     }
 
     private shouldAcceptGameKey(event: KeyboardEvent): boolean {
@@ -1015,18 +1002,12 @@ export class Input {
         if (typeof Element !== "undefined" && target instanceof Element && Input.isInteractiveElement(target)) {
             return false;
         }
-        return typeof Node !== "undefined"
-            && target instanceof Node
-            && (target === this.preventDefaultElement || this.preventDefaultElement.contains(target));
+        return typeof Node !== "undefined" && target instanceof Node && (target === this.preventDefaultElement || this.preventDefaultElement.contains(target));
     }
 
     private static isInteractiveElement(element: Element): boolean {
         const tag = element.tagName.toUpperCase();
-        return tag === "INPUT"
-            || tag === "TEXTAREA"
-            || tag === "SELECT"
-            || tag === "BUTTON"
-            || (element as HTMLElement).isContentEditable;
+        return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "BUTTON" || (element as HTMLElement).isContentEditable;
     }
 
     private static readonly eventCodeToKey = new Map<string, number>([
@@ -1147,19 +1128,17 @@ export class Input {
         ["Sleep", Input.KEY_SLEEP]
     ]);
 
-    private static readonly keyNames = new Map<number, string>(
-        [
-            [Input.KEY_CIRCUMFLEX, "KEY_CIRCUMFLEX"],
-            [Input.KEY_AT, "KEY_AT"],
-            [Input.KEY_COLON, "KEY_COLON"],
-            [Input.KEY_UNDERLINE, "KEY_UNDERLINE"],
-            [Input.KEY_KANJI, "KEY_KANJI"],
-            [Input.KEY_STOP, "KEY_STOP"],
-            [Input.KEY_AX, "KEY_AX"],
-            [Input.KEY_UNLABELED, "KEY_UNLABELED"],
-            ...Array.from(Input.eventCodeToKey.entries()).map(([name, code]) => [code, name] as [number, string])
-        ]
-    );
+    private static readonly keyNames = new Map<number, string>([
+        [Input.KEY_CIRCUMFLEX, "KEY_CIRCUMFLEX"],
+        [Input.KEY_AT, "KEY_AT"],
+        [Input.KEY_COLON, "KEY_COLON"],
+        [Input.KEY_UNDERLINE, "KEY_UNDERLINE"],
+        [Input.KEY_KANJI, "KEY_KANJI"],
+        [Input.KEY_STOP, "KEY_STOP"],
+        [Input.KEY_AX, "KEY_AX"],
+        [Input.KEY_UNLABELED, "KEY_UNLABELED"],
+        ...Array.from(Input.eventCodeToKey.entries()).map(([name, code]) => [code, name] as [number, string])
+    ]);
 
     private static readonly defaultPreventedKeys = new Set<number>([
         Input.KEY_ESCAPE,

@@ -25,18 +25,7 @@ function javaFastCos(radians) {
     return javaFastSin(radians + Math.PI / 2);
 }
 
-const samples = [
-    0,
-    0.1,
-    Math.PI / 3,
-    2.1,
-    3.14,
-    4.7,
-    12.345,
-    1000.01,
-    -2.1,
-    -1000.01
-];
+const samples = [0, 0.1, Math.PI / 3, 2.1, 3.14, 4.7, 12.345, 1000.01, -2.1, -1000.01];
 
 test("FastTrig.sin mirrors Java Slick2D angle reduction", () => {
     for (const radians of samples) {

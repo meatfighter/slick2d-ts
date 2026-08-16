@@ -27,8 +27,7 @@ export class TGAImageData implements LoadableImageData {
     private buffer = new Uint8Array(0);
 
     /** Java Slick2D counterpart: TGAImageData(). */
-    public constructor() {
-    }
+    public constructor() {}
 
     /** Java Slick2D counterpart: ImageData.getDepth(). */
     public getDepth(): number {
@@ -56,8 +55,7 @@ export class TGAImageData implements LoadableImageData {
     }
 
     /** Java Slick2D counterpart: LoadableImageData.configureEdging(boolean). */
-    public configureEdging(_edging: boolean): void {
-    }
+    public configureEdging(_edging: boolean): void {}
 
     /** Java Slick2D counterpart: TGAImageData.loadImage(InputStream). */
     public loadImage(data: ArrayBuffer | Uint8Array): Uint8Array;
@@ -65,7 +63,12 @@ export class TGAImageData implements LoadableImageData {
     public loadImage(data: ArrayBuffer | Uint8Array, flipped: boolean, transparent: number[] | null): Uint8Array;
     /** Java Slick2D counterpart: TGAImageData.loadImage(InputStream, boolean, boolean, int[]). */
     public loadImage(data: ArrayBuffer | Uint8Array, flipped: boolean, forceAlpha: boolean, transparent: number[] | null): Uint8Array;
-    public loadImage(data: ArrayBuffer | Uint8Array, flipped: boolean = true, forceAlphaOrTransparent: boolean | number[] | null = false, transparentMaybe: number[] | null = null): Uint8Array {
+    public loadImage(
+        data: ArrayBuffer | Uint8Array,
+        flipped: boolean = true,
+        forceAlphaOrTransparent: boolean | number[] | null = false,
+        transparentMaybe: number[] | null = null
+    ): Uint8Array {
         const forceAlpha = typeof forceAlphaOrTransparent === "boolean" ? forceAlphaOrTransparent : false;
         const transparent = Array.isArray(forceAlphaOrTransparent) ? forceAlphaOrTransparent : transparentMaybe;
         const bytes = toBytes(data);
@@ -84,7 +87,7 @@ export class TGAImageData implements LoadableImageData {
         if (bits !== 24 && bits !== 32) {
             throw new SlickException(`Unsupported TGA depth: ${bits}`);
         }
-        this.depth = (bits === 32 || forceAlpha || transparent) ? 32 : 24;
+        this.depth = bits === 32 || forceAlpha || transparent ? 32 : 24;
         this.texWidth = nextPowerOfTwo(this.width);
         this.texHeight = nextPowerOfTwo(this.height);
         const components = this.depth / 8;
@@ -106,9 +109,7 @@ export class TGAImageData implements LoadableImageData {
                 const g = bytes[src + 1];
                 const r = bytes[src + 2];
                 const sourceA = sourceComponents === 4 ? bytes[src + 3] : 255;
-                const transparentMatch = transparent
-                    ? r === transparent[0] && g === transparent[1] && b === transparent[2]
-                    : false;
+                const transparentMatch = transparent ? r === transparent[0] && g === transparent[1] && b === transparent[2] : false;
                 this.buffer[dst] = r;
                 this.buffer[dst + 1] = g;
                 this.buffer[dst + 2] = b;

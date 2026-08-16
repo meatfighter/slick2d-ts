@@ -123,9 +123,7 @@ export class AppGameContainer extends GameContainer {
 
     /** Browser rendering helper: caps the effective device pixel ratio used for the canvas backing store. */
     public setMaxDevicePixelRatio(maxDevicePixelRatio: number): void {
-        const normalized = Number.isFinite(maxDevicePixelRatio)
-            ? Math.max(1, maxDevicePixelRatio)
-            : 1;
+        const normalized = Number.isFinite(maxDevicePixelRatio) ? Math.max(1, maxDevicePixelRatio) : 1;
         if (this.maxDevicePixelRatio === normalized) {
             return;
         }
@@ -235,9 +233,7 @@ export class AppGameContainer extends GameContainer {
 
     /** Java Slick2D counterpart: AppGameContainer.isFullscreen(). */
     public override isFullscreen(): boolean {
-        return typeof document !== "undefined" && this.canvas
-            ? document.fullscreenElement === this.canvas
-            : this.fullscreen;
+        return typeof document !== "undefined" && this.canvas ? document.fullscreenElement === this.canvas : this.fullscreen;
     }
 
     /** Java Slick2D counterpart: AppGameContainer.setFullscreen(boolean). */
@@ -253,7 +249,8 @@ export class AppGameContainer extends GameContainer {
             return;
         }
         if (fullscreen && document.fullscreenElement !== this.canvas && this.canvas.requestFullscreen) {
-            return this.canvas.requestFullscreen()
+            return this.canvas
+                .requestFullscreen()
                 .then(() => {
                     this.fullscreen = true;
                     this.applyBrowserDisplaySize();
@@ -267,7 +264,8 @@ export class AppGameContainer extends GameContainer {
                 });
         }
         if (!fullscreen && document.fullscreenElement === this.canvas && document.exitFullscreen) {
-            return document.exitFullscreen()
+            return document
+                .exitFullscreen()
                 .then(() => {
                     this.fullscreen = false;
                     this.applyWindowedDisplayMode();
@@ -337,11 +335,18 @@ export class AppGameContainer extends GameContainer {
             window.visualViewport?.addEventListener("resize", this.handleWindowResize);
             document.addEventListener("fullscreenchange", this.handleFullscreenChange);
             document.addEventListener("visibilitychange", this.handleVisibilityChange);
-            Renderer.getBackend().initialize(this.canvas, {
-                alpha: true,
-                antialias: this.multiSample > 0,
-                stencil: GameContainer.stencil
-            }, this.width, this.height, this.backingWidth, this.backingHeight);
+            Renderer.getBackend().initialize(
+                this.canvas,
+                {
+                    alpha: true,
+                    antialias: this.multiSample > 0,
+                    stencil: GameContainer.stencil
+                },
+                this.width,
+                this.height,
+                this.backingWidth,
+                this.backingHeight
+            );
             AL.create();
             await this.game.init(this);
             await ResourceLoader.waitForAll();
@@ -388,7 +393,11 @@ export class AppGameContainer extends GameContainer {
     public override setMouseCursor(image: Image, hotSpotX: number, hotSpotY: number): void | Promise<void>;
     public override setMouseCursor(cursor: Cursor, hotSpotX: number, hotSpotY: number): void | Promise<void>;
     /** Java Slick2D counterpart: AppGameContainer.setMouseCursor(...). */
-    public override setMouseCursor(cursorLike: string | DomImageData | SlickImageData | Image | Cursor, hotSpotX: number, hotSpotY: number): void | Promise<void> {
+    public override setMouseCursor(
+        cursorLike: string | DomImageData | SlickImageData | Image | Cursor,
+        hotSpotX: number,
+        hotSpotY: number
+    ): void | Promise<void> {
         const setMouseCursor = GameContainer.prototype.setMouseCursor as unknown as (
             this: GameContainer,
             value: string | DomImageData | SlickImageData | Image | Cursor,
@@ -601,11 +610,18 @@ export class AppGameContainer extends GameContainer {
         SoundStore.get().clear();
         Renderer.getBackend().dispose();
         if (this.canvas) {
-            Renderer.getBackend().initialize(this.canvas, {
-                alpha: true,
-                antialias: this.multiSample > 0,
-                stencil: GameContainer.stencil
-            }, this.width, this.height, this.backingWidth, this.backingHeight);
+            Renderer.getBackend().initialize(
+                this.canvas,
+                {
+                    alpha: true,
+                    antialias: this.multiSample > 0,
+                    stencil: GameContainer.stencil
+                },
+                this.width,
+                this.height,
+                this.backingWidth,
+                this.backingHeight
+            );
         } else {
             Renderer.getBackend().initDisplay(this.width, this.height, this.backingWidth, this.backingHeight);
         }
@@ -642,12 +658,7 @@ export class AppGameContainer extends GameContainer {
     }
 
     private scheduleNextFrame(): void {
-        if (this.destroyed
-            || this.loopSuspended
-            || !this.started
-            || !this.loopReady
-            || this.waitingForResources
-            || this.animationFrame !== 0) {
+        if (this.destroyed || this.loopSuspended || !this.started || !this.loopReady || this.waitingForResources || this.animationFrame !== 0) {
             return;
         }
         this.animationFrame = requestAnimationFrame(this.loop);
@@ -761,7 +772,11 @@ export class AppGameContainer extends GameContainer {
         this.applySizedCanvas(width, height, "100vw", "100vh", true);
     }
 
-    private applyWindowedDisplayMode(width: number = this.lastWindowedDisplayMode.width, height: number = this.lastWindowedDisplayMode.height, notify: boolean = true): void {
+    private applyWindowedDisplayMode(
+        width: number = this.lastWindowedDisplayMode.width,
+        height: number = this.lastWindowedDisplayMode.height,
+        notify: boolean = true
+    ): void {
         if (!this.canvas) {
             this.setDimensions(width, height);
             this.displayPixelRatio = 1;
@@ -781,10 +796,8 @@ export class AppGameContainer extends GameContainer {
         const dpr = this.resolveDisplayPixelRatio();
         const backingWidth = Math.max(1, Math.round(logicalWidth * dpr));
         const backingHeight = Math.max(1, Math.round(logicalHeight * dpr));
-        const logicalOrStyleChanged = this.width !== logicalWidth
-            || this.height !== logicalHeight
-            || this.canvas.style.width !== styleWidth
-            || this.canvas.style.height !== styleHeight;
+        const logicalOrStyleChanged =
+            this.width !== logicalWidth || this.height !== logicalHeight || this.canvas.style.width !== styleWidth || this.canvas.style.height !== styleHeight;
         this.setDimensions(logicalWidth, logicalHeight);
         this.displayPixelRatio = dpr;
         this.backingWidth = backingWidth;
@@ -840,8 +853,7 @@ export class AppGameContainer extends GameContainer {
         this.applyWindowedDisplayMode(undefined, undefined, false);
         Mouse.restoreNativeCursorAfterForcedFullscreenExit();
         if (document.fullscreenElement === this.canvas && document.exitFullscreen) {
-            void document.exitFullscreen().catch(() => {
-            });
+            void document.exitFullscreen().catch(() => {});
         }
     }
 

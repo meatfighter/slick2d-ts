@@ -3,10 +3,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import { Graphics, Renderer, SpriteDrawing } from "../dist/index.js";
 
 function transformPoint(matrix, x, y) {
-    return [
-        matrix[0] * x + matrix[1] * y + matrix[2],
-        matrix[3] * x + matrix[4] * y + matrix[5]
-    ];
+    return [matrix[0] * x + matrix[1] * y + matrix[2], matrix[3] * x + matrix[4] * y + matrix[5]];
 }
 
 function assertPoint(actual, expected) {

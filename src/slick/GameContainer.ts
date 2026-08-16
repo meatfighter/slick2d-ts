@@ -19,10 +19,12 @@ type DomImageData = globalThis.ImageData;
 
 function isSlickImageData(value: unknown): value is SlickImageData {
     const candidate = value as Partial<SlickImageData> | null;
-    return !!candidate
-        && typeof candidate.getWidth === "function"
-        && typeof candidate.getHeight === "function"
-        && typeof candidate.getImageBufferData === "function";
+    return (
+        !!candidate &&
+        typeof candidate.getWidth === "function" &&
+        typeof candidate.getHeight === "function" &&
+        typeof candidate.getImageBufferData === "function"
+    );
 }
 
 /**
@@ -446,8 +448,7 @@ export abstract class GameContainer {
         this.graphics.setDimensions(width, height);
     }
 
-    protected setCssCursor(_cursor: string): void {
-    }
+    protected setCssCursor(_cursor: string): void {}
 
     private static cursorCssFromDomImageData(data: DomImageData, hotSpotX: number, hotSpotY: number): string {
         if (typeof document === "undefined") {

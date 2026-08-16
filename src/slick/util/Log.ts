@@ -20,8 +20,7 @@ export class Log {
      *
      * Compatibility hook; browser builds keep the current verbose flag.
      */
-    public static checkVerboseLogSetting(): void {
-    }
+    public static checkVerboseLogSetting(): void {}
 
     /**
      * Java Slick2D counterpart: Log.error(String message), Log.error(Throwable), Log.error(String, Throwable).

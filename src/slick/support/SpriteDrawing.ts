@@ -121,7 +121,17 @@ export class SpriteDrawing {
     public static drawRotatedScaled(image: Image, x: number, y: number, angle: number, scale: number): void;
     public static drawRotatedScaled(image: Image, x: number, y: number, angle: number, scaleX: number, scaleY: number): void;
     public static drawRotatedScaled(image: Image, x: number, y: number, centerX: number, centerY: number, angle: number, scaleX: number, scaleY: number): void;
-    public static drawRotatedScaled(image: Image, x: number, y: number, centerX: number, centerY: number, angle: number, scaleX: number, scaleY: number, alpha: number): void;
+    public static drawRotatedScaled(
+        image: Image,
+        x: number,
+        y: number,
+        centerX: number,
+        centerY: number,
+        angle: number,
+        scaleX: number,
+        scaleY: number,
+        alpha: number
+    ): void;
     /** Java counterpart: drawRotatedScaled overloads. */
     public static drawRotatedScaled(image: Image, x: number, y: number, a: number, b: number, c?: number, d?: number, e?: number, f?: number): void {
         let centerX = -image.getWidth() * 0.5;

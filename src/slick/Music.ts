@@ -65,9 +65,10 @@ export class Music {
                 const registered = refOrUrlOrInput.arrayBuffer().then((bytes) => {
                     ResourceLoader.registerResource(this.ref, bytes);
                 });
-                this.readyPromise = ResourceLoader.track(registered
-                    .then(() => SoundStore.get().loadAudioBuffer(this.ref))
-                    .then(() => undefined), this.ref);
+                this.readyPromise = ResourceLoader.track(
+                    registered.then(() => SoundStore.get().loadAudioBuffer(this.ref)).then(() => undefined),
+                    this.ref
+                );
                 void this.readyPromise.catch(() => undefined);
             }
         }
@@ -184,9 +185,7 @@ export class Music {
 
     /** Java Slick2D counterpart: Music.setPosition(float). */
     public setPosition(position: number): boolean {
-        this.positionOffset = this.buffer
-            ? this.normalizeOffset(this.buffer, position, this.looped)
-            : this.sanitizeOffset(position);
+        this.positionOffset = this.buffer ? this.normalizeOffset(this.buffer, position, this.looped) : this.sanitizeOffset(position);
         if (this.source) {
             this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
         }
@@ -200,9 +199,7 @@ export class Music {
             return this.positionOffset;
         }
         const position = this.positionOffset + (context.currentTime - this.startedAt) * this.playbackRate;
-        return this.buffer
-            ? this.normalizeOffset(this.buffer, position, this.looped)
-            : this.sanitizeOffset(position);
+        return this.buffer ? this.normalizeOffset(this.buffer, position, this.looped) : this.sanitizeOffset(position);
     }
 
     /** Java Slick2D counterpart: Music.fade(int, float, boolean). */
@@ -227,36 +224,37 @@ export class Music {
         Music.currentMusic = this;
         this.looped = loop;
         this.playbackRate = Math.max(0.25, Math.min(4, pitch));
-        this.positionOffset = this.buffer
-            ? this.normalizeOffset(this.buffer, offset, loop)
-            : this.sanitizeOffset(offset);
+        this.positionOffset = this.buffer ? this.normalizeOffset(this.buffer, offset, loop) : this.sanitizeOffset(offset);
         this.setVolume(volume);
         this.paused = false;
         this.playingFlag = true;
         this.globallySuspended = !SoundStore.get().musicOn();
         this.ensureHandle();
         const token = ++this.startToken;
-        void this.readyPromise.then(() => this.loadBuffer()).then((buffer) => {
-            if (token !== this.startToken || Music.currentMusic !== this || !this.playingFlag) {
-                return;
-            }
-            this.buffer = buffer;
-            this.positionOffset = this.normalizeOffset(buffer, this.positionOffset, loop);
-            if (!SoundStore.get().musicOn()) {
-                this.globallySuspended = true;
-                return;
-            }
-            this.globallySuspended = false;
-            this.startSource(buffer, loop, this.positionOffset);
-        }).catch((error) => {
-            if (token === this.startToken && Music.currentMusic === this) {
-                this.playingFlag = false;
+        void this.readyPromise
+            .then(() => this.loadBuffer())
+            .then((buffer) => {
+                if (token !== this.startToken || Music.currentMusic !== this || !this.playingFlag) {
+                    return;
+                }
+                this.buffer = buffer;
+                this.positionOffset = this.normalizeOffset(buffer, this.positionOffset, loop);
+                if (!SoundStore.get().musicOn()) {
+                    this.globallySuspended = true;
+                    return;
+                }
                 this.globallySuspended = false;
-                Music.currentMusic = null;
-                this.clearHandle();
-            }
-            Log.error(`Failed to start music: ${this.ref}`, error);
-        });
+                this.startSource(buffer, loop, this.positionOffset);
+            })
+            .catch((error) => {
+                if (token === this.startToken && Music.currentMusic === this) {
+                    this.playingFlag = false;
+                    this.globallySuspended = false;
+                    Music.currentMusic = null;
+                    this.clearHandle();
+                }
+                Log.error(`Failed to start music: ${this.ref}`, error);
+            });
     }
 
     private poll(delta: number): void {

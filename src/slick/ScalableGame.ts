@@ -7,12 +7,14 @@ import { SlickCallable } from "./opengl/SlickCallable.js";
 
 function isInputListener(value: unknown): value is InputListener {
     const candidate = value as Partial<InputListener> | null;
-    return !!candidate
-        && typeof candidate.setInput === "function"
-        && typeof candidate.isAcceptingInput === "function"
-        && typeof candidate.keyPressed === "function"
-        && typeof candidate.mousePressed === "function"
-        && typeof candidate.controllerButtonPressed === "function";
+    return (
+        !!candidate &&
+        typeof candidate.setInput === "function" &&
+        typeof candidate.isAcceptingInput === "function" &&
+        typeof candidate.keyPressed === "function" &&
+        typeof candidate.mousePressed === "function" &&
+        typeof candidate.controllerButtonPressed === "function"
+    );
 }
 
 /**
@@ -74,8 +76,7 @@ export class ScalableGame implements Game {
     }
 
     /** Java Slick2D counterpart: ScalableGame.renderOverlay(GameContainer, Graphics). */
-    protected renderOverlay(_container: GameContainer, _g: Graphics): void {
-    }
+    protected renderOverlay(_container: GameContainer, _g: Graphics): void {}
 
     /** Java Slick2D counterpart: ScalableGame.recalculateScale(). */
     public recalculateScale(): void {
@@ -112,10 +113,7 @@ export class ScalableGame implements Game {
         this.container.getInput().setScale(this.normalWidth / this.targetWidth, this.normalHeight / this.targetHeight);
 
         this.calculateOffsets(this.container);
-        this.container.getInput().setOffset(
-            -this.xoffset / (this.targetWidth / this.normalWidth),
-            -this.yoffset / (this.targetHeight / this.normalHeight)
-        );
+        this.container.getInput().setOffset(-this.xoffset / (this.targetWidth / this.normalWidth), -this.yoffset / (this.targetHeight / this.normalHeight));
     }
 
     private calculateOffsets(container: GameContainer): void {

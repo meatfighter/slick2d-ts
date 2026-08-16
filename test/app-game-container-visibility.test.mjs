@@ -1,16 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import {
-    AL,
-    AppGameContainer,
-    Display,
-    InternalTextureLoader,
-    Mouse,
-    Music,
-    Renderer,
-    ResourceLoader,
-    SoundStore
-} from "../dist/index.js";
+import { AL, AppGameContainer, Display, InternalTextureLoader, Mouse, Music, Renderer, ResourceLoader, SoundStore } from "../dist/index.js";
 
 class FakeCanvas {
     constructor(width = 800, height = 600) {
@@ -405,9 +395,12 @@ test("resource completion does not restart the RAF loop while suspended", async 
     const { container } = createContainer();
     const frames = [];
     let resolveResource;
-    const tracked = ResourceLoader.track(new Promise((resolve) => {
-        resolveResource = resolve;
-    }), "images/suspended.png");
+    const tracked = ResourceLoader.track(
+        new Promise((resolve) => {
+            resolveResource = resolve;
+        }),
+        "images/suspended.png"
+    );
     globalThis.requestAnimationFrame = (callback) => {
         frames.push(callback);
         return 55;

@@ -11,12 +11,13 @@ export class RecordedInput implements IInput {
     private index = 0;
 
     /** Java counterpart: RecordedInput(byte[], GameContainer). */
-    public constructor(private readonly data: Uint8Array, private readonly gc: GameContainer) {
-    }
+    public constructor(
+        private readonly data: Uint8Array,
+        private readonly gc: GameContainer
+    ) {}
 
     /** Java counterpart: RecordedInput.snap(). */
-    public snap(): void {
-    }
+    public snap(): void {}
 
     /** Java counterpart: RecordedInput.reset(). */
     public reset(): void {

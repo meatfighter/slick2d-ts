@@ -54,10 +54,7 @@ test("preloadResources fetches a manifest with retries and registers original Ja
     };
 
     const progress = [];
-    const loaded = await ResourceLoader.preloadResources(
-        ["images/font.xml", "maps/level.dat", "images/font.xml"],
-        (entry) => progress.push(entry)
-    );
+    const loaded = await ResourceLoader.preloadResources(["images/font.xml", "maps/level.dat", "images/font.xml"], (entry) => progress.push(entry));
 
     assert.equal(loaded.size, 2);
     assert.equal(loaded.get("images/font.xml").byteLength, 3);
@@ -65,7 +62,10 @@ test("preloadResources fetches a manifest with retries and registers original Ja
     assert.equal(ResourceLoader.getResourceAsStream("maps/level.dat").byteLength, 2);
     assert.equal(attempts.get("images/font.xml"), 2);
     assert.equal(progress.length, 2);
-    assert.deepEqual(progress.map((entry) => entry.total), [2, 2]);
+    assert.deepEqual(
+        progress.map((entry) => entry.total),
+        [2, 2]
+    );
     assert.ok(urls.every((url) => url.includes("v=build-42")));
     assert.ok(urls.every((url) => url.includes("/assets/")));
 });
@@ -79,10 +79,7 @@ test("preloadResources reports permanent failures with the Java resource path", 
 
     globalThis.fetch = async () => response([], 404);
 
-    await assert.rejects(
-        ResourceLoader.preloadResources(["missing/file.dat"]),
-        /Failed to load resource missing\/file\.dat: HTTP 404/
-    );
+    await assert.rejects(ResourceLoader.preloadResources(["missing/file.dat"]), /Failed to load resource missing\/file\.dat: HTTP 404/);
     assert.equal(ResourceLoader.resourceFailed("missing/file.dat"), true);
 });
 

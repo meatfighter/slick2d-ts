@@ -65,7 +65,12 @@ export class WebGLTextureResource {
     public constructor(source: ArrayBuffer | Blob, filter: number, ref: string, options?: WebGLTextureLoadOptions);
     /** Creates a texture resource from a Java resource reference. */
     public constructor(ref: string, filter: number, options?: WebGLTextureLoadOptions);
-    public constructor(sourceOrRef: TextureInputSource | string, filter: number, refOrOptions: string | null | WebGLTextureLoadOptions = null, options: WebGLTextureLoadOptions = {}) {
+    public constructor(
+        sourceOrRef: TextureInputSource | string,
+        filter: number,
+        refOrOptions: string | null | WebGLTextureLoadOptions = null,
+        options: WebGLTextureLoadOptions = {}
+    ) {
         this.filter = filter;
         if (typeof sourceOrRef === "string") {
             this.ref = sourceOrRef;
@@ -111,12 +116,7 @@ export class WebGLTextureResource {
             return null;
         }
         const offset = (Math.trunc(y) * this.width + Math.trunc(x)) * 4;
-        return [
-            this.pixelData[offset],
-            this.pixelData[offset + 1],
-            this.pixelData[offset + 2],
-            this.pixelData[offset + 3]
-        ];
+        return [this.pixelData[offset], this.pixelData[offset + 1], this.pixelData[offset + 2], this.pixelData[offset + 3]];
     }
 
     /** Returns or creates the WebGL texture for a context. */

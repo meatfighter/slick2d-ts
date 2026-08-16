@@ -8,12 +8,14 @@ import { ScalableGame } from "./ScalableGame.js";
 
 function isInputListener(value: unknown): value is InputListener {
     const candidate = value as Partial<InputListener> | null;
-    return !!candidate
-        && typeof candidate.setInput === "function"
-        && typeof candidate.isAcceptingInput === "function"
-        && typeof candidate.keyPressed === "function"
-        && typeof candidate.mousePressed === "function"
-        && typeof candidate.controllerButtonPressed === "function";
+    return (
+        !!candidate &&
+        typeof candidate.setInput === "function" &&
+        typeof candidate.isAcceptingInput === "function" &&
+        typeof candidate.keyPressed === "function" &&
+        typeof candidate.mousePressed === "function" &&
+        typeof candidate.controllerButtonPressed === "function"
+    );
 }
 
 /**
@@ -77,10 +79,7 @@ export class ScalableGame2 extends ScalableGame {
     private applyInputTransform(container: GameContainer): void {
         container.getInput().setScale(this.normalWidth / this.targetWidth, this.normalHeight / this.targetHeight);
         this.calculateScalableGame2Offsets(container);
-        container.getInput().setOffset(
-            -this.xoffset / (this.targetWidth / this.normalWidth),
-            -this.yoffset / (this.targetHeight / this.normalHeight)
-        );
+        container.getInput().setOffset(-this.xoffset / (this.targetWidth / this.normalWidth), -this.yoffset / (this.targetHeight / this.normalHeight));
     }
 
     /** Java Slick2D counterpart: ScalableGame.render(GameContainer, Graphics). */

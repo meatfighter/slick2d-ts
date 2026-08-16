@@ -24,8 +24,7 @@ export class ImageIOImageData implements LoadableImageData {
     private edging = true;
 
     /** Java Slick2D counterpart: ImageIOImageData(). */
-    public constructor() {
-    }
+    public constructor() {}
 
     /** Java Slick2D counterpart: ImageData.getDepth(). */
     public getDepth(): number {
@@ -63,20 +62,28 @@ export class ImageIOImageData implements LoadableImageData {
     public loadImage(data: ArrayBuffer | Uint8Array, flipped: boolean, transparent: number[] | null): Uint8Array;
     /** Java Slick2D counterpart: ImageIOImageData.loadImage(InputStream, boolean, boolean, int[]). */
     public loadImage(data: ArrayBuffer | Uint8Array, flipped: boolean, forceAlpha: boolean, transparent: number[] | null): Uint8Array;
-    public loadImage(_data: ArrayBuffer | Uint8Array, _flipped: boolean = true, _forceAlphaOrTransparent: boolean | number[] | null = false, _transparentMaybe: number[] | null = null): Uint8Array {
+    public loadImage(
+        _data: ArrayBuffer | Uint8Array,
+        _flipped: boolean = true,
+        _forceAlphaOrTransparent: boolean | number[] | null = false,
+        _transparentMaybe: number[] | null = null
+    ): Uint8Array {
         throw new SlickException("ImageIOImageData.loadImage requires async browser image decoding; use imageToByteBuffer with a decoded image source");
     }
 
     /** Java Slick2D counterpart: ImageIOImageData.imageToByteBuffer(BufferedImage, ...). */
-    public imageToByteBuffer(image: ImageBitmap | HTMLImageElement | OffscreenCanvas, flipped: boolean, forceAlpha: boolean, transparent: number[] | null): Uint8Array {
+    public imageToByteBuffer(
+        image: ImageBitmap | HTMLImageElement | OffscreenCanvas,
+        flipped: boolean,
+        forceAlpha: boolean,
+        transparent: number[] | null
+    ): Uint8Array {
         this.width = image.width;
         this.height = image.height;
         this.texWidth = nextPowerOfTwo(this.width);
         this.texHeight = nextPowerOfTwo(this.height);
         this.depth = forceAlpha || transparent ? 32 : 32;
-        const canvas = typeof OffscreenCanvas !== "undefined"
-            ? new OffscreenCanvas(this.texWidth, this.texHeight)
-            : document.createElement("canvas");
+        const canvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(this.texWidth, this.texHeight) : document.createElement("canvas");
         canvas.width = this.texWidth;
         canvas.height = this.texHeight;
         const ctx = canvas.getContext("2d") as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;

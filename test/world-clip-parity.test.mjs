@@ -5,7 +5,7 @@ import { identityMatrix3 } from "../dist/slick/rendering/RenderBackend.js";
 
 class FakeGL {
     constructor() {
-        this.SCISSOR_TEST = 0x0C11;
+        this.SCISSOR_TEST = 0x0c11;
         this.scissors = [];
         this.disabled = [];
         this.enabled = [];

@@ -9,12 +9,7 @@ This document specifies the TypeScript library we want to build from the Slick2D
 
 The target is a pure modern TypeScript library for the web that preserves Slick2D's Java-facing shape closely enough that the game code can be ported with direct, mechanical substitutions. The API names, class boundaries, overload shapes, argument order, public constants, and expected side effects must map back to the Java counterparts one-to-one whenever the browser platform allows it.
 
-The existing project docs remain authoritative for the browser-specific subsystems:
-
-- `docs/RESOURCE-MANAGEMENT-SYSTEM.md`
-- `docs/GAME-LOOP.md`
-
-This file defines the Slick2D parity layer that must sit above those systems.
+This file defines the Slick2D parity layer, including the browser-specific resource and timing contracts that support the Java-facing API.
 
 ## Compatibility Goal
 
@@ -329,7 +324,7 @@ The source games also read binary and text resources through `ClassLoader.getRes
 
 Implement these rules:
 
-- The full resource manager architecture in `docs/RESOURCE-MANAGEMENT-SYSTEM.md` is the long-form design target. The phase-one Slick parity implementation uses `ResourceLoader` as the concrete shared cache, byte registry, and preload barrier.
+- `ResourceLoader` is the concrete shared cache, byte registry, and preload barrier for the Slick parity implementation.
 - `Image`, `Sound`, `Music`, `PackedSpriteSheet`, and `XMLPackedSheet` must register or retrieve work through `ResourceLoader`; they must not perform one-off uncached browser fetches.
 - `AppGameContainer.start()` must call `game.init`, then wait for `ResourceLoader.waitForAll()` before the first real frame.
 - Dynamic resources created after startup must begin loading immediately and participate in `ResourceLoader.waitForAll()` when their preparation promise is tracked.
@@ -373,7 +368,7 @@ Java Slick2D passes integer millisecond deltas into `Game.update`. The TS librar
 
 Implement these rules:
 
-- Implement the Slick container loop as an adapter over the fixed-timestep game loop from `docs/GAME-LOOP.md`.
+- Implement the Slick container loop with Slick-compatible timing semantics rather than exposing a separate public game-loop framework.
 - The lower-level loop may use seconds internally, but the Slick adapter must convert each fixed step to Java-style integer milliseconds before calling `Game.update(container, delta)`.
 - Use a default adapter update rate of `60` updates per second unless the container configuration changes it.
 - Bound catch-up work with both `maximumFrameDeltaMs` and `maximumUpdatesPerFrame`.
@@ -388,7 +383,7 @@ Implement these rules:
 - `Game.render(container, graphics)` is called after update work for the frame.
 - `Sys.getTime()` and `Sys.getTimerResolution()` must be available for ported helper code. `Sys.getTimerResolution()` must return `1000`.
 - The source helper loops use two explicit cadences: `(Sys.getTimerResolution() / 91)` for about 91 updates per second, and `((Sys.getTimerResolution() * 0.01f) + 0.5f)` for about 100 updates per second. The Slick adapter must not force those game-local loops to 60 Hz; it must preserve `Sys` timing so the port can keep those exact counters.
-- Fixed-timestep behavior must follow `docs/GAME-LOOP.md`.
+- Fixed-timestep behavior must remain bounded, visibility-aware, and compatible with Java-style integer millisecond deltas.
 
 ### Rendering
 
@@ -501,13 +496,66 @@ Internal renderer files must expose a small private backend API that the Slick c
 
 ```ts
 export interface RenderBackend {
-    initialize(canvas: HTMLCanvasElement, options: RenderBackendOptions, logicalWidth?: number, logicalHeight?: number, backingWidth?: number, backingHeight?: number): void;
+    initialize(
+        canvas: HTMLCanvasElement,
+        options: RenderBackendOptions,
+        logicalWidth?: number,
+        logicalHeight?: number,
+        backingWidth?: number,
+        backingHeight?: number
+    ): void;
     beginFrame(width: number, height: number, background: Color, backingWidth?: number, backingHeight?: number): void;
     endFrame(): void;
     setRenderTarget(target: WebGLRenderTarget | null): void;
-    drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors?: boolean, useCurrentColorForNullTint?: boolean): void;
-    drawImageFlash(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, tint: Color, transform: Matrix3): void;
-    drawImageWarped(image: Image, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors?: boolean, useCurrentColorForNullTint?: boolean): void;
+    drawImage(
+        image: Image,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        srcX: number,
+        srcY: number,
+        srcWidth: number,
+        srcHeight: number,
+        alpha: number,
+        tint: Color | null,
+        transform: Matrix3,
+        useCornerColors?: boolean,
+        useCurrentColorForNullTint?: boolean
+    ): void;
+    drawImageFlash(
+        image: Image,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        srcX: number,
+        srcY: number,
+        srcWidth: number,
+        srcHeight: number,
+        tint: Color,
+        transform: Matrix3
+    ): void;
+    drawImageWarped(
+        image: Image,
+        x1: number,
+        y1: number,
+        x2: number,
+        y2: number,
+        x3: number,
+        y3: number,
+        x4: number,
+        y4: number,
+        srcX: number,
+        srcY: number,
+        srcWidth: number,
+        srcHeight: number,
+        alpha: number,
+        tint: Color | null,
+        transform: Matrix3,
+        useCornerColors?: boolean,
+        useCurrentColorForNullTint?: boolean
+    ): void;
     fillRect(x: number, y: number, width: number, height: number, color: Color, transform: Matrix3): void;
     drawLine(x1: number, y1: number, x2: number, y2: number, color: Color, width: number, transform: Matrix3): void;
     setClip(x: number, y: number, width: number, height: number): void;
@@ -752,8 +800,7 @@ Implementation instructions:
 ### `slick.InputListener`
 
 ```ts
-export interface InputListener extends MouseListener, KeyListener, ControllerListener {
-}
+export interface InputListener extends MouseListener, KeyListener, ControllerListener {}
 ```
 
 Implementation instructions:
@@ -921,7 +968,16 @@ export class Image implements Renderable {
     public getAlpha(): number;
     public setAlpha(alpha: number): void;
     public getSubImage(x: number, y: number, width: number, height: number): Image;
-    public drawWarped(topLeftX: number, topLeftY: number, topRightX: number, topRightY: number, bottomRightX: number, bottomRightY: number, bottomLeftX: number, bottomLeftY: number): void;
+    public drawWarped(
+        topLeftX: number,
+        topLeftY: number,
+        topRightX: number,
+        topRightY: number,
+        bottomRightX: number,
+        bottomRightY: number,
+        bottomLeftX: number,
+        bottomLeftY: number
+    ): void;
     public getWidth(): number;
     public getHeight(): number;
     public copy(): Image;
@@ -1051,7 +1107,20 @@ export class Graphics {
     public getPixel(x: number, y: number): Color;
     public getArea(x: number, y: number, width: number, height: number): Image;
     public getArea(x: number, y: number, width: number, height: number, target: Uint8Array): void;
-    public drawGradientLine(x1: number, y1: number, r1: number, g1: number, b1: number, a1: number, x2: number, y2: number, r2: number, g2: number, b2: number, a2: number): void;
+    public drawGradientLine(
+        x1: number,
+        y1: number,
+        r1: number,
+        g1: number,
+        b1: number,
+        a1: number,
+        x2: number,
+        y2: number,
+        r2: number,
+        g2: number,
+        b2: number,
+        a2: number
+    ): void;
     public drawGradientLine(x1: number, y1: number, color1: Color, x2: number, y2: number, color2: Color): void;
     public pushTransform(): void;
     public popTransform(): void;
@@ -1297,31 +1366,31 @@ Implementation instructions:
 - Browser pointer buttons must be translated to Slick's mouse order: browser left `0` -> Slick `0`, browser right `2` -> Slick `1`, and browser middle `1` -> Slick `2`.
 - `ANY_CONTROLLER` must be `-1`.
 - Preserve original LWJGL numeric key values. The constants used by the source games must be:
-  - `KEY_ESCAPE = 0x01`
-  - `KEY_2 = 0x03`
-  - `KEY_4 = 0x05`
-  - `KEY_6 = 0x07`
-  - `KEY_8 = 0x09`
-  - `KEY_W = 0x11`
-  - `KEY_Y = 0x15`
-  - `KEY_I = 0x17`
-  - `KEY_P = 0x19`
-  - `KEY_ENTER = 0x1C`
-  - `KEY_A = 0x1E`
-  - `KEY_S = 0x1F`
-  - `KEY_D = 0x20`
-  - `KEY_F = 0x21`
-  - `KEY_J = 0x24`
-  - `KEY_K = 0x25`
-  - `KEY_L = 0x26`
-  - `KEY_Z = 0x2C`
-  - `KEY_X = 0x2D`
-  - `KEY_SPACE = 0x39`
-  - `KEY_F12 = 0x58`
-  - `KEY_UP = 0xC8`
-  - `KEY_LEFT = 0xCB`
-  - `KEY_RIGHT = 0xCD`
-  - `KEY_DOWN = 0xD0`
+    - `KEY_ESCAPE = 0x01`
+    - `KEY_2 = 0x03`
+    - `KEY_4 = 0x05`
+    - `KEY_6 = 0x07`
+    - `KEY_8 = 0x09`
+    - `KEY_W = 0x11`
+    - `KEY_Y = 0x15`
+    - `KEY_I = 0x17`
+    - `KEY_P = 0x19`
+    - `KEY_ENTER = 0x1C`
+    - `KEY_A = 0x1E`
+    - `KEY_S = 0x1F`
+    - `KEY_D = 0x20`
+    - `KEY_F = 0x21`
+    - `KEY_J = 0x24`
+    - `KEY_K = 0x25`
+    - `KEY_L = 0x26`
+    - `KEY_Z = 0x2C`
+    - `KEY_X = 0x2D`
+    - `KEY_SPACE = 0x39`
+    - `KEY_F12 = 0x58`
+    - `KEY_UP = 0xC8`
+    - `KEY_LEFT = 0xCB`
+    - `KEY_RIGHT = 0xCD`
+    - `KEY_DOWN = 0xD0`
 - `isKeyDown` returns continuous held state.
 - `isKeyPressed` returns true once per physical press until cleared or consumed.
 - `clearKeyPressedRecord` clears all one-shot key pressed state.
@@ -1459,11 +1528,11 @@ Implementation instructions:
 - Required by the games: `constructor(def, Image.FILTER_NEAREST)` and `getSprite(name)`.
 - Browser contract: the `.def` bytes must already be available through `ResourceLoader.getResourceAsStream(def)` before construction. Use `ResourceLoader.loadResource(def)` plus `waitForAll()`, or `registerResource(def, bytes)`, from the host/game loader.
 - Parse Slick2D `.def` packed-sheet files using the copied Java parser shape:
-  - Normalize `\` to `/` in the `.def` path.
-  - Compute `basePath` from the directory of the `.def` file.
-  - The first line is the backing image filename, loaded as `basePath + firstLine`.
-  - Each section consumes a delimiter line, then `name`, `x`, `y`, `width`, `height`, `tilesx`, `tilesy`, then two ignored lines.
-  - Clamp `tilesx` and `tilesy` to at least `1`.
+    - Normalize `\` to `/` in the `.def` path.
+    - Compute `basePath` from the directory of the `.def` file.
+    - The first line is the backing image filename, loaded as `basePath + firstLine`.
+    - Each section consumes a delimiter line, then `name`, `x`, `y`, `width`, `height`, `tilesx`, `tilesy`, then two ignored lines.
+    - Clamp `tilesx` and `tilesy` to at least `1`.
 - Load the sheet image with the supplied filter and transparent color.
 - `getSprite` returns a subimage preserving the parent image filter and transparency.
 - Unknown sprite names must throw `Error` with message `Unknown sprite from packed sheet: ${name}`, matching the copied Java behavior.
@@ -1846,7 +1915,7 @@ export class ResourceLoader {
 Implementation instructions:
 
 - Keep the public Java method names for compatibility.
-- Back these calls with the modern resource manager from `docs/RESOURCE-MANAGEMENT-SYSTEM.md`.
+- Back these calls with the shared browser resource cache and preload barrier.
 - Browser code cannot synchronously fetch new network resources. These methods may only return already loaded resources.
 - `addResourceLocation(location)` appends a browser base location to the ordered search list. Use `""` for relative-to-current-page lookup, `/assets` for origin-root assets, `assets` for deployed-route-relative assets, and absolute URLs for CDN-style locations.
 - `removeAllResourceLocations()` clears the list completely, matching Java. No network lookup occurs until another location is added.
@@ -1935,7 +2004,12 @@ export class ImageIOImageData implements LoadableImageData {
     public loadImage(data: ArrayBuffer | Uint8Array): Uint8Array;
     public loadImage(data: ArrayBuffer | Uint8Array, flipped: boolean, transparent: number[] | null): Uint8Array;
     public loadImage(data: ArrayBuffer | Uint8Array, flipped: boolean, forceAlpha: boolean, transparent: number[] | null): Uint8Array;
-    public imageToByteBuffer(image: ImageBitmap | HTMLImageElement | OffscreenCanvas, flipped: boolean, forceAlpha: boolean, transparent: number[] | null): Uint8Array;
+    public imageToByteBuffer(
+        image: ImageBitmap | HTMLImageElement | OffscreenCanvas,
+        flipped: boolean,
+        forceAlpha: boolean,
+        transparent: number[] | null
+    ): Uint8Array;
     public getImageBufferData(): Uint8Array;
 }
 ```
@@ -2138,8 +2212,28 @@ export interface SGL {
     glLoadMatrix(buffer: Float32Array): void;
     glGenTextures(ids: Int32Array): void;
     glGetError(): void;
-    glTexImage2D(target: number, level: number, dstPixelFormat: number, width: number, height: number, border: number, srcPixelFormat: number, type: number, textureBuffer: Uint8Array): void;
-    glTexSubImage2D(target: number, level: number, pageX: number, pageY: number, width: number, height: number, format: number, type: number, scratchByteBuffer: Uint8Array): void;
+    glTexImage2D(
+        target: number,
+        level: number,
+        dstPixelFormat: number,
+        width: number,
+        height: number,
+        border: number,
+        srcPixelFormat: number,
+        type: number,
+        textureBuffer: Uint8Array
+    ): void;
+    glTexSubImage2D(
+        target: number,
+        level: number,
+        pageX: number,
+        pageY: number,
+        width: number,
+        height: number,
+        format: number,
+        type: number,
+        scratchByteBuffer: Uint8Array
+    ): void;
     canTextureMirrorClamp(): boolean;
     canSecondaryColor(): boolean;
     glSecondaryColor3ubEXT(b: number, c: number, d: number): void;
@@ -2638,17 +2732,17 @@ Implementation instructions:
 
 - Java counterpart: project button-mapping objects that expose public key and controller fields.
 - Defaults must be:
-  - `keyUp = Input.KEY_UP`
-  - `keyDown = Input.KEY_DOWN`
-  - `keyLeft = Input.KEY_LEFT`
-  - `keyRight = Input.KEY_RIGHT`
-  - `keyGrenade = Input.KEY_X`
-  - `keyGun = Input.KEY_Z`
-  - `controller = false`
-  - `controllerIndex = 0`
-  - `controllerGrenade = 0`
-  - `controllerGun = 1`
-  - `gunKeyMapped = false`
+    - `keyUp = Input.KEY_UP`
+    - `keyDown = Input.KEY_DOWN`
+    - `keyLeft = Input.KEY_LEFT`
+    - `keyRight = Input.KEY_RIGHT`
+    - `keyGrenade = Input.KEY_X`
+    - `keyGun = Input.KEY_Z`
+    - `controller = false`
+    - `controllerIndex = 0`
+    - `controllerGrenade = 0`
+    - `controllerGun = 1`
+    - `gunKeyMapped = false`
 - Keep the field names public and mutable.
 - Game ports may still pass a structural object with the same fields to `HumanInput`.
 - `HumanInput.isFire()` reads the grenade mapping. `HumanInput.isShoot()` reads the gun mapping. Do not add title-specific action names to this class.
@@ -2699,14 +2793,14 @@ Implementation instructions:
 
 - Java counterpart: project `HumanInput` helper classes.
 - `constructor(gc)` uses the observed four-way keyboard defaults:
-  - up: `KEY_UP`, `KEY_W`, `KEY_I`, `KEY_8`
-  - down: `KEY_DOWN`, `KEY_S`, `KEY_K`, `KEY_2`
-  - left: `KEY_LEFT`, `KEY_A`, `KEY_J`, `KEY_4`
-  - right: `KEY_RIGHT`, `KEY_D`, `KEY_L`, `KEY_6`
-  - enter: `KEY_ENTER`
-  - space: `KEY_SPACE`
-  - escape: `KEY_ESCAPE`
-  - pause: `KEY_P`
+    - up: `KEY_UP`, `KEY_W`, `KEY_I`, `KEY_8`
+    - down: `KEY_DOWN`, `KEY_S`, `KEY_K`, `KEY_2`
+    - left: `KEY_LEFT`, `KEY_A`, `KEY_J`, `KEY_4`
+    - right: `KEY_RIGHT`, `KEY_D`, `KEY_L`, `KEY_6`
+    - enter: `KEY_ENTER`
+    - space: `KEY_SPACE`
+    - escape: `KEY_ESCAPE`
+    - pause: `KEY_P`
 - `constructor(mapping, gc)` uses the mapping object's direction fields, action fields, and controller fields.
 - Stored controller button mappings must be zero-based. The observed key-binding mode receives one-based `controllerButtonPressed(controllerIndex, buttonIndex)` callbacks, decrements `buttonIndex`, stores the decremented value, then `HumanInput.snap()` passes that value to `Input.isButtonPressed`.
 - When `mapping.gunKeyMapped` is false, `isShoot` must use the observed fallback keys: `KEY_Z`, `KEY_Y`, `KEY_W`, and `KEY_K`.
@@ -2744,10 +2838,10 @@ Implementation instructions:
 - Java counterpart: recorded/demo input helper that implements `IInput` over a byte array.
 - `reset` sets the byte index to `0`.
 - Direction bits in the current byte must be:
-  - up: `data[index] & 1`
-  - down: `data[index] & 2`
-  - left: `data[index] & 4`
-  - right: `data[index] & 8`
+    - up: `data[index] & 1`
+    - down: `data[index] & 2`
+    - left: `data[index] & 4`
+    - right: `data[index] & 8`
 - If `index >= data.length`, every direction returns `false`.
 - `isEnter` delegates to `Input.isKeyPressed(Input.KEY_ENTER)` so a human can interrupt or advance demo playback.
 - `isFire`, `isShoot`, `isSpace`, `isF12`, `isEscape`, and `isPause` return `false` unless a port supplies extra recorded bits.
@@ -2948,7 +3042,17 @@ export class SpriteDrawing {
     public static drawRotatedScaled(image: Image, x: number, y: number, angle: number, scale: number): void;
     public static drawRotatedScaled(image: Image, x: number, y: number, angle: number, scaleX: number, scaleY: number): void;
     public static drawRotatedScaled(image: Image, x: number, y: number, centerX: number, centerY: number, angle: number, scaleX: number, scaleY: number): void;
-    public static drawRotatedScaled(image: Image, x: number, y: number, centerX: number, centerY: number, angle: number, scaleX: number, scaleY: number, alpha: number): void;
+    public static drawRotatedScaled(
+        image: Image,
+        x: number,
+        y: number,
+        centerX: number,
+        centerY: number,
+        angle: number,
+        scaleX: number,
+        scaleY: number,
+        alpha: number
+    ): void;
     public static drawCentered(image: Image): void;
     public static drawCentered(image: Image, x: number, y: number): void;
     public static drawCentered(image: Image, x: number, y: number, scale: number): void;
@@ -3107,7 +3211,7 @@ IFadeListener.fadeCompleted()                   game-local callback invoked when
 IMenuListener.selectionChanged(index)           game-local menu callback when selected index changes
 IMenuListener.optionSelected(index)             game-local menu callback when an option is chosen
 Main.resetNextFrameTime()                       Sys.getTime(), or reset fixed-step loop timing
-while(nextFrameTime <= Sys.getTime()) update    fixed-step game loop adapter from GAME-LOOP.md
+while(nextFrameTime <= Sys.getTime()) update    Slick-compatible fixed-step loop adapter
 Display.sync(targetFPS)                         AppGameContainer RAF pacing plus Display.sync(targetFPS) recording
 GameContainer.getBuildVersion()                 parse ResourceLoader bytes for version/build, else return -1
 GameContainer.enableSharedContext()             record shared WebGL resource owner before Display.create(...)

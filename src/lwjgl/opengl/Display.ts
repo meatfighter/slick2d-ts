@@ -91,8 +91,7 @@ export class Display {
     }
 
     /** Java LWJGL counterpart: Display.update(). */
-    public static update(): void {
-    }
+    public static update(): void {}
 
     /** Java LWJGL counterpart: Display.sync(int). */
     public static sync(frameRate: number): void {
@@ -128,8 +127,7 @@ export class Display {
     }
 
     /** Java LWJGL counterpart: Display.setIcon(ByteBuffer[]). */
-    public static setIcon(_icons: unknown[]): void {
-    }
+    public static setIcon(_icons: unknown[]): void {}
 
     /** Java LWJGL counterpart: Display.setResizable(boolean). */
     public static setResizable(resizable: boolean): void {
@@ -183,14 +181,15 @@ export class Display {
         Display.fullscreen = fullscreen;
         const result = Display.activeContainer?.setFullscreen(fullscreen);
         if (result instanceof Promise) {
-            const operation = result.then(() => {
-                Display.fullscreen = Display.activeContainer?.isFullscreen() ?? fullscreen;
-            }).catch((error) => {
-                Display.fullscreen = previousFullscreen;
-                throw error;
-            });
-            void operation.catch(() => {
-            });
+            const operation = result
+                .then(() => {
+                    Display.fullscreen = Display.activeContainer?.isFullscreen() ?? fullscreen;
+                })
+                .catch((error) => {
+                    Display.fullscreen = previousFullscreen;
+                    throw error;
+                });
+            void operation.catch(() => {});
             return operation;
         }
         Display.fullscreen = Display.activeContainer?.isFullscreen() ?? fullscreen;

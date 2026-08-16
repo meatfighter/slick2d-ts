@@ -458,7 +458,18 @@ export class Graphics {
     public drawImage(image: Image, x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number): void;
     /** Java Slick2D counterpart: Graphics.drawImage(Image, float, float, float, float, float, float, float, float, Color). */
     public drawImage(image: Image, x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number, color: Color): void;
-    public drawImage(image: Image, x: number, y: number, a?: number | Color, b?: number, c?: number, d?: number, e?: number | Color, f?: number | Color, g?: Color): void {
+    public drawImage(
+        image: Image,
+        x: number,
+        y: number,
+        a?: number | Color,
+        b?: number,
+        c?: number,
+        d?: number,
+        e?: number | Color,
+        f?: number | Color,
+        g?: Color
+    ): void {
         const renderer = this.beginRenderTarget();
         try {
             if (arguments.length === 3) {
@@ -467,11 +478,35 @@ export class Graphics {
                 image.draw(x, y, a);
             } else if (arguments.length === 7 && typeof a === "number" && typeof b === "number" && typeof c === "number" && typeof d === "number") {
                 image.draw(x, y, a, b, c, d);
-            } else if (arguments.length === 8 && typeof a === "number" && typeof b === "number" && typeof c === "number" && typeof d === "number" && e instanceof Color) {
+            } else if (
+                arguments.length === 8 &&
+                typeof a === "number" &&
+                typeof b === "number" &&
+                typeof c === "number" &&
+                typeof d === "number" &&
+                e instanceof Color
+            ) {
                 image.draw(x, y, x + image.getWidth(), y + image.getHeight(), a, b, c, d, e);
-            } else if (arguments.length === 9 && typeof a === "number" && typeof b === "number" && typeof c === "number" && typeof d === "number" && typeof e === "number" && typeof f === "number") {
+            } else if (
+                arguments.length === 9 &&
+                typeof a === "number" &&
+                typeof b === "number" &&
+                typeof c === "number" &&
+                typeof d === "number" &&
+                typeof e === "number" &&
+                typeof f === "number"
+            ) {
                 image.draw(x, y, a, b, c, d, e, f);
-            } else if (arguments.length === 10 && typeof a === "number" && typeof b === "number" && typeof c === "number" && typeof d === "number" && typeof e === "number" && typeof f === "number" && g instanceof Color) {
+            } else if (
+                arguments.length === 10 &&
+                typeof a === "number" &&
+                typeof b === "number" &&
+                typeof c === "number" &&
+                typeof d === "number" &&
+                typeof e === "number" &&
+                typeof f === "number" &&
+                g instanceof Color
+            ) {
                 image.draw(x, y, a, b, c, d, e, f, g);
             } else {
                 throw new SlickException("Invalid Graphics.drawImage overload");
@@ -527,10 +562,36 @@ export class Graphics {
     }
 
     /** Java Slick2D counterpart: Graphics.drawGradientLine(...). */
-    public drawGradientLine(x1: number, y1: number, r1: number, g1: number, b1: number, a1: number, x2: number, y2: number, r2: number, g2: number, b2: number, a2: number): void;
+    public drawGradientLine(
+        x1: number,
+        y1: number,
+        r1: number,
+        g1: number,
+        b1: number,
+        a1: number,
+        x2: number,
+        y2: number,
+        r2: number,
+        g2: number,
+        b2: number,
+        a2: number
+    ): void;
     /** Java Slick2D counterpart: Graphics.drawGradientLine(float, float, Color, float, float, Color). */
     public drawGradientLine(x1: number, y1: number, color1: Color, x2: number, y2: number, color2: Color): void;
-    public drawGradientLine(x1: number, y1: number, a: number | Color, b: number, c: number | Color, d: number | Color, e?: number, f?: number, g?: number, h?: number, i?: number, j?: number): void {
+    public drawGradientLine(
+        x1: number,
+        y1: number,
+        a: number | Color,
+        b: number,
+        c: number | Color,
+        d: number | Color,
+        e?: number,
+        f?: number,
+        g?: number,
+        h?: number,
+        i?: number,
+        j?: number
+    ): void {
         let color1: Color;
         let x2: number;
         let y2: number;
@@ -540,7 +601,16 @@ export class Graphics {
             x2 = b;
             y2 = c;
             color2 = d;
-        } else if (typeof a === "number" && typeof c === "number" && e !== undefined && f !== undefined && g !== undefined && h !== undefined && i !== undefined && j !== undefined) {
+        } else if (
+            typeof a === "number" &&
+            typeof c === "number" &&
+            e !== undefined &&
+            f !== undefined &&
+            g !== undefined &&
+            h !== undefined &&
+            i !== undefined &&
+            j !== undefined
+        ) {
             color1 = new Color(a, b, c, Number(d));
             x2 = e;
             y2 = f;
@@ -567,8 +637,7 @@ export class Graphics {
     }
 
     /** Java Slick2D counterpart: Graphics.destroy(). */
-    public destroy(): void {
-    }
+    public destroy(): void {}
 
     /** Browser parity helper: updates logical dimensions. */
     public setDimensions(width: number, height: number): void {
@@ -596,11 +665,8 @@ export class Graphics {
         const points: Array<[number, number]> = [];
         for (let a = Math.trunc(start); a < Math.trunc(normalizedEnd + step); a += step) {
             const angle = a > normalizedEnd ? normalizedEnd : a;
-            const radians = angle * Math.PI / 180;
-            points.push([
-                cx + FastTrig.cos(radians) * width / 2,
-                cy + FastTrig.sin(radians) * height / 2
-            ]);
+            const radians = (angle * Math.PI) / 180;
+            points.push([cx + (FastTrig.cos(radians) * width) / 2, cy + (FastTrig.sin(radians) * height) / 2]);
         }
         return points;
     }

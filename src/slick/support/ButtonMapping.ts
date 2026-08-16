@@ -19,6 +19,5 @@ export class ButtonMapping {
     public controllerGun = 1;
 
     /** Java counterpart: ButtonMapping(). */
-    public constructor() {
-    }
+    public constructor() {}
 }

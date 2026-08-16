@@ -1,11 +1,11 @@
-const MULTIPLIER = 0x5DEECE66Dn;
+const MULTIPLIER = 0x5deece66dn;
 const MASK = (1n << 48n) - 1n;
-const MULTIPLIER_0 = 0xE66D;
-const MULTIPLIER_1 = 0xDEEC;
+const MULTIPLIER_0 = 0xe66d;
+const MULTIPLIER_1 = 0xdeec;
 const MULTIPLIER_2 = 0x0005;
-const ADDEND = 0x000B;
+const ADDEND = 0x000b;
 const LIMB = 0x10000;
-const LIMB_MASK = 0xFFFF;
+const LIMB_MASK = 0xffff;
 const FLOAT_DIVISOR = 0x1000000;
 
 /**
@@ -28,9 +28,9 @@ export class JavaRandom {
     /** Java counterpart: Random.setSeed(long). */
     public setSeed(seed: number | bigint): void {
         const scrambled = (BigInt(seed) ^ MULTIPLIER) & MASK;
-        this.seed0 = Number(scrambled & 0xFFFFn);
-        this.seed1 = Number((scrambled >> 16n) & 0xFFFFn);
-        this.seed2 = Number((scrambled >> 32n) & 0xFFFFn);
+        this.seed0 = Number(scrambled & 0xffffn);
+        this.seed1 = Number((scrambled >> 16n) & 0xffffn);
+        this.seed2 = Number((scrambled >> 32n) & 0xffffn);
     }
 
     public nextInt(): number;
@@ -70,13 +70,8 @@ export class JavaRandom {
 
     private next(bits: number): number {
         const product0 = this.seed0 * MULTIPLIER_0 + ADDEND;
-        const product1 = Math.floor(product0 / LIMB)
-            + this.seed0 * MULTIPLIER_1
-            + this.seed1 * MULTIPLIER_0;
-        const product2 = Math.floor(product1 / LIMB)
-            + this.seed0 * MULTIPLIER_2
-            + this.seed1 * MULTIPLIER_1
-            + this.seed2 * MULTIPLIER_0;
+        const product1 = Math.floor(product0 / LIMB) + this.seed0 * MULTIPLIER_1 + this.seed1 * MULTIPLIER_0;
+        const product2 = Math.floor(product1 / LIMB) + this.seed0 * MULTIPLIER_2 + this.seed1 * MULTIPLIER_1 + this.seed2 * MULTIPLIER_0;
         this.seed0 = product0 & LIMB_MASK;
         this.seed1 = product1 & LIMB_MASK;
         this.seed2 = product2 & LIMB_MASK;
@@ -94,7 +89,7 @@ export class JavaRandom {
                 if (bits <= 16) {
                     return this.seed2 >>> (16 - bits);
                 }
-                return Math.floor((this.seed2 * LIMB + this.seed1) / (2 ** (32 - bits)));
+                return Math.floor((this.seed2 * LIMB + this.seed1) / 2 ** (32 - bits));
         }
     }
 

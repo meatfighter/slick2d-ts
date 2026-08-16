@@ -12,14 +12,11 @@ class Fake2DContext {
         this.textBaseline = "";
     }
 
-    clearRect() {
-    }
+    clearRect() {}
 
-    drawImage() {
-    }
+    drawImage() {}
 
-    fillText() {
-    }
+    fillText() {}
 
     getImageData(_x, _y, width, height) {
         return { data: new Uint8ClampedArray(width * height * 4) };
@@ -29,8 +26,7 @@ class Fake2DContext {
         return { width: text.length * 8 };
     }
 
-    putImageData() {
-    }
+    putImageData() {}
 }
 
 class FakeCanvas {
@@ -48,10 +44,10 @@ class FakeBatchGL {
     constructor() {
         this.ARRAY_BUFFER = 0x8892;
         this.COLOR_BUFFER_BIT = 0x4000;
-        this.FRAMEBUFFER = 0x8D40;
-        this.SCISSOR_TEST = 0x0C11;
-        this.STREAM_DRAW = 0x88E0;
-        this.TEXTURE_2D = 0x0DE1;
+        this.FRAMEBUFFER = 0x8d40;
+        this.SCISSOR_TEST = 0x0c11;
+        this.STREAM_DRAW = 0x88e0;
+        this.TEXTURE_2D = 0x0de1;
         this.FLOAT = 0x1406;
         this.TRIANGLES = 0x0004;
         this.drawArraysCalls = [];
@@ -59,17 +55,13 @@ class FakeBatchGL {
         this.uniform1fCalls = [];
     }
 
-    bindBuffer() {
-    }
+    bindBuffer() {}
 
-    bindFramebuffer() {
-    }
+    bindFramebuffer() {}
 
-    bindTexture() {
-    }
+    bindTexture() {}
 
-    bufferData() {
-    }
+    bufferData() {}
 
     bufferSubData(_target, _offset, _data, sourceOffset, length) {
         this.bufferSubDataCalls.push({ sourceOffset, length });
@@ -79,47 +71,38 @@ class FakeBatchGL {
         this.drawArraysCalls.push({ mode, first, count });
     }
 
-    clear() {
-    }
+    clear() {}
 
-    clearColor() {
-    }
+    clearColor() {}
 
-    disable() {
-    }
+    disable() {}
 
-    enableVertexAttribArray() {
-    }
+    enableVertexAttribArray() {}
 
-    uniform4f() {
-    }
+    uniform4f() {}
 
     uniform1f(location, value) {
         this.uniform1fCalls.push({ location, value });
     }
 
-    useProgram() {
-    }
+    useProgram() {}
 
-    scissor() {
-    }
+    scissor() {}
 
-    vertexAttribPointer() {
-    }
+    vertexAttribPointer() {}
 
-    viewport() {
-    }
+    viewport() {}
 }
 
 class FakeCopyGL {
     constructor() {
         this.COLOR_BUFFER_BIT = 0x4000;
-        this.DRAW_FRAMEBUFFER = 0x8CA9;
-        this.FRAMEBUFFER = 0x8D40;
-        this.FRAMEBUFFER_BINDING = 0x8CA6;
+        this.DRAW_FRAMEBUFFER = 0x8ca9;
+        this.FRAMEBUFFER = 0x8d40;
+        this.FRAMEBUFFER_BINDING = 0x8ca6;
         this.NEAREST = 0x2600;
-        this.READ_FRAMEBUFFER = 0x8CA8;
-        this.TEXTURE_2D = 0x0DE1;
+        this.READ_FRAMEBUFFER = 0x8ca8;
+        this.TEXTURE_2D = 0x0de1;
         this.bindFramebufferCalls = [];
         this.blitFramebufferCalls = [];
         this.copyTexSubImage2DCalls = [];
@@ -129,8 +112,7 @@ class FakeCopyGL {
         this.bindFramebufferCalls.push([target, framebuffer]);
     }
 
-    bindTexture() {
-    }
+    bindTexture() {}
 
     blitFramebuffer(...args) {
         this.blitFramebufferCalls.push(args);
@@ -144,14 +126,13 @@ class FakeCopyGL {
         return parameter === this.FRAMEBUFFER_BINDING ? "source-framebuffer" : null;
     }
 
-    viewport() {
-    }
+    viewport() {}
 }
 
 function fakeProgram() {
     return {
         program: {},
-        getAttribLocation: (_gl, name) => ({ a_position: 0, a_texCoord: 1, a_color: 2 }[name] ?? 0),
+        getAttribLocation: (_gl, name) => ({ a_position: 0, a_texCoord: 1, a_color: 2 })[name] ?? 0,
         getUniformLocation: (_gl, name) => name
     };
 }
@@ -528,17 +509,21 @@ test("WebGLRenderer flash image draws use flash shader mode and split normal bat
     renderer.drawImageFlash(image, 8, 0, 8, 8, 0, 0, 8, 8, Color.red, transform);
 
     assert.equal(gl.drawArraysCalls.length, 1);
-    assert.deepEqual(gl.uniform1fCalls.filter((call) => call.location === "u_flash"), [
-        { location: "u_flash", value: 0 }
-    ]);
+    assert.deepEqual(
+        gl.uniform1fCalls.filter((call) => call.location === "u_flash"),
+        [{ location: "u_flash", value: 0 }]
+    );
 
     renderer.flush();
 
     assert.equal(gl.drawArraysCalls.length, 2);
-    assert.deepEqual(gl.uniform1fCalls.filter((call) => call.location === "u_flash"), [
-        { location: "u_flash", value: 0 },
-        { location: "u_flash", value: 1 }
-    ]);
+    assert.deepEqual(
+        gl.uniform1fCalls.filter((call) => call.location === "u_flash"),
+        [
+            { location: "u_flash", value: 0 },
+            { location: "u_flash", value: 1 }
+        ]
+    );
 });
 
 test("WebGLRenderer color inversion drives solid and texture shader uniforms", () => {
@@ -598,10 +583,13 @@ test("WebGLRenderer splits texture batches on color inversion changes", () => {
     assert.equal(gl.drawArraysCalls.length, 2);
     assert.deepEqual(gl.drawArraysCalls[0], { mode: gl.TRIANGLES, first: 0, count: 6 });
     assert.deepEqual(gl.drawArraysCalls[1], { mode: gl.TRIANGLES, first: 0, count: 6 });
-    assert.deepEqual(gl.uniform1fCalls.filter((call) => call.location === "u_invert"), [
-        { location: "u_invert", value: 1 },
-        { location: "u_invert", value: 0 }
-    ]);
+    assert.deepEqual(
+        gl.uniform1fCalls.filter((call) => call.location === "u_invert"),
+        [
+            { location: "u_invert", value: 1 },
+            { location: "u_invert", value: 0 }
+        ]
+    );
 });
 
 test("WebGLRenderer color inversion resets at safe renderer lifecycle boundaries", () => {
@@ -622,9 +610,10 @@ test("WebGLRenderer color inversion resets at safe renderer lifecycle boundaries
     renderer.beginFrame(64, 64, Color.black);
 
     assert.equal(renderer.isColorInverted(), false);
-    assert.deepEqual(gl.uniform1fCalls.filter((call) => call.location === "u_invert"), [
-        { location: "u_invert", value: 1 }
-    ]);
+    assert.deepEqual(
+        gl.uniform1fCalls.filter((call) => call.location === "u_invert"),
+        [{ location: "u_invert", value: 1 }]
+    );
 
     renderer.setColorInverted(true);
     renderer.initDisplay(64, 64);

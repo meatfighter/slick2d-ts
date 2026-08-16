@@ -7,5 +7,4 @@ import type { MouseListener } from "./MouseListener.js";
  *
  * Composition interface for keyboard, mouse, and controller callbacks.
  */
-export interface InputListener extends MouseListener, KeyListener, ControllerListener {
-}
+export interface InputListener extends MouseListener, KeyListener, ControllerListener {}

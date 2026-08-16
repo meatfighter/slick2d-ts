@@ -102,14 +102,15 @@ export class HumanInput implements IInput {
             down: this.input.isKeyDown(mapping.keyDown) || (mapping.controller && this.input.isControllerDown(mapping.controllerIndex)),
             left: this.input.isKeyDown(mapping.keyLeft) || (mapping.controller && this.input.isControllerLeft(mapping.controllerIndex)),
             right: this.input.isKeyDown(mapping.keyRight) || (mapping.controller && this.input.isControllerRight(mapping.controllerIndex)),
-            fire: this.input.isKeyDown(mapping.keyGrenade) || (mapping.controller && this.input.isButtonPressed(mapping.controllerGrenade, mapping.controllerIndex)),
+            fire:
+                this.input.isKeyDown(mapping.keyGrenade) ||
+                (mapping.controller && this.input.isButtonPressed(mapping.controllerGrenade, mapping.controllerIndex)),
             shoot: this.isMappedShootPressed(mapping)
         };
     }
 
     /** Java counterpart: HumanInput.reset(). */
-    public reset(): void {
-    }
+    public reset(): void {}
 
     /** Java counterpart: HumanInput.isFire(). */
     public isFire(): boolean {
@@ -198,9 +199,7 @@ export class HumanInput implements IInput {
     }
 
     private isMappedShootPressed(mapping: ButtonMapping): boolean {
-        const keyDown = mapping.gunKeyMapped
-            ? this.input.isKeyDown(mapping.keyGun)
-            : this.anyDefaultShootKeyDown();
+        const keyDown = mapping.gunKeyMapped ? this.input.isKeyDown(mapping.keyGun) : this.anyDefaultShootKeyDown();
         return keyDown || (mapping.controller && this.input.isButtonPressed(mapping.controllerGun, mapping.controllerIndex));
     }
 

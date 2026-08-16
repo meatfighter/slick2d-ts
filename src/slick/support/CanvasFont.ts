@@ -16,7 +16,7 @@ function createCanvas(width: number, height: number): CanvasSource | null {
     if (typeof OffscreenCanvas !== "undefined") {
         return new OffscreenCanvas(width, height);
     }
-    const doc = typeof document === "undefined" ? null : document as Partial<Document>;
+    const doc = typeof document === "undefined" ? null : (document as Partial<Document>);
     if (typeof doc?.createElement === "function") {
         const canvas = doc.createElement("canvas");
         canvas.width = width;

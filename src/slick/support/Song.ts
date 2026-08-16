@@ -83,16 +83,11 @@ export class Song {
                 if (!(this.intro2 === null || this.playedIntro2)) {
                     this.playedIntro2 = true;
                     this.intro2.play();
-                } else if ((this.intro2 === null || !this.intro2.playing())
-                    && this.loop !== null
-                    && !this.loop.playing()) {
+                } else if ((this.intro2 === null || !this.intro2.playing()) && this.loop !== null && !this.loop.playing()) {
                     this.loop.loop();
                 }
             }
-            if (this.loop === null
-                && this.intro !== null
-                && !this.intro.playing()
-                && (this.intro2 === null || !this.intro2.playing())) {
+            if (this.loop === null && this.intro !== null && !this.intro.playing() && (this.intro2 === null || !this.intro2.playing())) {
                 this.stop();
             }
         }

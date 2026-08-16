@@ -32,8 +32,7 @@ export abstract class BasicGame implements Game, InputListener {
     }
 
     /** Java Slick2D counterpart: BasicGame.setInput(Input). */
-    public setInput(_input: Input): void {
-    }
+    public setInput(_input: Input): void {}
 
     /** Java Slick2D counterpart: BasicGame.init(GameContainer). */
     public abstract init(container: GameContainer): void | Promise<void>;
@@ -50,82 +49,62 @@ export abstract class BasicGame implements Game, InputListener {
     }
 
     /** Java Slick2D counterpart: ControlledInputReciever.inputStarted(). */
-    public inputStarted(): void {
-    }
+    public inputStarted(): void {}
 
     /** Java Slick2D counterpart: ControlledInputReciever.inputEnded(). */
-    public inputEnded(): void {
-    }
+    public inputEnded(): void {}
 
     /** Java Slick2D counterpart: KeyListener.keyPressed(int, char). */
-    public keyPressed(_key: number, _c: string): void {
-    }
+    public keyPressed(_key: number, _c: string): void {}
 
     /** Java Slick2D counterpart: KeyListener.keyReleased(int, char). */
-    public keyReleased(_key: number, _c: string): void {
-    }
+    public keyReleased(_key: number, _c: string): void {}
 
     /** Java Slick2D counterpart: MouseListener.mouseWheelMoved(int). */
-    public mouseWheelMoved(_change: number): void {
-    }
+    public mouseWheelMoved(_change: number): void {}
 
     /** Java Slick2D counterpart: MouseListener.mouseClicked(int, int, int, int). */
-    public mouseClicked(_button: number, _x: number, _y: number, _clickCount: number): void {
-    }
+    public mouseClicked(_button: number, _x: number, _y: number, _clickCount: number): void {}
 
     /** Java Slick2D counterpart: MouseListener.mousePressed(int, int, int). */
-    public mousePressed(_button: number, _x: number, _y: number): void {
-    }
+    public mousePressed(_button: number, _x: number, _y: number): void {}
 
     /** Java Slick2D counterpart: MouseListener.mouseReleased(int, int, int). */
-    public mouseReleased(_button: number, _x: number, _y: number): void {
-    }
+    public mouseReleased(_button: number, _x: number, _y: number): void {}
 
     /** Java Slick2D counterpart: MouseListener.mouseMoved(int, int, int, int). */
-    public mouseMoved(_oldx: number, _oldy: number, _newx: number, _newy: number): void {
-    }
+    public mouseMoved(_oldx: number, _oldy: number, _newx: number, _newy: number): void {}
 
     /** Java Slick2D counterpart: MouseListener.mouseDragged(int, int, int, int). */
-    public mouseDragged(_oldx: number, _oldy: number, _newx: number, _newy: number): void {
-    }
+    public mouseDragged(_oldx: number, _oldy: number, _newx: number, _newy: number): void {}
 
     /** Java Slick2D counterpart: ControllerListener.controllerLeftPressed(int). */
-    public controllerLeftPressed(_controller: number): void {
-    }
+    public controllerLeftPressed(_controller: number): void {}
 
     /** Java Slick2D counterpart: ControllerListener.controllerLeftReleased(int). */
-    public controllerLeftReleased(_controller: number): void {
-    }
+    public controllerLeftReleased(_controller: number): void {}
 
     /** Java Slick2D counterpart: ControllerListener.controllerRightPressed(int). */
-    public controllerRightPressed(_controller: number): void {
-    }
+    public controllerRightPressed(_controller: number): void {}
 
     /** Java Slick2D counterpart: ControllerListener.controllerRightReleased(int). */
-    public controllerRightReleased(_controller: number): void {
-    }
+    public controllerRightReleased(_controller: number): void {}
 
     /** Java Slick2D counterpart: ControllerListener.controllerUpPressed(int). */
-    public controllerUpPressed(_controller: number): void {
-    }
+    public controllerUpPressed(_controller: number): void {}
 
     /** Java Slick2D counterpart: ControllerListener.controllerUpReleased(int). */
-    public controllerUpReleased(_controller: number): void {
-    }
+    public controllerUpReleased(_controller: number): void {}
 
     /** Java Slick2D counterpart: ControllerListener.controllerDownPressed(int). */
-    public controllerDownPressed(_controller: number): void {
-    }
+    public controllerDownPressed(_controller: number): void {}
 
     /** Java Slick2D counterpart: ControllerListener.controllerDownReleased(int). */
-    public controllerDownReleased(_controller: number): void {
-    }
+    public controllerDownReleased(_controller: number): void {}
 
     /** Java Slick2D counterpart: ControllerListener.controllerButtonPressed(int, int). */
-    public controllerButtonPressed(_controller: number, _button: number): void {
-    }
+    public controllerButtonPressed(_controller: number, _button: number): void {}
 
     /** Java Slick2D counterpart: ControllerListener.controllerButtonReleased(int, int). */
-    public controllerButtonReleased(_controller: number, _button: number): void {
-    }
+    public controllerButtonReleased(_controller: number, _button: number): void {}
 }

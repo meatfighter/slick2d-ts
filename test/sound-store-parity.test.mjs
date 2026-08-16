@@ -24,8 +24,7 @@ class FakeAudioSource {
         FakeAudioSource.created.push(this);
     }
 
-    connect() {
-    }
+    connect() {}
 
     start(when = 0, offset = 0) {
         this.startCalls.push({ when, offset });
@@ -50,8 +49,7 @@ class FakePanner {
         this.rolloffFactor = 0;
     }
 
-    connect() {
-    }
+    connect() {}
 }
 
 class FakeAudioContext {
@@ -409,10 +407,7 @@ test("audio decode failures remain visible after tracked preload promises settle
     FakeAudioContext.decodeError = new Error("decode failed");
     AL.create();
 
-    await assert.rejects(
-        SoundStore.get().preloadAudioBuffer("tone.ogg"),
-        /Failed to load audio: tone\.ogg/
-    );
+    await assert.rejects(SoundStore.get().preloadAudioBuffer("tone.ogg"), /Failed to load audio: tone\.ogg/);
 
     assert.equal(ResourceLoader.hasPending(), false);
     assert.equal(ResourceLoader.hasFailed(), true);
@@ -432,8 +427,14 @@ test("preloadAudioBuffers deduplicates refs, reports progress, and reuses decode
     });
 
     assert.equal(FakeAudioContext.decodeCalls, 2);
-    assert.deepEqual(progress.map((entry) => entry.loaded), [1, 2]);
-    assert.deepEqual(progress.map((entry) => entry.total), [2, 2]);
+    assert.deepEqual(
+        progress.map((entry) => entry.loaded),
+        [1, 2]
+    );
+    assert.deepEqual(
+        progress.map((entry) => entry.total),
+        [2, 2]
+    );
     assert.deepEqual(progress.map((entry) => entry.ref).sort(), ["bell.ogg", "tone.ogg"]);
 
     await store.preloadAudioBuffers(["bell.ogg", "tone.ogg"]);
@@ -446,10 +447,7 @@ test("preloadAudioBuffers rejects and records tracked decode failures", async ()
     registerTone();
     FakeAudioContext.decodeError = new Error("decode failed");
 
-    await assert.rejects(
-        SoundStore.get().preloadAudioBuffers(["tone.ogg", "tone.ogg"]),
-        /Failed to load audio: tone\.ogg/
-    );
+    await assert.rejects(SoundStore.get().preloadAudioBuffers(["tone.ogg", "tone.ogg"]), /Failed to load audio: tone\.ogg/);
 
     assert.equal(ResourceLoader.hasPending(), false);
     assert.equal(ResourceLoader.hasFailed(), true);

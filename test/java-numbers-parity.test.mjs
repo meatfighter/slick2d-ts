@@ -4,9 +4,9 @@ import { JavaNumbers } from "../dist/index.js";
 
 test("JavaNumbers preserves int wrapping and floating cast boundaries", () => {
     assert.equal(JavaNumbers.toInt(0x100000000), 0);
-    assert.equal(JavaNumbers.toInt(0xFFFFFFFF), -1);
+    assert.equal(JavaNumbers.toInt(0xffffffff), -1);
     assert.equal(JavaNumbers.toInt(0x80000000), -2147483648);
-    assert.equal(JavaNumbers.toInt(0x7FFFFFFF), 2147483647);
+    assert.equal(JavaNumbers.toInt(0x7fffffff), 2147483647);
     assert.equal(JavaNumbers.toInt(0x100000000n), 0);
 
     assert.equal(JavaNumbers.castDoubleToInt(Number.NaN), 0);

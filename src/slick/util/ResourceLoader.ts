@@ -186,20 +186,20 @@ export class ResourceLoader {
         if (total === 0) {
             return results;
         }
-        await Promise.all(uniqueRefs.map(async (ref) => {
-            try {
-                const bytes = await ResourceLoader.loadResource(ref);
-                const copy = bytes.slice(0);
-                results.set(ref, copy);
-                loaded++;
-                bytesLoaded += copy.byteLength;
-                onProgress?.({ ref, loaded, total, bytesLoaded });
-            } catch (error) {
-                throw error instanceof SlickException
-                    ? error
-                    : new SlickException(`Failed to preload resource ${ref}`, error);
-            }
-        }));
+        await Promise.all(
+            uniqueRefs.map(async (ref) => {
+                try {
+                    const bytes = await ResourceLoader.loadResource(ref);
+                    const copy = bytes.slice(0);
+                    results.set(ref, copy);
+                    loaded++;
+                    bytesLoaded += copy.byteLength;
+                    onProgress?.({ ref, loaded, total, bytesLoaded });
+                } catch (error) {
+                    throw error instanceof SlickException ? error : new SlickException(`Failed to preload resource ${ref}`, error);
+                }
+            })
+        );
         return results;
     }
 
@@ -211,19 +211,19 @@ export class ResourceLoader {
      */
     public static track<T>(promise: Promise<T>, refOrLabel: string = "tracked resource"): Promise<T> {
         const generation = ResourceLoader.trackingGeneration;
-        const tracked = promise.catch((error) => {
-            const reported = error instanceof SlickException
-                ? error
-                : new SlickException(`Failed to prepare resource ${refOrLabel}`, error);
-            if (generation === ResourceLoader.trackingGeneration) {
-                ResourceLoader.trackedErrors.push({ label: refOrLabel, error: reported });
-            }
-            throw reported;
-        }).finally(() => {
-            if (generation === ResourceLoader.trackingGeneration) {
-                ResourceLoader.trackedPromises.delete(tracked);
-            }
-        });
+        const tracked = promise
+            .catch((error) => {
+                const reported = error instanceof SlickException ? error : new SlickException(`Failed to prepare resource ${refOrLabel}`, error);
+                if (generation === ResourceLoader.trackingGeneration) {
+                    ResourceLoader.trackedErrors.push({ label: refOrLabel, error: reported });
+                }
+                throw reported;
+            })
+            .finally(() => {
+                if (generation === ResourceLoader.trackingGeneration) {
+                    ResourceLoader.trackedPromises.delete(tracked);
+                }
+            });
         ResourceLoader.trackedPromises.add(tracked);
         void tracked.catch(() => undefined);
         return tracked;

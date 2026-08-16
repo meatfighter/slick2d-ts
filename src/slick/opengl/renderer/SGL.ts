@@ -150,9 +150,29 @@ export interface SGL {
     /** Java Slick2D counterpart: SGL.glGetError(). */
     glGetError(): void;
     /** Java Slick2D counterpart: SGL.glTexImage2D(...). */
-    glTexImage2D(target: number, level: number, dstPixelFormat: number, width: number, height: number, border: number, srcPixelFormat: number, type: number, textureBuffer: Uint8Array): void;
+    glTexImage2D(
+        target: number,
+        level: number,
+        dstPixelFormat: number,
+        width: number,
+        height: number,
+        border: number,
+        srcPixelFormat: number,
+        type: number,
+        textureBuffer: Uint8Array
+    ): void;
     /** Java Slick2D counterpart: SGL.glTexSubImage2D(...). */
-    glTexSubImage2D(target: number, level: number, pageX: number, pageY: number, width: number, height: number, format: number, type: number, scratchByteBuffer: Uint8Array): void;
+    glTexSubImage2D(
+        target: number,
+        level: number,
+        pageX: number,
+        pageY: number,
+        width: number,
+        height: number,
+        format: number,
+        type: number,
+        scratchByteBuffer: Uint8Array
+    ): void;
     /** Java Slick2D counterpart: SGL.canTextureMirrorClamp(). */
     canTextureMirrorClamp(): boolean;
     /** Java Slick2D counterpart: SGL.canSecondaryColor(). */

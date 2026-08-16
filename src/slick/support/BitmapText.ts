@@ -30,7 +30,10 @@ export class BitmapText {
     private readonly cullMaxY: number | null;
 
     /** Java counterpart: bitmap text helper constructor. */
-    public constructor(private readonly glyphs: Array<Image | null>, options: BitmapTextOptions) {
+    public constructor(
+        private readonly glyphs: Array<Image | null>,
+        options: BitmapTextOptions
+    ) {
         this.glyphWidth = options.glyphWidth;
         this.glyphHeight = options.glyphHeight;
         this.xAdvance = options.xAdvance;

@@ -85,11 +85,11 @@ export class Color {
         } else if (g === undefined || b === undefined) {
             const rOrPacked = rOrPackedOrColor;
             const packed = rOrPacked >>> 0;
-            const alphaByte = (packed >>> 24) & 0xFF;
+            const alphaByte = (packed >>> 24) & 0xff;
             this.a = (alphaByte === 0 ? 255 : alphaByte) / 255;
-            this.r = ((packed >>> 16) & 0xFF) / 255;
-            this.g = ((packed >>> 8) & 0xFF) / 255;
-            this.b = (packed & 0xFF) / 255;
+            this.r = ((packed >>> 16) & 0xff) / 255;
+            this.g = ((packed >>> 8) & 0xff) / 255;
+            this.b = (packed & 0xff) / 255;
         } else {
             this.r = normalizeChannel(rOrPackedOrColor);
             this.g = normalizeChannel(g);
@@ -166,12 +166,7 @@ export class Color {
      */
     public brighter(scale = 0.2): Color {
         const factor = scale + 1;
-        return new Color(
-            this.r * factor,
-            this.g * factor,
-            this.b * factor,
-            this.a
-        );
+        return new Color(this.r * factor, this.g * factor, this.b * factor, this.a);
     }
 
     /**
@@ -208,11 +203,7 @@ export class Color {
      * Compares RGBA components exactly.
      */
     public equals(other: unknown): boolean {
-        return other instanceof Color
-            && other.r === this.r
-            && other.g === this.g
-            && other.b === this.b
-            && other.a === this.a;
+        return other instanceof Color && other.r === this.r && other.g === this.g && other.b === this.b && other.a === this.a;
     }
 
     /**
@@ -284,10 +275,10 @@ export class Color {
      * Returns 0xAARRGGBB using rounded 8-bit channels.
      */
     public toInt(): number {
-        const a = Math.round(clamp01(this.a) * 255) & 0xFF;
-        const r = Math.round(clamp01(this.r) * 255) & 0xFF;
-        const g = Math.round(clamp01(this.g) * 255) & 0xFF;
-        const b = Math.round(clamp01(this.b) * 255) & 0xFF;
+        const a = Math.round(clamp01(this.a) * 255) & 0xff;
+        const r = Math.round(clamp01(this.r) * 255) & 0xff;
+        const g = Math.round(clamp01(this.g) * 255) & 0xff;
+        const b = Math.round(clamp01(this.b) * 255) & 0xff;
         return ((a << 24) | (r << 16) | (g << 8) | b) >>> 0;
     }
 

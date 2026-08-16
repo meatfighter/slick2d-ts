@@ -203,8 +203,7 @@ export class SoundStore {
     }
 
     /** Java Slick2D counterpart: SoundStore.poll(int). */
-    public poll(_delta: number): void {
-    }
+    public poll(_delta: number): void {}
 
     /** Java Slick2D counterpart: SoundStore.isMusicPlaying(). */
     public isMusicPlaying(): boolean {
@@ -369,7 +368,10 @@ export class SoundStore {
 
     /** Browser parity helper: queues audio decode work into ResourceLoader.waitForAll(). */
     public preloadAudioBuffer(ref: string): Promise<void> {
-        const tracked = ResourceLoader.track(this.loadAudioBuffer(ref).then(() => undefined), ref);
+        const tracked = ResourceLoader.track(
+            this.loadAudioBuffer(ref).then(() => undefined),
+            ref
+        );
         void tracked.catch(() => undefined);
         return tracked;
     }
@@ -382,17 +384,17 @@ export class SoundStore {
         if (total === 0) {
             return;
         }
-        await Promise.all(uniqueRefs.map(async (ref) => {
-            try {
-                await this.preloadAudioBuffer(ref);
-                loaded++;
-                onProgress?.({ ref, loaded, total });
-            } catch (error) {
-                throw error instanceof SlickException
-                    ? error
-                    : new SlickException(`Failed to preload audio: ${ref}`, error);
-            }
-        }));
+        await Promise.all(
+            uniqueRefs.map(async (ref) => {
+                try {
+                    await this.preloadAudioBuffer(ref);
+                    loaded++;
+                    onProgress?.({ ref, loaded, total });
+                } catch (error) {
+                    throw error instanceof SlickException ? error : new SlickException(`Failed to preload audio: ${ref}`, error);
+                }
+            })
+        );
     }
 
     /** Browser parity helper: plays a decoded sound effect through Web Audio. */
@@ -439,39 +441,41 @@ export class SoundStore {
         };
         this.activeHandles.add(handle);
         this.soundSources[sourceId] = handle;
-        void this.loadAudioBuffer(ref).then((buffer) => {
-            if (stopped) {
-                return;
-            }
-            void context.resume().catch(() => undefined);
-            const gain = context.createGain();
-            source = context.createBufferSource();
-            source.buffer = buffer;
-            source.loop = loop;
-            source.playbackRate.value = Math.max(0.25, Math.min(4, pitch));
-            sourceGain = Math.max(0, volume * this.soundVolume);
-            gain.gain.value = sourceGain;
-            source.connect(gain);
-            this.connectPositionedSource(context, gain, bus, position);
-            source.onended = () => {
-                if (requestedStop || source?.loop) {
+        void this.loadAudioBuffer(ref)
+            .then((buffer) => {
+                if (stopped) {
                     return;
                 }
-                source = null;
+                void context.resume().catch(() => undefined);
+                const gain = context.createGain();
+                source = context.createBufferSource();
+                source.buffer = buffer;
+                source.loop = loop;
+                source.playbackRate.value = Math.max(0.25, Math.min(4, pitch));
+                sourceGain = Math.max(0, volume * this.soundVolume);
+                gain.gain.value = sourceGain;
+                source.connect(gain);
+                this.connectPositionedSource(context, gain, bus, position);
+                source.onended = () => {
+                    if (requestedStop || source?.loop) {
+                        return;
+                    }
+                    source = null;
+                    playing = false;
+                    this.activeHandles.delete(handle);
+                    this.musicHandles.delete(handle);
+                    this.releaseSoundSource(sourceId, handle);
+                    onEnded?.();
+                };
+                source.start();
+            })
+            .catch((error) => {
                 playing = false;
                 this.activeHandles.delete(handle);
                 this.musicHandles.delete(handle);
                 this.releaseSoundSource(sourceId, handle);
-                onEnded?.();
-            };
-            source.start();
-        }).catch((error) => {
-            playing = false;
-            this.activeHandles.delete(handle);
-            this.musicHandles.delete(handle);
-            this.releaseSoundSource(sourceId, handle);
-            Log.error(`Failed to play sound: ${ref}`, error);
-        });
+                Log.error(`Failed to play sound: ${ref}`, error);
+            });
         return handle;
     }
 

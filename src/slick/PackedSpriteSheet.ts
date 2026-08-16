@@ -43,9 +43,7 @@ export class PackedSpriteSheet {
         }
         const lines = new TextDecoder().decode(textBytes).split(/\r?\n/g);
         const imageRef = `${dirname(def)}${(lines.shift() ?? "").trim()}`;
-        this.fullImage = transparent
-            ? new Image(imageRef, false, filter, transparent)
-            : new Image(imageRef, false, filter);
+        this.fullImage = transparent ? new Image(imageRef, false, filter, transparent) : new Image(imageRef, false, filter);
         this.parse(lines);
     }
 
@@ -97,13 +95,15 @@ export class PackedSpriteSheet {
             };
             i += 2;
             i++;
-            if (section.name.length === 0
-                || !Number.isFinite(section.x)
-                || !Number.isFinite(section.y)
-                || !Number.isFinite(section.width)
-                || !Number.isFinite(section.height)
-                || !Number.isFinite(section.tilesx)
-                || !Number.isFinite(section.tilesy)) {
+            if (
+                section.name.length === 0 ||
+                !Number.isFinite(section.x) ||
+                !Number.isFinite(section.y) ||
+                !Number.isFinite(section.width) ||
+                !Number.isFinite(section.height) ||
+                !Number.isFinite(section.tilesx) ||
+                !Number.isFinite(section.tilesy)
+            ) {
                 throw new SlickException("Failed to process definitions file - invalid format?");
             }
             this.sections.set(section.name, section);

@@ -1,5 +1,5 @@
 const INT_MIN = -0x80000000;
-const INT_MAX = 0x7FFFFFFF;
+const INT_MAX = 0x7fffffff;
 const LONG_MIN = -(1n << 63n);
 const LONG_MAX = (1n << 63n) - 1n;
 
@@ -82,7 +82,7 @@ export class JavaNumbers {
 
     /** Java counterpart: byte value masked with 0xFF. */
     public static toUnsignedByte(value: number | bigint): number {
-        return JavaNumbers.toByte(value) & 0xFF;
+        return JavaNumbers.toByte(value) & 0xff;
     }
 
     /** Java counterpart: narrowing an integral value to short. */
@@ -98,7 +98,7 @@ export class JavaNumbers {
         if (typeof value === "bigint") {
             return Number(BigInt.asUintN(16, value));
         }
-        return Math.trunc(value) & 0xFFFF;
+        return Math.trunc(value) & 0xffff;
     }
 
     /** Java counterpart: narrowing a number to float. */

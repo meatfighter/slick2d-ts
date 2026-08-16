@@ -93,11 +93,13 @@ export class Mouse {
     }
 
     private static isTransparentNativeCursor(cursor: Cursor | null): boolean {
-        return !!cursor
-            && cursor.images instanceof Uint8Array
-            && cursor.width > 0
-            && cursor.height > 0
-            && Mouse.isTransparentCursor(cursor.images, cursor.width, cursor.height);
+        return (
+            !!cursor &&
+            cursor.images instanceof Uint8Array &&
+            cursor.width > 0 &&
+            cursor.height > 0 &&
+            Mouse.isTransparentCursor(cursor.images, cursor.width, cursor.height)
+        );
     }
 
     private static isTransparentCursor(data: Uint8Array, width: number, height: number): boolean {

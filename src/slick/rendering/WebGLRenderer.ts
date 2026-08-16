@@ -94,7 +94,7 @@ const TEXTURE_BATCH_VERTEX_CAPACITY = 2048 * 6;
  * Internal WebGL2 renderer implementing Slick2D's 2D OpenGL-style state.
  */
 export class WebGLRenderer implements RenderBackend, SGL {
-    public readonly GL_TEXTURE_2D = 0x0DE1;
+    public readonly GL_TEXTURE_2D = 0x0de1;
     public readonly GL_RGBA = 0x1908;
     public readonly GL_RGB = 0x1907;
     public readonly GL_UNSIGNED_BYTE = 0x1401;
@@ -102,10 +102,10 @@ export class WebGLRenderer implements RenderBackend, SGL {
     public readonly GL_NEAREST = 0x2600;
     public readonly GL_TEXTURE_MIN_FILTER = 0x2801;
     public readonly GL_TEXTURE_MAG_FILTER = 0x2800;
-    public readonly GL_POINT_SMOOTH = 0x0B10;
-    public readonly GL_POLYGON_SMOOTH = 0x0B41;
-    public readonly GL_LINE_SMOOTH = 0x0B20;
-    public readonly GL_SCISSOR_TEST = 0x0C11;
+    public readonly GL_POINT_SMOOTH = 0x0b10;
+    public readonly GL_POLYGON_SMOOTH = 0x0b41;
+    public readonly GL_LINE_SMOOTH = 0x0b20;
+    public readonly GL_SCISSOR_TEST = 0x0c11;
     public readonly GL_MODULATE = 0x2100;
     public readonly GL_TEXTURE_ENV = 0x2300;
     public readonly GL_TEXTURE_ENV_MODE = 0x2200;
@@ -118,32 +118,32 @@ export class WebGLRenderer implements RenderBackend, SGL {
     public readonly GL_DST_ALPHA = 0x0304;
     public readonly GL_ONE_MINUS_SRC_ALPHA = 0x0303;
     public readonly GL_COMPILE = 0x1300;
-    public readonly GL_MAX_TEXTURE_SIZE = 0x0D33;
+    public readonly GL_MAX_TEXTURE_SIZE = 0x0d33;
     public readonly GL_COLOR_BUFFER_BIT = 0x4000;
     public readonly GL_DEPTH_BUFFER_BIT = 0x0100;
-    public readonly GL_BLEND = 0x0BE2;
-    public readonly GL_COLOR_CLEAR_VALUE = 0x0C22;
-    public readonly GL_LINE_WIDTH = 0x0B21;
+    public readonly GL_BLEND = 0x0be2;
+    public readonly GL_COLOR_CLEAR_VALUE = 0x0c22;
+    public readonly GL_LINE_WIDTH = 0x0b21;
     public readonly GL_CLIP_PLANE0 = 0x3000;
     public readonly GL_CLIP_PLANE1 = 0x3001;
     public readonly GL_CLIP_PLANE2 = 0x3002;
     public readonly GL_CLIP_PLANE3 = 0x3003;
     public readonly GL_COMPILE_AND_EXECUTE = 0x1301;
     public readonly GL_RGBA8 = 0x8058;
-    public readonly GL_RGBA16 = 0x805B;
-    public readonly GL_BGRA = 0x80E1;
+    public readonly GL_RGBA16 = 0x805b;
+    public readonly GL_BGRA = 0x80e1;
     public readonly GL_MIRROR_CLAMP_TO_EDGE_EXT = 0x8743;
     public readonly GL_TEXTURE_WRAP_S = 0x2802;
     public readonly GL_TEXTURE_WRAP_T = 0x2803;
     public readonly GL_CLAMP = 0x2900;
     public readonly GL_COLOR_SUM_EXT = 0x8458;
     public readonly GL_ALWAYS = 0x0207;
-    public readonly GL_DEPTH_TEST = 0x0B71;
+    public readonly GL_DEPTH_TEST = 0x0b71;
     public readonly GL_NOTEQUAL = 0x0205;
     public readonly GL_EQUAL = 0x0202;
     public readonly GL_SRC_COLOR = 0x0300;
     public readonly GL_ONE_MINUS_SRC_COLOR = 0x0301;
-    public readonly GL_MODELVIEW_MATRIX = 0x0BA6;
+    public readonly GL_MODELVIEW_MATRIX = 0x0ba6;
 
     private canvas: HTMLCanvasElement | null = null;
     private gl: WebGL2RenderingContext | null = null;
@@ -193,7 +193,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private worldClip: ScreenClip | null = null;
 
     /** Initializes the renderer with a canvas and WebGL2 context attributes. */
-    public initialize(canvas: HTMLCanvasElement, options: RenderBackendOptions, logicalWidth: number = canvas.width, logicalHeight: number = canvas.height, backingWidth: number = canvas.width, backingHeight: number = canvas.height): void {
+    public initialize(
+        canvas: HTMLCanvasElement,
+        options: RenderBackendOptions,
+        logicalWidth: number = canvas.width,
+        logicalHeight: number = canvas.height,
+        backingWidth: number = canvas.width,
+        backingHeight: number = canvas.height
+    ): void {
         this.colorInverted = false;
         this.textureBatchInverted = false;
         this.canvas = canvas;
@@ -215,7 +222,13 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     /** Begins a frame by binding the default target, setting viewport, and clearing. */
-    public beginFrame(width: number, height: number, background: Color, backingWidth: number = this.defaultBackingWidth, backingHeight: number = this.defaultBackingHeight): void {
+    public beginFrame(
+        width: number,
+        height: number,
+        background: Color,
+        backingWidth: number = this.defaultBackingWidth,
+        backingHeight: number = this.defaultBackingHeight
+    ): void {
         this.flushTextureBatch();
         this.colorInverted = false;
         this.textureBatchInverted = false;
@@ -265,19 +278,72 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     /** Draws a textured quad. */
-    public drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors: boolean = true, useCurrentColorForNullTint: boolean = false): void {
-        this.drawImageWarped(image, x, y, x + width, y, x + width, y + height, x, y + height, srcX, srcY, srcWidth, srcHeight, alpha, tint, transform, useCornerColors, useCurrentColorForNullTint);
+    public drawImage(
+        image: Image,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        srcX: number,
+        srcY: number,
+        srcWidth: number,
+        srcHeight: number,
+        alpha: number,
+        tint: Color | null,
+        transform: Matrix3,
+        useCornerColors: boolean = true,
+        useCurrentColorForNullTint: boolean = false
+    ): void {
+        this.drawImageWarped(
+            image,
+            x,
+            y,
+            x + width,
+            y,
+            x + width,
+            y + height,
+            x,
+            y + height,
+            srcX,
+            srcY,
+            srcWidth,
+            srcHeight,
+            alpha,
+            tint,
+            transform,
+            useCornerColors,
+            useCurrentColorForNullTint
+        );
     }
 
     /** Draws a textured quad as a Slick flash/silhouette. */
-    public drawImageFlash(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, tint: Color, transform: Matrix3): void {
+    public drawImageFlash(
+        image: Image,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        srcX: number,
+        srcY: number,
+        srcWidth: number,
+        srcHeight: number,
+        tint: Color,
+        transform: Matrix3
+    ): void {
         this.drawTexturedWarped(
             image,
-            x, y,
-            x + width, y,
-            x + width, y + height,
-            x, y + height,
-            srcX, srcY, srcWidth, srcHeight,
+            x,
+            y,
+            x + width,
+            y,
+            x + width,
+            y + height,
+            x,
+            y + height,
+            srcX,
+            srcY,
+            srcWidth,
+            srcHeight,
             1,
             tint,
             transform,
@@ -288,14 +354,40 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     /** Draws a textured quad with arbitrary corner positions. */
-    public drawImageWarped(image: Image, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors: boolean = true, useCurrentColorForNullTint: boolean = false): void {
+    public drawImageWarped(
+        image: Image,
+        x1: number,
+        y1: number,
+        x2: number,
+        y2: number,
+        x3: number,
+        y3: number,
+        x4: number,
+        y4: number,
+        srcX: number,
+        srcY: number,
+        srcWidth: number,
+        srcHeight: number,
+        alpha: number,
+        tint: Color | null,
+        transform: Matrix3,
+        useCornerColors: boolean = true,
+        useCurrentColorForNullTint: boolean = false
+    ): void {
         this.drawTexturedWarped(
             image,
-            x1, y1,
-            x2, y2,
-            x3, y3,
-            x4, y4,
-            srcX, srcY, srcWidth, srcHeight,
+            x1,
+            y1,
+            x2,
+            y2,
+            x3,
+            y3,
+            x4,
+            y4,
+            srcX,
+            srcY,
+            srcWidth,
+            srcHeight,
             alpha,
             tint,
             transform,
@@ -305,7 +397,27 @@ export class WebGLRenderer implements RenderBackend, SGL {
         );
     }
 
-    private drawTexturedWarped(image: Image, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, flash: boolean, useCornerColors: boolean, useCurrentColorForNullTint: boolean): void {
+    private drawTexturedWarped(
+        image: Image,
+        x1: number,
+        y1: number,
+        x2: number,
+        y2: number,
+        x3: number,
+        y3: number,
+        x4: number,
+        y4: number,
+        srcX: number,
+        srcY: number,
+        srcWidth: number,
+        srcHeight: number,
+        alpha: number,
+        tint: Color | null,
+        transform: Matrix3,
+        flash: boolean,
+        useCornerColors: boolean,
+        useCurrentColorForNullTint: boolean
+    ): void {
         const gl = this.gl;
         if (!gl || !this.textureProgram || !this.buffer) {
             return;
@@ -320,10 +432,12 @@ export class WebGLRenderer implements RenderBackend, SGL {
         const v1 = srcY / resource.height;
         const u2 = (srcX + srcWidth) / resource.width;
         const v2 = (srcY + srcHeight) / resource.height;
-        const cornerColors = useCornerColors ? (image as unknown as ImageInternals).__getCornerColors?.() ?? null : null;
-        const color = tint ?? (useCurrentColorForNullTint && !cornerColors
-            ? this.setScratchColor(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3])
-            : WHITE_COLOR);
+        const cornerColors = useCornerColors ? ((image as unknown as ImageInternals).__getCornerColors?.() ?? null) : null;
+        const color =
+            tint ??
+            (useCurrentColorForNullTint && !cornerColors
+                ? this.setScratchColor(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3])
+                : WHITE_COLOR);
         const topLeft = cornerColors?.[0] ?? WHITE_COLOR;
         const topRight = cornerColors?.[1] ?? WHITE_COLOR;
         const bottomRight = cornerColors?.[2] ?? WHITE_COLOR;
@@ -331,9 +445,22 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.queueTextureQuad(
             texture,
             matrix,
-            x1, y1, x2, y2, x3, y3, x4, y4,
-            u1, v1, u2, v2,
-            topLeft, topRight, bottomRight, bottomLeft,
+            x1,
+            y1,
+            x2,
+            y2,
+            x3,
+            y3,
+            x4,
+            y4,
+            u1,
+            v1,
+            u2,
+            v2,
+            topLeft,
+            topRight,
+            bottomRight,
+            bottomLeft,
             color,
             color.a * alpha * this.globalAlphaScale,
             flash
@@ -345,14 +472,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
     public fillRect(x: number, y: number, width: number, height: number, color: Color, transform: Matrix3 = IDENTITY_TRANSFORM): void {
         const x2 = x + width;
         const y2 = y + height;
-        this.drawSolidQuad(
-            x, y,
-            x2, y,
-            x2, y2,
-            x, y2,
-            color,
-            transform
-        );
+        this.drawSolidQuad(x, y, x2, y, x2, y2, x, y2, color, transform);
     }
 
     /** Draws a line as a thin quad so browser line-width limits do not matter. */
@@ -360,25 +480,27 @@ export class WebGLRenderer implements RenderBackend, SGL {
         const dx = x2 - x1;
         const dy = y2 - y1;
         const len = Math.hypot(dx, dy) || 1;
-        const px = -dy / len * width / 2;
-        const py = dx / len * width / 2;
-        this.drawSolidQuad(
-            x1 + px, y1 + py,
-            x2 + px, y2 + py,
-            x2 - px, y2 - py,
-            x1 - px, y1 - py,
-            color,
-            transform
-        );
+        const px = ((-dy / len) * width) / 2;
+        const py = ((dx / len) * width) / 2;
+        this.drawSolidQuad(x1 + px, y1 + py, x2 + px, y2 + py, x2 - px, y2 - py, x1 - px, y1 - py, color, transform);
     }
 
     /** Draws a line with endpoint color interpolation. */
-    public drawGradientLine(x1: number, y1: number, color1: Color, x2: number, y2: number, color2: Color, width: number, transform: Matrix3 = IDENTITY_TRANSFORM): void {
+    public drawGradientLine(
+        x1: number,
+        y1: number,
+        color1: Color,
+        x2: number,
+        y2: number,
+        color2: Color,
+        width: number,
+        transform: Matrix3 = IDENTITY_TRANSFORM
+    ): void {
         const dx = x2 - x1;
         const dy = y2 - y1;
         const len = Math.hypot(dx, dy) || 1;
-        const px = -dy / len * width / 2;
-        const py = dx / len * width / 2;
+        const px = ((-dy / len) * width) / 2;
+        const py = ((dx / len) * width) / 2;
         const matrix = this.combinedMatrix(transform);
         const vertices = this.solidQuadVertices;
         this.writeSolidVertex(vertices, 0, matrix, x1 + px, y1 + py, color1);
@@ -423,25 +545,13 @@ export class WebGLRenderer implements RenderBackend, SGL {
         const sourceX1 = Math.ceil((x + target.width) * this.backingScaleX);
         const sourceY0 = Math.floor((this.height - y - target.height) * this.backingScaleY);
         const sourceY1 = Math.ceil((this.height - y) * this.backingScaleY);
-        const sourceMatchesTargetSize = (sourceX1 - sourceX0) === target.width
-            && (sourceY1 - sourceY0) === target.height;
+        const sourceMatchesTargetSize = sourceX1 - sourceX0 === target.width && sourceY1 - sourceY0 === target.height;
         if (sourceMatchesTargetSize || typeof gl.blitFramebuffer !== "function") {
             gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, sourceX0, sourceY0, target.width, target.height);
         } else {
             gl.bindFramebuffer(gl.READ_FRAMEBUFFER, sourceFramebuffer);
             gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, target.framebuffer);
-            gl.blitFramebuffer(
-                sourceX0,
-                sourceY0,
-                sourceX1,
-                sourceY1,
-                0,
-                0,
-                target.width,
-                target.height,
-                gl.COLOR_BUFFER_BIT,
-                gl.NEAREST
-            );
+            gl.blitFramebuffer(sourceX0, sourceY0, sourceX1, sourceY1, 0, 0, target.width, target.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
             gl.bindFramebuffer(gl.FRAMEBUFFER, sourceFramebuffer);
         }
         target.textureResource.applyFilter(gl);
@@ -540,7 +650,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Applies a clockwise degree rotation around a point to the current matrix. */
     public rotate(x: number, y: number, angle: number): void {
-        const radians = angle * Math.PI / 180;
+        const radians = (angle * Math.PI) / 180;
         const c = Math.cos(radians);
         const s = Math.sin(radians);
         const tx = x - c * x + s * y;
@@ -583,9 +693,9 @@ export class WebGLRenderer implements RenderBackend, SGL {
         const source = new Uint8Array(sourceWidth * sourceHeight * 4);
         gl.readPixels(sourceX0, sourceY0, sourceWidth, sourceHeight, gl.RGBA, gl.UNSIGNED_BYTE, source);
         for (let row = 0; row < height; row++) {
-            const sourceRow = Math.min(sourceHeight - 1, Math.max(0, Math.floor((row + 0.5) * sourceHeight / height)));
+            const sourceRow = Math.min(sourceHeight - 1, Math.max(0, Math.floor(((row + 0.5) * sourceHeight) / height)));
             for (let column = 0; column < width; column++) {
-                const sourceColumn = Math.min(sourceWidth - 1, Math.max(0, Math.floor((column + 0.5) * sourceWidth / width)));
+                const sourceColumn = Math.min(sourceWidth - 1, Math.max(0, Math.floor(((column + 0.5) * sourceWidth) / width)));
                 const sourceOffset = (sourceRow * sourceWidth + sourceColumn) * 4;
                 const targetOffset = (row * width + column) * 4;
                 target[targetOffset] = source[sourceOffset];
@@ -626,14 +736,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
     /** Handles browser WebGL context restoration. */
     public handleContextRestored(): void {
         if (this.canvas) {
-            this.initialize(
-                this.canvas,
-                {},
-                this.defaultWidth,
-                this.defaultHeight,
-                this.defaultBackingWidth,
-                this.defaultBackingHeight
-            );
+            this.initialize(this.canvas, {}, this.defaultWidth, this.defaultHeight, this.defaultBackingWidth, this.defaultBackingHeight);
         }
     }
 
@@ -694,8 +797,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     /** Java Slick2D counterpart: SGL.glClipPlane(int, DoubleBuffer). */
-    public glClipPlane(_plane: number, _buffer: Float64Array): void {
-    }
+    public glClipPlane(_plane: number, _buffer: Float64Array): void {}
 
     /** Java Slick2D counterpart: SGL.glScissor(int, int, int, int). */
     public glScissor(x: number, y: number, width: number, height: number): void {
@@ -928,7 +1030,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (this.immediateType === this.GL_LINES) {
             const color = this.setScratchColor(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3]);
             for (let i = 0; i + 7 < this.immediateVertices.length; i += 8) {
-                this.drawLine(this.immediateVertices[i], this.immediateVertices[i + 1], this.immediateVertices[i + 4], this.immediateVertices[i + 5], color, this.lineWidth);
+                this.drawLine(
+                    this.immediateVertices[i],
+                    this.immediateVertices[i + 1],
+                    this.immediateVertices[i + 4],
+                    this.immediateVertices[i + 5],
+                    color,
+                    this.lineWidth
+                );
             }
         } else {
             const color = this.setScratchColor(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3]);
@@ -939,8 +1048,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     /** Java Slick2D counterpart: SGL.glTexEnvi(int, int, int). */
-    public glTexEnvi(_target: number, _mode: number, _value: number): void {
-    }
+    public glTexEnvi(_target: number, _mode: number, _value: number): void {}
 
     /** Java Slick2D counterpart: SGL.glPointSize(float). */
     public glPointSize(size: number): void {
@@ -1117,7 +1225,17 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     /** Java Slick2D counterpart: SGL.glTexImage2D(...). */
-    public glTexImage2D(target: number, level: number, dstPixelFormat: number, width: number, height: number, border: number, srcPixelFormat: number, type: number, textureBuffer: Uint8Array): void {
+    public glTexImage2D(
+        target: number,
+        level: number,
+        dstPixelFormat: number,
+        width: number,
+        height: number,
+        border: number,
+        srcPixelFormat: number,
+        type: number,
+        textureBuffer: Uint8Array
+    ): void {
         this.flushTextureBatch();
         this.gl?.texImage2D(target, level, dstPixelFormat, width, height, border, srcPixelFormat, type, textureBuffer);
         const info = this.currentTextureId === 0 ? null : this.textures.get(this.currentTextureId);
@@ -1129,7 +1247,17 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     /** Java Slick2D counterpart: SGL.glTexSubImage2D(...). */
-    public glTexSubImage2D(target: number, level: number, pageX: number, pageY: number, width: number, height: number, format: number, type: number, scratchByteBuffer: Uint8Array): void {
+    public glTexSubImage2D(
+        target: number,
+        level: number,
+        pageX: number,
+        pageY: number,
+        width: number,
+        height: number,
+        format: number,
+        type: number,
+        scratchByteBuffer: Uint8Array
+    ): void {
         this.flushTextureBatch();
         this.gl?.texSubImage2D(target, level, pageX, pageY, width, height, format, type, scratchByteBuffer);
     }
@@ -1145,8 +1273,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     /** Java Slick2D counterpart: SGL.glSecondaryColor3ubEXT(byte, byte, byte). */
-    public glSecondaryColor3ubEXT(_b: number, _c: number, _d: number): void {
-    }
+    public glSecondaryColor3ubEXT(_b: number, _c: number, _d: number): void {}
 
     /** Returns the underlying WebGL2 context for compatibility shims. */
     public getContext(): WebGL2RenderingContext | null {
@@ -1169,12 +1296,18 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private queueTextureQuad(
         texture: WebGLTexture,
         matrix: Matrix3,
-        x1: number, y1: number,
-        x2: number, y2: number,
-        x3: number, y3: number,
-        x4: number, y4: number,
-        u1: number, v1: number,
-        u2: number, v2: number,
+        x1: number,
+        y1: number,
+        x2: number,
+        y2: number,
+        x3: number,
+        y3: number,
+        x4: number,
+        y4: number,
+        u1: number,
+        v1: number,
+        u2: number,
+        v2: number,
         topLeft: Color,
         topRight: Color,
         bottomRight: Color,
@@ -1184,12 +1317,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
         flash: boolean
     ): void {
         if (
-            this.textureBatchTexture !== null
-            && (
-                this.textureBatchTexture !== texture
-                || this.textureBatchFlash !== flash
-                || this.textureBatchInverted !== this.colorInverted
-            )
+            this.textureBatchTexture !== null &&
+            (this.textureBatchTexture !== texture || this.textureBatchFlash !== flash || this.textureBatchInverted !== this.colorInverted)
         ) {
             this.flushTextureBatch();
         }
@@ -1275,7 +1404,18 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.submitSolidVertices(vertices, vertexCount);
     }
 
-    private drawSolidQuad(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, color: Color, transform: Matrix3): void {
+    private drawSolidQuad(
+        x1: number,
+        y1: number,
+        x2: number,
+        y2: number,
+        x3: number,
+        y3: number,
+        x4: number,
+        y4: number,
+        color: Color,
+        transform: Matrix3
+    ): void {
         const matrix = this.combinedMatrix(transform);
         const vertices = this.solidQuadVertices;
         this.writeSolidVertex(vertices, 0, matrix, x1, y1, color);
@@ -1337,10 +1477,21 @@ export class WebGLRenderer implements RenderBackend, SGL {
         return out;
     }
 
-    private writeTextureVertex(vertices: Float32Array, vertex: number, matrix: Matrix3, x: number, y: number, u: number, v: number, color: Color, tint: Color, alphaScale: number): void {
+    private writeTextureVertex(
+        vertices: Float32Array,
+        vertex: number,
+        matrix: Matrix3,
+        x: number,
+        y: number,
+        u: number,
+        v: number,
+        color: Color,
+        tint: Color,
+        alphaScale: number
+    ): void {
         const offset = vertex * TEXTURE_VERTEX_FLOATS;
-        vertices[offset] = (matrix[0] * x + matrix[1] * y + matrix[2]) / this.width * 2 - 1;
-        vertices[offset + 1] = 1 - (matrix[3] * x + matrix[4] * y + matrix[5]) / this.height * 2;
+        vertices[offset] = ((matrix[0] * x + matrix[1] * y + matrix[2]) / this.width) * 2 - 1;
+        vertices[offset + 1] = 1 - ((matrix[3] * x + matrix[4] * y + matrix[5]) / this.height) * 2;
         vertices[offset + 2] = u;
         vertices[offset + 3] = v;
         vertices[offset + 4] = color.r * tint.r;
@@ -1351,8 +1502,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     private writeSolidVertex(vertices: Float32Array, vertex: number, matrix: Matrix3, x: number, y: number, color: Color): void {
         const offset = vertex * SOLID_VERTEX_FLOATS;
-        vertices[offset] = (matrix[0] * x + matrix[1] * y + matrix[2]) / this.width * 2 - 1;
-        vertices[offset + 1] = 1 - (matrix[3] * x + matrix[4] * y + matrix[5]) / this.height * 2;
+        vertices[offset] = ((matrix[0] * x + matrix[1] * y + matrix[2]) / this.width) * 2 - 1;
+        vertices[offset + 1] = 1 - ((matrix[3] * x + matrix[4] * y + matrix[5]) / this.height) * 2;
         vertices[offset + 2] = color.r;
         vertices[offset + 3] = color.g;
         vertices[offset + 4] = color.b;
@@ -1399,12 +1550,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     private useDefaultDimensions(): void {
-        this.setActiveDimensions(
-            this.defaultWidth,
-            this.defaultHeight,
-            this.defaultBackingWidth,
-            this.defaultBackingHeight
-        );
+        this.setActiveDimensions(this.defaultWidth, this.defaultHeight, this.defaultBackingWidth, this.defaultBackingHeight);
     }
 
     private setActiveDimensions(width: number, height: number, backingWidth: number, backingHeight: number): void {

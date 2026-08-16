@@ -28,11 +28,12 @@ export class SpriteSheet extends Image {
     public constructor(image: Image, tw: number, th: number, spacing: number, margin: number);
     /** Java Slick2D counterpart: SpriteSheet constructors. */
     public constructor(refOrImage: string | Image, tw: number, th: number, spacingOrColor: number | Color = 0, marginOrSpacing: number = 0) {
-        const refTarget = typeof refOrImage === "string"
-            ? spacingOrColor instanceof Color
-                ? new Image(refOrImage, false, Image.FILTER_NEAREST, spacingOrColor)
-                : new Image(refOrImage, false, Image.FILTER_NEAREST)
-            : refOrImage;
+        const refTarget =
+            typeof refOrImage === "string"
+                ? spacingOrColor instanceof Color
+                    ? new Image(refOrImage, false, Image.FILTER_NEAREST, spacingOrColor)
+                    : new Image(refOrImage, false, Image.FILTER_NEAREST)
+                : refOrImage;
         super(refTarget);
         this.target = typeof refOrImage === "string" ? this : refTarget;
         this.tileWidth = tw;
@@ -139,9 +140,7 @@ export class SpriteSheet extends Image {
         if ((this.target.getHeight() - this.tileHeight) % denominatorY !== 0) {
             tilesDown++;
         }
-        this.subImages = Array.from({ length: tilesAcross }, (_unused, x) => (
-            Array.from({ length: tilesDown }, (_unused2, y) => this.createSprite(x, y))
-        ));
+        this.subImages = Array.from({ length: tilesAcross }, (_unused, x) => Array.from({ length: tilesDown }, (_unused2, y) => this.createSprite(x, y)));
     }
 
     private requireTiles(): Image[][] {

@@ -60,11 +60,14 @@ function installBrowserGlobals() {
             registered.add(listener);
             listeners.set(type, registered);
         },
-        createElement: (tagName) => tagName === "canvas" ? new FakeCanvas() : {
-            href: "",
-            rel: "",
-            style: {}
-        },
+        createElement: (tagName) =>
+            tagName === "canvas"
+                ? new FakeCanvas()
+                : {
+                      href: "",
+                      rel: "",
+                      style: {}
+                  },
         exitFullscreen() {
             this.exitFullscreenCalls += 1;
             this.fullscreenElement = null;
