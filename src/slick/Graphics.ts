@@ -44,6 +44,7 @@ export class Graphics {
     private height = 0;
     private screenClipRecord: ClipRect | null = null;
     private worldClipRecord: ClipRect | null = null;
+    private readonly pixelScratch = new Uint8Array(4);
     private readonly renderTarget: WebGLRenderTarget | null;
 
     public constructor();
@@ -166,6 +167,11 @@ export class Graphics {
     /** Java Slick2D counterpart: Graphics.getBackground(). */
     public getBackground(): Color {
         return this.background.copy();
+    }
+
+    /** Internal renderer helper: avoids copying the background during the frame loop. */
+    public __getBackgroundReference(): Color {
+        return this.background;
     }
 
     /** Java Slick2D counterpart: Graphics.clear(). */
@@ -493,7 +499,7 @@ export class Graphics {
 
     /** Java Slick2D counterpart: Graphics.getPixel(int, int). */
     public getPixel(x: number, y: number): Color {
-        const bytes = new Uint8Array(4);
+        const bytes = this.pixelScratch;
         this.getArea(x, y, 1, 1, bytes);
         return Color.fromInts(bytes[0], bytes[1], bytes[2], bytes[3]);
     }

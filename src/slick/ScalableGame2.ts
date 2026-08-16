@@ -76,20 +76,20 @@ export class ScalableGame2 extends ScalableGame {
 
     private applyInputTransform(container: GameContainer): void {
         container.getInput().setScale(this.normalWidth / this.targetWidth, this.normalHeight / this.targetHeight);
-        const { xoffset, yoffset } = this.calculateScalableGame2Offsets(container);
+        this.calculateScalableGame2Offsets(container);
         container.getInput().setOffset(
-            -xoffset / (this.targetWidth / this.normalWidth),
-            -yoffset / (this.targetHeight / this.normalHeight)
+            -this.xoffset / (this.targetWidth / this.normalWidth),
+            -this.yoffset / (this.targetHeight / this.normalHeight)
         );
     }
 
     /** Java Slick2D counterpart: ScalableGame.render(GameContainer, Graphics). */
     public override render(container: GameContainer, g: Graphics): void {
         this.container = container;
-        const { xoffset, yoffset } = this.calculateScalableGame2Offsets(container);
+        this.calculateScalableGame2Offsets(container);
         SlickCallable.enterSafeBlock();
-        g.setClip(xoffset, yoffset, this.targetWidth, this.targetHeight);
-        GL11.glTranslatef(xoffset, yoffset, 0);
+        g.setClip(this.xoffset, this.yoffset, this.targetWidth, this.targetHeight);
+        GL11.glTranslatef(this.xoffset, this.yoffset, 0);
         GL11.glScalef(this.targetWidth / this.normalWidth, this.targetHeight / this.normalHeight, 0);
         GL11.glPushMatrix();
         this.held.render(container, g);
@@ -99,7 +99,7 @@ export class ScalableGame2 extends ScalableGame {
         this.renderOverlay(container, g);
     }
 
-    private calculateScalableGame2Offsets(container: GameContainer): { xoffset: number; yoffset: number } {
+    private calculateScalableGame2Offsets(container: GameContainer): void {
         let xoffset = 0;
         let yoffset = 0;
         if (this.targetHeight < container.getHeight()) {
@@ -110,6 +110,5 @@ export class ScalableGame2 extends ScalableGame {
         }
         this.xoffset = xoffset;
         this.yoffset = yoffset;
-        return { xoffset, yoffset };
     }
 }

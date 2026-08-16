@@ -2,7 +2,7 @@
 
 Date: 2026-08-14
 
-Engine project changed: `C:\js-projects\slick2d-ts`
+Engine project changed: `slick2d-ts`
 
 ## Summary
 

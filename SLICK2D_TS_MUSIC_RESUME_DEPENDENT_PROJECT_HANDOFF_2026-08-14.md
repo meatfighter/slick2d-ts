@@ -17,7 +17,7 @@ The fix belongs in `slick2d-ts`, not in each game.
 Updated file:
 
 ```text
-C:\js-projects\slick2d-ts\src\slick\Music.ts
+src/slick/Music.ts
 ```
 
 Behavior after the fix:
@@ -31,7 +31,7 @@ Behavior after the fix:
 Tests were added in:
 
 ```text
-C:\js-projects\slick2d-ts\test\sound-store-parity.test.mjs
+test/sound-store-parity.test.mjs
 ```
 
 They verify:

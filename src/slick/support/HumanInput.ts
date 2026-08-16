@@ -34,6 +34,8 @@ type Snapshot = {
     shoot: boolean;
 };
 
+const DEFAULT_SHOOT_KEYS = [Input.KEY_Z, Input.KEY_Y, Input.KEY_W, Input.KEY_K] as const;
+
 function defaults(): Required<HumanInputBindings> {
     return {
         upKeys: [Input.KEY_UP, Input.KEY_W, Input.KEY_I, Input.KEY_8],
@@ -198,19 +200,43 @@ export class HumanInput implements IInput {
     private isMappedShootPressed(mapping: ButtonMapping): boolean {
         const keyDown = mapping.gunKeyMapped
             ? this.input.isKeyDown(mapping.keyGun)
-            : [Input.KEY_Z, Input.KEY_Y, Input.KEY_W, Input.KEY_K].some((key) => this.input.isKeyDown(key));
+            : this.anyDefaultShootKeyDown();
         return keyDown || (mapping.controller && this.input.isButtonPressed(mapping.controllerGun, mapping.controllerIndex));
     }
 
     private anyDown(keys: number[]): boolean {
-        return keys.some((key) => this.input.isKeyDown(key));
+        for (let i = 0; i < keys.length; i++) {
+            if (this.input.isKeyDown(keys[i])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private anyPressed(keys: number[]): boolean {
-        return keys.some((key) => this.input.isKeyPressed(key));
+        for (let i = 0; i < keys.length; i++) {
+            if (this.input.isKeyPressed(keys[i])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private anyControllerPressed(buttons: number[]): boolean {
-        return buttons.some((button) => this.input.isButtonPressed(button, this.bindings.controllerIndex));
+        for (let i = 0; i < buttons.length; i++) {
+            if (this.input.isButtonPressed(buttons[i], this.bindings.controllerIndex)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private anyDefaultShootKeyDown(): boolean {
+        for (let i = 0; i < DEFAULT_SHOOT_KEYS.length; i++) {
+            if (this.input.isKeyDown(DEFAULT_SHOOT_KEYS[i])) {
+                return true;
+            }
+        }
+        return false;
     }
 }

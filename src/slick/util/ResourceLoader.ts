@@ -235,9 +235,12 @@ export class ResourceLoader {
      * Returns the number of browser resource or decode operations still queued.
      */
     public static getPendingCount(): number {
-        const pendingFetches = Array.from(ResourceLoader.records.values())
-            .filter((record) => record.promise !== undefined && record.data === undefined && record.error === undefined)
-            .length;
+        let pendingFetches = 0;
+        for (const record of ResourceLoader.records.values()) {
+            if (record.promise !== undefined && record.data === undefined && record.error === undefined) {
+                pendingFetches++;
+            }
+        }
         return pendingFetches + ResourceLoader.trackedPromises.size;
     }
 
@@ -283,8 +286,15 @@ export class ResourceLoader {
      * Returns true when any fetch or tracked preparation task has failed.
      */
     public static hasFailed(): boolean {
-        return ResourceLoader.trackedErrors.length > 0
-            || Array.from(ResourceLoader.records.values()).some((record) => record.error !== undefined);
+        if (ResourceLoader.trackedErrors.length > 0) {
+            return true;
+        }
+        for (const record of ResourceLoader.records.values()) {
+            if (record.error !== undefined) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -296,10 +306,16 @@ export class ResourceLoader {
         if (ResourceLoader.trackedErrors.length > 0) {
             throw ResourceLoader.toTrackedFailureException();
         }
-        const promises = Array.from(ResourceLoader.records.values())
-            .map((record) => record.promise)
-            .filter((promise): promise is Promise<ArrayBuffer> => promise !== undefined);
-        await Promise.all([...promises, ...ResourceLoader.trackedPromises]);
+        const promises: Promise<unknown>[] = [];
+        for (const record of ResourceLoader.records.values()) {
+            if (record.promise !== undefined) {
+                promises.push(record.promise);
+            }
+        }
+        for (const promise of ResourceLoader.trackedPromises) {
+            promises.push(promise);
+        }
+        await Promise.all(promises);
         if (ResourceLoader.trackedErrors.length > 0) {
             throw ResourceLoader.toTrackedFailureException();
         }
@@ -324,7 +340,7 @@ export class ResourceLoader {
      * preloaded resource bytes.
      */
     public static clearFailures(): void {
-        for (const [ref, record] of Array.from(ResourceLoader.records.entries())) {
+        for (const [ref, record] of ResourceLoader.records.entries()) {
             if (record.error !== undefined) {
                 ResourceLoader.records.delete(ref);
             }

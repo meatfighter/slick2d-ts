@@ -6,7 +6,7 @@ Date: 2026-08-14
 
 `slick2d-ts` now renders browser canvases with a high-DPI backing store while keeping public Slick-style coordinates logical.
 
-This change was made in `C:\js-projects\slick2d-ts` only. Dependent projects such as Jackal, Ms. Pac-Man, and Stickvania should generally update their `slick2d-ts` dependency/build output, then verify rendering and input. They should not need game-logic changes.
+This change was made in `slick2d-ts` only. Dependent projects such as Jackal, Ms. Pac-Man, and Stickvania should generally update their `slick2d-ts` dependency/build output, then verify rendering and input. They should not need game-logic changes.
 
 ## What Changed In slick2d-ts
 

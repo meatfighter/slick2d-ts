@@ -1,36 +1,39 @@
 import { Graphics } from "../Graphics.js";
 import { Image } from "../Image.js";
 
-function drawWithAlpha(image: Image, alpha: number, callback: () => void): void {
+function currentGraphics(): Graphics {
+    return Graphics.getCurrent() ?? new Graphics();
+}
+
+function drawImageAlpha(image: Image, x: number, y: number, alpha: number): void {
     image.setAlpha(alpha);
     try {
-        callback();
+        image.draw(x, y);
     } finally {
         image.setAlpha(1);
     }
 }
 
-function withGraphics(callback: (g: Graphics) => void): void {
-    const g = Graphics.getCurrent();
-    if (!g) {
-        callback(new Graphics());
-        return;
+function drawLocal(image: Image, x: number, y: number, angle: number, scaleX: number, scaleY: number, drawX: number, drawY: number): void {
+    const g = currentGraphics();
+    g.pushTransform();
+    try {
+        g.translate(x, y);
+        g.rotate(0, 0, angle);
+        g.scale(scaleX, scaleY);
+        image.draw(drawX, drawY);
+    } finally {
+        g.popTransform();
     }
-    callback(g);
 }
 
-function withLocalTransform(x: number, y: number, angle: number, scaleX: number, scaleY: number, callback: () => void): void {
-    withGraphics((g) => {
-        g.pushTransform();
-        try {
-            g.translate(x, y);
-            g.rotate(0, 0, angle);
-            g.scale(scaleX, scaleY);
-            callback();
-        } finally {
-            g.popTransform();
-        }
-    });
+function drawLocalAlpha(image: Image, x: number, y: number, angle: number, scaleX: number, scaleY: number, drawX: number, drawY: number, alpha: number): void {
+    image.setAlpha(alpha);
+    try {
+        drawLocal(image, x, y, angle, scaleX, scaleY, drawX, drawY);
+    } finally {
+        image.setAlpha(1);
+    }
 }
 
 /**
@@ -46,18 +49,17 @@ export class SpriteDrawing {
 
     /** Java counterpart: drawAlpha(Image, x, y, alpha). */
     public static drawAlpha(image: Image, x: number, y: number, alpha: number): void {
-        drawWithAlpha(image, alpha, () => image.draw(x, y));
+        drawImageAlpha(image, x, y, alpha);
     }
 
     public static drawOffset(image: Image, x: number, y: number): void;
     public static drawOffset(image: Image, x: number, y: number, alpha: number): void;
     /** Java counterpart: drawOffset overloads. */
     public static drawOffset(image: Image, x: number, y: number, alpha?: number): void {
-        const draw = (): void => image.draw(x, y);
         if (alpha === undefined) {
-            draw();
+            image.draw(x, y);
         } else {
-            drawWithAlpha(image, alpha, draw);
+            drawImageAlpha(image, x, y, alpha);
         }
     }
 
@@ -65,11 +67,12 @@ export class SpriteDrawing {
     public static drawCameraOffset(image: Image, x: number, y: number, offsetX: number, offsetY: number, alpha: number): void;
     /** Browser convenience helper: draws after subtracting an explicit camera/scroll offset. */
     public static drawCameraOffset(image: Image, x: number, y: number, offsetX: number, offsetY: number, alpha?: number): void {
-        const draw = (): void => image.draw(x - offsetX, y - offsetY);
+        const drawX = x - offsetX;
+        const drawY = y - offsetY;
         if (alpha === undefined) {
-            draw();
+            image.draw(drawX, drawY);
         } else {
-            drawWithAlpha(image, alpha, draw);
+            drawImageAlpha(image, drawX, drawY, alpha);
         }
     }
 
@@ -87,7 +90,7 @@ export class SpriteDrawing {
     public static drawRotated(image: Image, x: number, y: number, a: number | number[], b?: number, c?: number, d?: number, e?: number): void {
         let centerX = -image.getWidth() * 0.5;
         let centerY = -image.getHeight() * 0.5;
-        let angle = 0;
+        let angle: number;
         let scale = 1;
         let alpha: number | undefined;
         if (Array.isArray(a)) {
@@ -103,25 +106,16 @@ export class SpriteDrawing {
             scale = d ?? 1;
             alpha = e;
         }
-        const draw = (): void => {
-            withLocalTransform(x, y, angle, scale, scale, () => {
-                image.draw(centerX, centerY);
-            });
-        };
         if (alpha === undefined) {
-            draw();
+            drawLocal(image, x, y, angle, scale, scale, centerX, centerY);
         } else {
-            drawWithAlpha(image, alpha, draw);
+            drawLocalAlpha(image, x, y, angle, scale, scale, centerX, centerY, alpha);
         }
     }
 
     /** Java counterpart: drawRotatedAlpha(Image, x, y, angle, alpha). */
     public static drawRotatedAlpha(image: Image, x: number, y: number, angle: number, alpha: number): void {
-        drawWithAlpha(image, alpha, () => {
-            withLocalTransform(x, y, angle, 1, 1, () => {
-                image.draw(-image.getWidth() * 0.5, -image.getHeight() * 0.5);
-            });
-        });
+        drawLocalAlpha(image, x, y, angle, 1, 1, -image.getWidth() * 0.5, -image.getHeight() * 0.5, alpha);
     }
 
     public static drawRotatedScaled(image: Image, x: number, y: number, angle: number, scale: number): void;
@@ -144,15 +138,10 @@ export class SpriteDrawing {
             scaleY = e;
             alpha = f;
         }
-        const draw = (): void => {
-            withLocalTransform(x, y, angle, scaleX, scaleY, () => {
-                image.draw(centerX, centerY);
-            });
-        };
         if (alpha === undefined) {
-            draw();
+            drawLocal(image, x, y, angle, scaleX, scaleY, centerX, centerY);
         } else {
-            drawWithAlpha(image, alpha, draw);
+            drawLocalAlpha(image, x, y, angle, scaleX, scaleY, centerX, centerY, alpha);
         }
     }
 
@@ -162,15 +151,12 @@ export class SpriteDrawing {
     public static drawCentered(image: Image, x: number, y: number, scale: number, alpha: number): void;
     /** Java counterpart: drawCentered overloads. */
     public static drawCentered(image: Image, x: number = 0, y: number = 0, scale: number = 1, alpha?: number): void {
-        const draw = (): void => {
-            withLocalTransform(x, y, 0, scale, scale, () => {
-                image.draw(-image.getWidth() * 0.5, -image.getHeight() * 0.5);
-            });
-        };
+        const drawX = -image.getWidth() * 0.5;
+        const drawY = -image.getHeight() * 0.5;
         if (alpha === undefined) {
-            draw();
+            drawLocal(image, x, y, 0, scale, scale, drawX, drawY);
         } else {
-            drawWithAlpha(image, alpha, draw);
+            drawLocalAlpha(image, x, y, 0, scale, scale, drawX, drawY, alpha);
         }
     }
 
@@ -183,15 +169,12 @@ export class SpriteDrawing {
     public static drawScaled(image: Image, x: number, y: number, scale: number, alpha: number): void;
     /** Java counterpart: drawScaled overloads. */
     public static drawScaled(image: Image, x: number, y: number, scale: number, alpha?: number): void {
-        const draw = (): void => {
-            withLocalTransform(x, y, 0, scale, scale, () => {
-                image.draw(-image.getWidth() * 0.5, -image.getHeight() * 0.5);
-            });
-        };
+        const drawX = -image.getWidth() * 0.5;
+        const drawY = -image.getHeight() * 0.5;
         if (alpha === undefined) {
-            draw();
+            drawLocal(image, x, y, 0, scale, scale, drawX, drawY);
         } else {
-            drawWithAlpha(image, alpha, draw);
+            drawLocalAlpha(image, x, y, 0, scale, scale, drawX, drawY, alpha);
         }
     }
 
@@ -202,42 +185,39 @@ export class SpriteDrawing {
 
     /** Java counterpart: transform helper around Graphics.translate. */
     public static withTranslation(x: number, y: number, callback: () => void): void {
-        withGraphics((g) => {
-            g.pushTransform();
-            try {
-                g.translate(x, y);
-                callback();
-            } finally {
-                g.popTransform();
-            }
-        });
+        const g = currentGraphics();
+        g.pushTransform();
+        try {
+            g.translate(x, y);
+            callback();
+        } finally {
+            g.popTransform();
+        }
     }
 
     /** Java counterpart: transform helper around Graphics.rotate. */
     public static withRotation(x: number, y: number, angle: number, callback: () => void): void {
-        withGraphics((g) => {
-            g.pushTransform();
-            try {
-                g.translate(x, y);
-                g.rotate(0, 0, angle);
-                callback();
-            } finally {
-                g.popTransform();
-            }
-        });
+        const g = currentGraphics();
+        g.pushTransform();
+        try {
+            g.translate(x, y);
+            g.rotate(0, 0, angle);
+            callback();
+        } finally {
+            g.popTransform();
+        }
     }
 
     /** Java counterpart: transform helper around Graphics.scale. */
     public static withScale(x: number, y: number, scaleX: number, scaleY: number, callback: () => void): void {
-        withGraphics((g) => {
-            g.pushTransform();
-            try {
-                g.translate(x, y);
-                g.scale(scaleX, scaleY);
-                callback();
-            } finally {
-                g.popTransform();
-            }
-        });
+        const g = currentGraphics();
+        g.pushTransform();
+        try {
+            g.translate(x, y);
+            g.scale(scaleX, scaleY);
+            callback();
+        } finally {
+            g.popTransform();
+        }
     }
 }

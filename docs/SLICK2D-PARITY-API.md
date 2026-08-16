@@ -2,10 +2,10 @@
 
 This document specifies the TypeScript library we want to build from the Slick2D abstraction layer used by:
 
-- `C:\NetBeansProjects\SlickJackal`
-- `C:\NetBeansProjects\stickvania`
-- `C:\NetBeansProjects\SlickMsPacMan`
-- `C:\java-projects\slick2d`
+- `audited Jackal Java source tree`
+- `audited Stickvania Java source tree`
+- `audited Ms. Pac-Man Java source tree`
+- `upstream Java Slick2D source tree`
 
 The target is a pure modern TypeScript library for the web that preserves Slick2D's Java-facing shape closely enough that the game code can be ported with direct, mechanical substitutions. The API names, class boundaries, overload shapes, argument order, public constants, and expected side effects must map back to the Java counterparts one-to-one whenever the browser platform allows it.
 

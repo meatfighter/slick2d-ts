@@ -44,7 +44,8 @@ export class BitmapText {
     public drawString(text: string, x: number, y: number, length: number): void;
     /** Java counterpart: drawString(String, int, int[, int]). */
     public drawString(text: string, x: number, y: number, length: number = text.length): void {
-        this.drawStringInternal(text.substring(0, length), x, y, 1, 1);
+        const visibleText = length >= text.length ? text : text.substring(0, length);
+        this.drawStringInternal(visibleText, x, y, 1, 1);
     }
 
     /** Java counterpart: drawStringAlpha(String, int, int, float). */

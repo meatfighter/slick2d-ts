@@ -60,10 +60,10 @@ export class ScalableGame implements Game {
     /** Java Slick2D counterpart: ScalableGame.render(GameContainer, Graphics). */
     public render(container: GameContainer, g: Graphics): void {
         this.container = container;
-        const { xoffset, yoffset } = this.calculateOffsets(container);
+        this.calculateOffsets(container);
         SlickCallable.enterSafeBlock();
-        g.setClip(xoffset, yoffset, this.targetWidth, this.targetHeight);
-        GL11.glTranslatef(xoffset, yoffset, 0);
+        g.setClip(this.xoffset, this.yoffset, this.targetWidth, this.targetHeight);
+        GL11.glTranslatef(this.xoffset, this.yoffset, 0);
         g.scale(this.targetWidth / this.normalWidth, this.targetHeight / this.normalHeight);
         GL11.glPushMatrix();
         this.held.render(container, g);
@@ -111,14 +111,14 @@ export class ScalableGame implements Game {
         }
         this.container.getInput().setScale(this.normalWidth / this.targetWidth, this.normalHeight / this.targetHeight);
 
-        const { xoffset, yoffset } = this.calculateOffsets(this.container);
+        this.calculateOffsets(this.container);
         this.container.getInput().setOffset(
-            -xoffset / (this.targetWidth / this.normalWidth),
-            -yoffset / (this.targetHeight / this.normalHeight)
+            -this.xoffset / (this.targetWidth / this.normalWidth),
+            -this.yoffset / (this.targetHeight / this.normalHeight)
         );
     }
 
-    private calculateOffsets(container: GameContainer): { xoffset: number; yoffset: number } {
+    private calculateOffsets(container: GameContainer): void {
         let xoffset = 0;
         let yoffset = 0;
         if (this.targetHeight < container.getHeight()) {
@@ -129,7 +129,6 @@ export class ScalableGame implements Game {
         }
         this.xoffset = xoffset;
         this.yoffset = yoffset;
-        return { xoffset, yoffset };
     }
 
     /** Java Slick2D counterpart: ScalableGame.closeRequested(). */

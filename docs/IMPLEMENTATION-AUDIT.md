@@ -4,10 +4,10 @@ Date: 2026-08-02
 
 This audit compares the current TypeScript implementation against the Java Slick2D source and the three audited game projects:
 
-- `C:\java-projects\slick2d\Slick\src\org\newdawn\slick`
-- `C:\NetBeansProjects\SlickJackal`
-- `C:\NetBeansProjects\stickvania`
-- `C:\NetBeansProjects\SlickMsPacMan`
+- `upstream Java Slick2D source`
+- `audited Jackal Java source tree`
+- `audited Stickvania Java source tree`
+- `audited Ms. Pac-Man Java source tree`
 
 ## Validation Commands
 
@@ -90,7 +90,7 @@ No game-title-specific modules are exported. The project names appear only as au
 
 ## External Audit Verification
 
-The follow-up audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_FULL_AUDIT_FOR_FIXES.md` was checked against the Java Slick2D source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+The follow-up audit in `MsPacMan/SLICK2D_TS_FULL_AUDIT_FOR_FIXES.md` was checked against the Java Slick2D source before code changes. Confirmed browser-relevant bugs fixed in this pass:
 
 - `Image(String, boolean)` now treats the boolean as Slick's y-axis load flip, not a horizontal mirror.
 - `Image(String, Color)` and `Image(String, boolean, filter, Color)` now apply transparent-color alpha during browser decode.
@@ -109,7 +109,7 @@ The follow-up audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_FULL_AUDIT_
 - `Color` constants, copy/decode constructors, `add`, `scale`, `brighter`, `darker`, byte getters, copy helpers, and `hashCode` now match the Slick source.
 - `Sound` and `Music` Blob constructors now register bytes with the resource loader; `SoundStore.isMusicPlaying()` now ignores sound-effect handles.
 
-The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT.md` was also checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+The re-audit in `MsPacMan/SLICK2D_TS_MSPACMAN_REAUDIT.md` was also checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
 
 - `Sound` and `Music` constructors now queue fetch plus Web Audio decode, and that decode is tracked through `ResourceLoader.waitForAll()` instead of waiting for first playback.
 - Audio load/decode failures now reject the tracked readiness promise and are surfaced as `SlickException`/logged playback errors rather than being silently swallowed.
@@ -120,7 +120,7 @@ The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT.m
 - `Input` now prevents browser defaults for mapped game keys only when the game canvas owns input and not when an editable/menu control has focus.
 - `AppGameContainer` now updates display size after fullscreen promises, `fullscreenchange`, and `resize` events, and dynamic resource work queued during loading frames blocks the next frame until it completes.
 
-The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_2.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+The re-audit in `MsPacMan/SLICK2D_TS_MSPACMAN_REAUDIT_2.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
 
 - `AppGameContainer` now checks `Display.isCloseRequested()` before calling `game.closeRequested()`, matching Java's loop and preventing game-specific close side effects during ordinary frames.
 - `Display.create()`, `Display.destroy()`, and registering a new active container now clear stale static close requests so PWA menu/restart flows do not inherit a previous exit flag.
@@ -129,7 +129,7 @@ The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_2
 - `Input.pause()` and paused `Input.poll()` now clear pressed key, mouse, and controller records, matching Java Slick2D.
 - Keyboard events from focused DOM controls are ignored by Slick input state, and pointer/wheel events outside the game surface are ignored, so menu buttons/sliders do not enqueue stale game actions.
 
-The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_3.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+The re-audit in `MsPacMan/SLICK2D_TS_MSPACMAN_REAUDIT_3.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
 
 - Lost browser focus now clears held key/mouse state and one-shot input records so movement keys cannot remain down after a missed `keyup`.
 - `AppGameContainer.hasFocus()` no longer treats a stale canvas `activeElement` as focused when `document.hasFocus()` is false.
@@ -138,7 +138,7 @@ The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_3
 - Initial `game.init()` or startup `ResourceLoader.waitForAll()` failures now clean up container state and either call `setErrorHandler()` or reject `start()` after cleanup.
 - `ResourceLoader` now fetches candidate locations in order, retries each candidate, applies cache-bust to every attempted URL, preserves `/assets` as origin-root absolute, and lets failed records be fetched again on retry.
 
-The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_4.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+The re-audit in `MsPacMan/SLICK2D_TS_MSPACMAN_REAUDIT_4.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
 
 - Fullscreen entry/exit failures now reject as `SlickException` instead of being swallowed.
 - A failed fullscreen display-mode request restores the previous logical and canvas dimensions instead of leaving a huge non-fullscreen canvas.
@@ -146,7 +146,7 @@ The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_4
 - `AppGameContainer.destroy()` now mirrors Java teardown by calling `AL.destroy()`, stopping tracked sounds/music and clearing decoded audio buffers.
 - `Mouse.setNativeCursor(cursor)` now honors cursor pixel data for `Uint8Array` cursors, including all-zero transparent buffers used by the game to hide the pointer.
 
-The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_5.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+The re-audit in `MsPacMan/SLICK2D_TS_MSPACMAN_REAUDIT_5.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
 
 - `AppGameContainer` now tracks the last successful non-fullscreen display mode separately from requested fullscreen dimensions.
 - Browser-forced fullscreen exit restores the last windowed canvas backing size and CSS size, sets the container fullscreen flag false, marks `Display.wasResized()`, and calls `containerSizeChanged(container)` when the active game exposes that helper.
@@ -156,7 +156,7 @@ The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_5
 - `Mouse` now remembers the visible native cursor before an all-transparent cursor hide and can restore it when fullscreen is exited by the browser or container teardown instead of by game code.
 - Added regression coverage for forced fullscreen exit, explicit exit notification count, and destroy-while-fullscreen cleanup.
 
-The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_6.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+The re-audit in `MsPacMan/SLICK2D_TS_MSPACMAN_REAUDIT_6.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
 
 - `AppGameContainer` now defaults `updateOnlyWhenVisible` to true, matching Java `AppGameContainer`, while preserving the public setter/getter override.
 - Hidden frames skip update/render by default, and visibility restoration resets frame timing so the first visible update receives only visible elapsed time.
@@ -167,7 +167,7 @@ The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_6
 - Sound-effect gain now follows the checked Slick2D Java source's double global-volume application and does not retroactively alter active sound effects when `setSoundVolume(...)` changes later.
 - Added regression coverage for visible-only updates, hidden-frame delta reset, pre-init audio toggles, source-pool exhaustion/reuse, latest-source stop semantics, and sound-effect gain.
 
-The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_7.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+The re-audit in `MsPacMan/SLICK2D_TS_MSPACMAN_REAUDIT_7.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
 
 - A failed `Sound.play(...)`, `playAt(...)`, or `loop(...)` now clears the remembered latest source/handle, so `Sound.playing()` and `Sound.stop()` see no current source just like Java `AudioImpl.index = -1`.
 - `SoundStore` now uses Java's exact effect-source search bound, equivalent to `for (i = 1; i < sourceCount - 1; i++)`, so source 0 and the final logical source are unavailable for effects.
@@ -175,28 +175,28 @@ The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_7
 - The additional source-pool audit found and fixed `setMaxSources(...)` preserving a handle in the new last/unavailable slot after resizing down.
 - The additional public API audit found and fixed `SoundStore.stopSoundEffect(id)`, which now stops the matching logical source instead of no-oping.
 
-The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_8.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+The re-audit in `MsPacMan/SLICK2D_TS_MSPACMAN_REAUDIT_8.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
 
 - No-argument `Music.play()` now starts with pitch `1` and volume `1` instead of reusing the instance's previous volume.
 - No-argument `Music.loop()` now starts with pitch `1` and volume `1` instead of reusing the instance's previous volume.
 - Explicit overloads such as `play(1, 0.25)` and `loop(1, 0.25)` continue to preserve the supplied volume.
 - Added regression coverage for no-argument music volume reset and explicit-volume overload behavior.
 
-The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_9.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
+The re-audit in `MsPacMan/SLICK2D_TS_MSPACMAN_REAUDIT_9.md` was checked against Java Slick2D and the game source before code changes. Confirmed browser-relevant bugs fixed in this pass:
 
 - `FastTrig.sin(...)` now mirrors Java Slick2D's `reduceSinAngle(...)` algorithm before dispatching to `Math.sin` or `Math.cos`.
 - `FastTrig.cos(...)` now mirrors Java Slick2D by returning `FastTrig.sin(radians + Math.PI / 2)` instead of direct `Math.cos`.
 - Added regression coverage for the Java-style expected values over small, branch-switching, large, and negative radian samples, plus the explicit cosine offset rule.
 
-The re-audit in `C:\js-projects\ms-pac-man-2010-js\SLICK2D_TS_MSPACMAN_REAUDIT_10.md` was checked after the follow-up placeholder audit. It reported no new game-relevant Slick2D TypeScript repair items for the `SlickMsPacMan` browser port. Its remaining cautions are game-port concerns, not library defects: preserve Java integer division/truncation when porting game arithmetic, and keep the browser PWA shell/start-menu/audio-unlock behavior outside the Slick compatibility library.
+The re-audit in `MsPacMan/SLICK2D_TS_MSPACMAN_REAUDIT_10.md` was checked after the follow-up placeholder audit. It reported no new game-relevant Slick2D TypeScript repair items for the `SlickMsPacMan` browser port. Its remaining cautions are game-port concerns, not library defects: preserve Java integer division/truncation when porting game arithmetic, and keep the browser PWA shell/start-menu/audio-unlock behavior outside the Slick compatibility library.
 
-The Stickvania follow-up audit in `C:\js-projects\stickvania-js\SLICK2D_TS_STICKVANIA_REAUDIT_2026-08-03.md` was checked against the current library. Confirmed browser-relevant bug fixed in this pass:
+The Stickvania follow-up audit in `Stickvania/SLICK2D_TS_STICKVANIA_REAUDIT_2026-08-03.md` was checked against the current library. Confirmed browser-relevant bug fixed in this pass:
 
 - Failed fullscreen entry now restores any transparent cursor hide when the final state is not fullscreen, so a Java-style Stickvania port that hides the cursor before calling `setDisplayMode(..., true)` does not leave the windowed canvas at CSS `cursor: none` if the browser denies fullscreen.
 
 The same Stickvania follow-up audit also calls for real-browser proof that a trusted Space key press can drive `Input.isKeyPressed(Input.KEY_SPACE)` in the RAF update path and still satisfy transient activation for `requestFullscreen()`. The current Node fake-DOM suite cannot prove that browser security condition. No game-specific fullscreen shortcut was added to `slick2d-ts`; the correct verification is a Chromium/Playwright or equivalent browser test in the app/test harness.
 
-The Jackal handoff in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_FIX_HANDOFF.md` was checked against the current library. Confirmed browser-relevant library work added in this pass:
+The Jackal handoff in `Jackal/SLICK2D_TS_JACKAL_FIX_HANDOFF.md` was checked against the current library. Confirmed browser-relevant library work added in this pass:
 
 - `ResourceLoader.preloadResources(...)` now provides the neutral manifest pre-init barrier the Jackal bootstrap can call before `AppGameContainer.start()`, with retry/cache-bust behavior inherited from `loadResource` and progress over original Java refs.
 - `JavaNumbers` now provides the shared Java numeric helper set needed by Jackal's converted collision, timer, map, projectile, and packed-value logic.
@@ -205,7 +205,7 @@ The Jackal handoff in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_FIX_HANDOFF.md
 
 The same Jackal handoff includes app-port responsibilities that are intentionally not added to `slick2d-ts`: PWA splash UI, user-facing loader screens, a 126-file Jackal asset manifest, game-source numeric-cast auditing, and real-browser menu/start/restart automation. `CursorLoader.getCursor(String, ...)` remains async because browser image decode is async; Jackal's observed hide-cursor path uses the synchronous byte-buffer overload. The `ScalableGame2` z-scale remains `0` because the copied Java `ScalableGame2` classes use `GL.glScalef(..., ..., 0)`.
 
-The Jackal re-audit in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDIT_2026-08-03.md` was checked against the current library and the Java Slick2D behavior. Confirmed browser-relevant library fixes added in this pass:
+The Jackal re-audit in `Jackal/SLICK2D_TS_JACKAL_REAUDIT_2026-08-03.md` was checked against the current library and the Java Slick2D behavior. Confirmed browser-relevant library fixes added in this pass:
 
 - `WebGLRenderer` now keeps separate screen and world clip state, applies their intersection to WebGL scissor, and lets `clearWorldClip()` preserve an outer `ScalableGame` clip while `clearClip()` preserves an active world clip.
 - Sound-effect gain now clamps only to `>= 0`, so global sound volume `0` or per-sound volume `0` produces exact Web Audio gain `0` while preserving Java's double global-volume multiplication for nonzero values.
@@ -215,7 +215,7 @@ The Jackal re-audit in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDIT_2026-
 
 The same re-audit's pre-init resource barrier concern remains a documented port/bootstrap contract rather than an automatic container rewrite: when a port synchronously parses XML, DEF, text, or binary bytes inside `game.init(...)`, the browser bootstrap must call `ResourceLoader.preloadResources(...)` before `AppGameContainer.start()`. The container's post-init `waitForAll()` still covers image/audio decode work queued during Java-shaped constructors, but it cannot retroactively satisfy synchronous parsers that never received preloaded bytes.
 
-The Jackal re-audit pass 2 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS2.md` was checked against `C:\NetBeansProjects\SlickJackal\src\jackal\Main.java`. Confirmed browser-relevant helper bug fixed in this pass:
+The Jackal re-audit pass 2 in `Jackal/SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS2.md` was checked against `Jackal/src/jackal/Main.java`. Confirmed browser-relevant helper bug fixed in this pass:
 
 - `SpriteDrawing.drawRotated(...)`, `drawRotatedScaled(...)`, `drawCentered(...)`, and Jackal-style `drawScaled(...)` now use the renderer/graphics transform stack to match Java's `glPushMatrix -> glTranslatef -> glRotatef -> glScalef -> image.draw(localOffset) -> glPopMatrix` sequence. Explicit center arguments are treated as local draw offsets, not `Image` rotation pivots.
 - These helpers no longer mutate image rotation or center-of-rotation state, and alpha overloads reset image alpha to exactly `1`, matching Jackal's helper methods.
@@ -224,7 +224,7 @@ The Jackal re-audit pass 2 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDI
 
 The same pass noted that Ms. Pac-Man's `drawScaled` helper uses a different top-left-anchored translate-to-center convention. That remains a game-local wrapper concern; the shared `SpriteDrawing.drawScaled(...)` is documented as the Jackal-style centered-origin helper.
 
-The Jackal re-audit pass 3 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS3.md` was checked against the support helpers and parity docs. Confirmed browser-relevant helper bugs fixed in this pass:
+The Jackal re-audit pass 3 in `Jackal/SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS3.md` was checked against the support helpers and parity docs. Confirmed browser-relevant helper bugs fixed in this pass:
 
 - `SpriteDrawing.drawScaled(image, x, y, scale, alpha)` is now unambiguously the Jackal centered scale/alpha helper for all scale values, including `scale > 1`; explicit top-left width/height drawing moved to `drawSized(...)`.
 - `SpriteDrawing.drawOffset(...)` now matches Jackal's local-coordinate helper, including the alpha overload's reset-to-`1` behavior. The old camera-subtraction behavior is available only through the explicitly named `drawCameraOffset(...)`.
@@ -233,7 +233,7 @@ The Jackal re-audit pass 3 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDI
 - `BitmapText.drawStringAlpha(...)` now resets glyph alpha to exactly `1` after each draw, matching Jackal's helper instead of restoring a prior non-`1` alpha.
 - Regression tests were added for the scale/alpha overload trap, local-offset drawing, explicit camera-offset drawing, Java-float geometry, Song sequencing, and bitmap text alpha reset.
 
-The Jackal re-audit pass 4 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS4.md` was checked against Java Slick2D `GameContainer.updateAndRender(...)` and the browser RAF loop. Confirmed browser-relevant container timing bug fixed in this pass:
+The Jackal re-audit pass 4 in `Jackal/SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS4.md` was checked against Java Slick2D `GameContainer.updateAndRender(...)` and the browser RAF loop. Confirmed browser-relevant container timing bug fixed in this pass:
 
 - `AppGameContainer` now keeps Java-style `storedDelta` state and treats `minimumLogicUpdateInterval` as an accumulation threshold, not a per-frame delta floor.
 - `maximumLogicUpdateInterval` now splits large accumulated deltas into repeated fixed-size `game.update(...)` calls and handles the Java remainder rule exactly: update and clear only when `remainder > minimumLogicUpdateInterval`; otherwise retain the remainder.
@@ -243,7 +243,7 @@ The Jackal re-audit pass 4 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDI
 - Rendering now follows Java's `hasFocus() || getAlwaysRender()` condition instead of using paused state as the render gate.
 - Regression tests now cover minimum accumulation, maximum catch-up splitting, retained remainders, paused zero-delta updates, paused audio polling, target-FPS pacing, smooth deltas, and the default Jackal raw-delta path.
 
-The Jackal re-audit pass 5 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS5.md` was checked against Java Slick2D `AppGameContainer.reinit()`, Java `GameContainer.initSystem()`, and Jackal's local `ApplicationGameContainer.reinit()`. Confirmed browser-relevant lifecycle bug fixed in this pass:
+The Jackal re-audit pass 5 in `Jackal/SLICK2D_TS_JACKAL_REAUDIT_2026-08-03_PASS5.md` was checked against Java Slick2D `AppGameContainer.reinit()`, Java `GameContainer.initSystem()`, and Jackal's local `ApplicationGameContainer.reinit()`. Confirmed browser-relevant lifecycle bug fixed in this pass:
 
 - `AppGameContainer.reinit()` now performs a Java-parity browser rebuild instead of only calling `game.init(...)`.
 - Reinit cancels the active RAF callback, clears retained resource failures while preserving successful preloaded bytes, clears `InternalTextureLoader` texture resources, clears active audio through `SoundStore.clear()`, rebuilds renderer/display/audio state, resets music and sound volume to `1`, recreates `Graphics` and the default font, enters ortho mode, resets frame bookkeeping and resource-error state, then calls `game.init(...)` and awaits `ResourceLoader.waitForAll()`.
@@ -251,7 +251,7 @@ The Jackal re-audit pass 5 in `C:\js-projects\jackal-js\SLICK2D_TS_JACKAL_REAUDI
 - `ResourceLoader.clearFailures()` now clears failed fetch records, tracked pending handles, and retained tracked decode/preparation errors without removing successfully preloaded bytes, so a PWA reinit can recover from stale failures without discarding the manifest preload cache.
 - Regression tests now cover texture-loader disposal and the `reinit()` cleanup-before-init ordering, stale failure clearing, audio-handle clearing, volume reset, graphics/default-font recreation, frame-state reset, and RAF rescheduling.
 
-The random performance handoff in `C:\js-projects\jackal-js\SLICK2D_TS_RANDOM_PERFORMANCE_ISSUE_2026-08-04.md` was checked against `JavaRandom` and Jackal's heavy gameplay use of `java.util.Random` parity. Confirmed browser-relevant hot-path performance bug fixed in this pass:
+The random performance handoff in `Jackal/SLICK2D_TS_RANDOM_PERFORMANCE_ISSUE_2026-08-04.md` was checked against `JavaRandom` and Jackal's heavy gameplay use of `java.util.Random` parity. Confirmed browser-relevant hot-path performance bug fixed in this pass:
 
 - `JavaRandom` now stores Java's 48-bit LCG seed as three numeric 16-bit limbs instead of a single BigInt.
 - `next(bits)`, `nextInt()`, `nextInt(bound)`, `nextFloat()`, and `nextBoolean()` no longer perform BigInt arithmetic or allocate temporary objects in the hot path.
@@ -275,7 +275,7 @@ The performance/parity audit on 2026-08-04 was checked against Java Slick2D `Ima
 - Regression tests now cover Java `Image.copy()` draw-state reset behavior, texture-coordinate accessors for subimages and flipped copies, and WebGL same-texture batching plus forced flush ordering before solid drawing.
 - Remaining API-surface differences were checked against the three game source trees. The unimplemented `Graphics.draw/fill` shape hierarchy, `drawAnimation`, and `texture` methods were not found in the audited game calls and remain outside the current three-port scope.
 
-The Jackal current-bug inventory in `C:\js-projects\jackal-js\SLICK2D_TS_CURRENT_BUGS_2026-08-04.md` was checked after the performance audit. It reported no Jackal-blocking `slick2d-ts` defect, but identified broader Slick2D parity gaps. Confirmed repairs added in this pass:
+The Jackal current-bug inventory in `Jackal/SLICK2D_TS_CURRENT_BUGS_2026-08-04.md` was checked after the performance audit. It reported no Jackal-blocking `slick2d-ts` defect, but identified broader Slick2D parity gaps. Confirmed repairs added in this pass:
 
 - `Graphics.drawImage(...)` now matches Java arity: no-color drawing uses `Color.white`, explicit color filters are preserved, source-rectangle overloads are implemented, destination/source-rectangle overloads are implemented, and the old TS-only width/height interpretation is removed from the `Graphics` facade.
 - `Graphics.fillRect(x,y,width,height,pattern,offX,offY)` now implements Java patterned tiling with world-clip confinement and previous-world-clip restoration.
@@ -285,7 +285,7 @@ The Jackal current-bug inventory in `C:\js-projects\jackal-js\SLICK2D_TS_CURRENT
 - `Graphics.clearAlphaMap()` now performs Java's alpha-map clear sequence and restores draw mode. The Java source leaves the current color as the transparent clear color after this call, and the TypeScript tests document that source-accurate behavior.
 - Regression tests now cover these repairs: Java `Graphics.drawImage` overload arity/default tint, patterned `fillRect`, WebGL flash shader state, draw-mode WebGL state, and `clearAlphaMap`.
 
-The follow-up post-repair bug inventory in `C:\js-projects\jackal-js\SLICK2D_TS_CURRENT_BUGS_2026-08-04.md` found three remaining full-library items. Confirmed repairs added in this pass:
+The follow-up post-repair bug inventory in `Jackal/SLICK2D_TS_CURRENT_BUGS_2026-08-04.md` found three remaining full-library items. Confirmed repairs added in this pass:
 
 - `Image.draw(x,y,scale,filter)` now exists as a public overload and dispatches without a rest array. It scales by the image's current logical width and height and preserves the supplied filter.
 - `Image.drawEmbedded(...)` now includes Java's full-image and source-rectangle overloads. Embedded drawing no longer routes through ordinary `draw(...)`, so it does not apply image rotation or stored image alpha. The source-rectangle embedded path also suppresses per-corner image colors, matching Java's separate embedded vertex path.

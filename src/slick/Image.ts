@@ -588,20 +588,25 @@ export class Image implements Renderable {
 
     private drawInternal(x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, tint: Color | null, useCornerColors: boolean = true): void {
         const renderer = Renderer.getBackend();
+        const effectiveSrcX = this.flipHorizontal ? srcX + srcWidth : srcX;
+        const effectiveSrcY = this.flipVertical ? srcY + srcHeight : srcY;
+        const effectiveSrcW = this.flipHorizontal ? -srcWidth : srcWidth;
+        const effectiveSrcH = this.flipVertical ? -srcHeight : srcHeight;
+        if (this.rotation === 0) {
+            renderer.drawImage(this, x, y, width, height, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, IDENTITY_TRANSFORM, useCornerColors);
+            return;
+        }
         const scaleX = width / (this.getWidth() || 1);
         const scaleY = height / (this.getHeight() || 1);
         const centerX = x + this.getCenterOfRotationX() * scaleX;
         const centerY = y + this.getCenterOfRotationY() * scaleY;
         renderer.pushTransform();
-        if (this.rotation !== 0) {
+        try {
             renderer.rotate(centerX, centerY, this.rotation);
+            renderer.drawImage(this, x, y, width, height, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, IDENTITY_TRANSFORM, useCornerColors);
+        } finally {
+            renderer.popTransform();
         }
-        const effectiveSrcX = this.flipHorizontal ? srcX + srcWidth : srcX;
-        const effectiveSrcY = this.flipVertical ? srcY + srcHeight : srcY;
-        const effectiveSrcW = this.flipHorizontal ? -srcWidth : srcWidth;
-        const effectiveSrcH = this.flipVertical ? -srcHeight : srcHeight;
-        renderer.drawImage(this, x, y, width, height, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, IDENTITY_TRANSFORM, useCornerColors);
-        renderer.popTransform();
     }
 
     private drawEmbeddedInternal(x: number, y: number, x2: number, y2: number, srcx: number, srcy: number, srcx2: number, srcy2: number, tint: Color | null, useCornerColors: boolean): void {
@@ -624,39 +629,49 @@ export class Image implements Renderable {
     private drawWarpedInternal(x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, tint: Color | null): void {
         this.throwIfDestroyed();
         const renderer = Renderer.getBackend();
-        renderer.pushTransform();
-        if (this.rotation !== 0) {
-            renderer.rotate(x1 + this.getCenterOfRotationX(), y1 + this.getCenterOfRotationY(), this.rotation);
-        }
         const srcWidth = this.getSourceWidth();
         const srcHeight = this.getSourceHeight();
         const effectiveSrcX = this.flipHorizontal ? this.sourceX + srcWidth : this.sourceX;
         const effectiveSrcY = this.flipVertical ? this.sourceY + srcHeight : this.sourceY;
         const effectiveSrcW = this.flipHorizontal ? -srcWidth : srcWidth;
         const effectiveSrcH = this.flipVertical ? -srcHeight : srcHeight;
-        renderer.drawImageWarped(this, x1, y1, x2, y2, x3, y3, x4, y4, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, IDENTITY_TRANSFORM);
-        renderer.popTransform();
+        if (this.rotation === 0) {
+            renderer.drawImageWarped(this, x1, y1, x2, y2, x3, y3, x4, y4, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, IDENTITY_TRANSFORM);
+            return;
+        }
+        renderer.pushTransform();
+        try {
+            renderer.rotate(x1 + this.getCenterOfRotationX(), y1 + this.getCenterOfRotationY(), this.rotation);
+            renderer.drawImageWarped(this, x1, y1, x2, y2, x3, y3, x4, y4, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, this.alpha, tint, IDENTITY_TRANSFORM);
+        } finally {
+            renderer.popTransform();
+        }
     }
 
     private drawFlashInternal(x: number, y: number, width: number, height: number, tint: Color): void {
         this.throwIfDestroyed();
         const renderer = Renderer.getBackend();
-        const scaleX = width / (this.getWidth() || 1);
-        const scaleY = height / (this.getHeight() || 1);
-        const centerX = x + this.getCenterOfRotationX() * scaleX;
-        const centerY = y + this.getCenterOfRotationY() * scaleY;
-        renderer.pushTransform();
-        if (this.rotation !== 0) {
-            renderer.rotate(centerX, centerY, this.rotation);
-        }
         const srcWidth = this.getSourceWidth();
         const srcHeight = this.getSourceHeight();
         const effectiveSrcX = this.flipHorizontal ? this.sourceX + srcWidth : this.sourceX;
         const effectiveSrcY = this.flipVertical ? this.sourceY + srcHeight : this.sourceY;
         const effectiveSrcW = this.flipHorizontal ? -srcWidth : srcWidth;
         const effectiveSrcH = this.flipVertical ? -srcHeight : srcHeight;
-        renderer.drawImageFlash(this, x, y, width, height, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, tint, IDENTITY_TRANSFORM);
-        renderer.popTransform();
+        if (this.rotation === 0) {
+            renderer.drawImageFlash(this, x, y, width, height, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, tint, IDENTITY_TRANSFORM);
+            return;
+        }
+        const scaleX = width / (this.getWidth() || 1);
+        const scaleY = height / (this.getHeight() || 1);
+        const centerX = x + this.getCenterOfRotationX() * scaleX;
+        const centerY = y + this.getCenterOfRotationY() * scaleY;
+        renderer.pushTransform();
+        try {
+            renderer.rotate(centerX, centerY, this.rotation);
+            renderer.drawImageFlash(this, x, y, width, height, effectiveSrcX, effectiveSrcY, effectiveSrcW, effectiveSrcH, tint, IDENTITY_TRANSFORM);
+        } finally {
+            renderer.popTransform();
+        }
     }
 
     private throwIfDestroyed(): void {

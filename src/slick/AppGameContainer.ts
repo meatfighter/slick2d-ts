@@ -75,6 +75,7 @@ export class AppGameContainer extends GameContainer {
     private lastFrameTime = 0;
     private framesThisSecond = 0;
     private fpsWindowStart = 0;
+    private fpsDisplayText = "FPS: 0";
     private alphaInBackBuffer = true;
     private waitingForResources = false;
     private resourceError: unknown = null;
@@ -531,14 +532,14 @@ export class AppGameContainer extends GameContainer {
         let waitForResources = ResourceLoader.hasPending();
         if (this.hasFocus() || this.getAlwaysRender()) {
             if (this.clearEachFrame) {
-                Renderer.getBackend().beginFrame(this.width, this.height, this.graphics.getBackground(), this.backingWidth, this.backingHeight);
+                Renderer.getBackend().beginFrame(this.width, this.height, this.graphics.__getBackgroundReference(), this.backingWidth, this.backingHeight);
             } else {
                 Renderer.getBackend().beginFrame(this.width, this.height, Color.transparent, this.backingWidth, this.backingHeight);
             }
             Graphics.setCurrent(this.graphics);
             this.game.render(this, this.graphics);
             if (this.showFPS) {
-                this.graphics.drawString(`FPS: ${this.fps}`, 10, 10);
+                this.graphics.drawString(this.fpsDisplayText, 10, 10);
             }
             Renderer.getBackend().endFrame();
             waitForResources = waitForResources || ResourceLoader.hasPending();
@@ -626,6 +627,7 @@ export class AppGameContainer extends GameContainer {
         this.framesThisSecond = 0;
         this.fpsWindowStart = this.lastFrameTime;
         this.fps = 0;
+        this.fpsDisplayText = "FPS: 0";
         this.waitingForResources = false;
         this.resourceError = null;
     }
@@ -636,6 +638,7 @@ export class AppGameContainer extends GameContainer {
         this.framesThisSecond = 0;
         this.fpsWindowStart = this.lastFrameTime;
         this.fps = 0;
+        this.fpsDisplayText = "FPS: 0";
     }
 
     private scheduleNextFrame(): void {
@@ -731,6 +734,7 @@ export class AppGameContainer extends GameContainer {
         this.framesThisSecond++;
         if (time - this.fpsWindowStart >= 1000) {
             this.fps = this.framesThisSecond;
+            this.fpsDisplayText = `FPS: ${this.fps}`;
             this.framesThisSecond = 0;
             this.fpsWindowStart = time;
         }
