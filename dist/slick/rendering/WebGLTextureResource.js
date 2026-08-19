@@ -93,7 +93,10 @@ export class WebGLTextureResource {
     /** Returns or creates the WebGL texture for a context. */
     ensureTexture(gl) {
         if (this.texture) {
-            return this.texture;
+            if (typeof gl.isTexture !== "function" || gl.isTexture(this.texture)) {
+                return this.texture;
+            }
+            this.texture = null;
         }
         const source = this.source;
         if (!source) {
@@ -118,6 +121,19 @@ export class WebGLTextureResource {
         this.height = height;
         this.pixelData = null;
     }
+    /** Drops a context-owned WebGL texture while keeping decoded image data available. */
+    invalidateTexture(gl = null) {
+        if (gl && this.texture && !WebGLTextureResource.isContextLost(gl)) {
+            gl.deleteTexture(this.texture);
+        }
+        this.texture = null;
+    }
+    /** Detaches a framebuffer-owned texture handle without unregistering this logical resource. */
+    detachTexture(texture = this.texture) {
+        if (!texture || this.texture === texture) {
+            this.texture = null;
+        }
+    }
     /** Applies the Slick filter mode to the WebGL texture. */
     applyFilter(gl) {
         const nearest = this.filter === 2;
@@ -127,11 +143,11 @@ export class WebGLTextureResource {
     }
     /** Releases the underlying WebGL texture object. */
     dispose(gl) {
-        if (gl && this.texture) {
-            gl.deleteTexture(this.texture);
-        }
-        this.texture = null;
+        this.invalidateTexture(gl);
         InternalTextureLoader.get().unregister(this);
+    }
+    static isContextLost(gl) {
+        return typeof gl.isContextLost === "function" && gl.isContextLost();
     }
     async load(ref, options) {
         const bytes = await ResourceLoader.loadResource(ref);

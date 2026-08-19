@@ -53,6 +53,8 @@ export class ApplicationGameContainer extends AppGameContainer {
             window.removeEventListener("resize", this.resizeHandler);
             this.resizeHandler = null;
         }
+        this.resizable = false;
+        Display.setResizable(false);
         super.destroy();
     }
 }

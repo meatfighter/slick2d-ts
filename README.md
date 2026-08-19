@@ -51,6 +51,8 @@ Java Slick2D APIs are synchronous in places where browsers are not. Image, audio
 
 Fullscreen, audio unlock, and canvas sizing follow browser security and lifecycle rules. Host pages should call audio unlock helpers from a user gesture when reliable first-play audio matters.
 
+See [COMPATIBILITY.md](COMPATIBILITY.md) for known browser boundaries and intentional compatibility no-ops.
+
 ## Development
 
 ```sh

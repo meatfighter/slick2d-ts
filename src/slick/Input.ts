@@ -5,6 +5,7 @@ import type { MouseListener } from "./MouseListener.js";
 
 type TargetElement = HTMLElement | Window | Document;
 type GamepadSnapshot = readonly (Gamepad | null)[];
+const ACTIVE_EVENT_OPTIONS: AddEventListenerOptions = { passive: false };
 
 function isAccepting(listener: { isAcceptingInput(): boolean }): boolean {
     return listener.isAcceptingInput();
@@ -184,6 +185,8 @@ export class Input {
     private doubleClickDelay = 250;
     private mouseClickTolerance = 5;
     private preventDefaultElement: HTMLElement | null = null;
+    private preventDefaultTouchAction: string | null = null;
+    private browserInputCapture = true;
     private cachedGamepads: GamepadSnapshot = [];
     private gamepadsCached = false;
     private gamepadCacheGeneration = -1;
@@ -223,7 +226,8 @@ export class Input {
         target.addEventListener("pointerdown", this.handlePointerDown as EventListener);
         target.addEventListener("pointerup", this.handlePointerUp as EventListener);
         target.addEventListener("pointermove", this.handlePointerMove as EventListener);
-        target.addEventListener("wheel", this.handleWheel as EventListener);
+        target.addEventListener("wheel", this.handleWheel as EventListener, ACTIVE_EVENT_OPTIONS);
+        target.addEventListener("contextmenu", this.handleContextMenu as EventListener, ACTIVE_EVENT_OPTIONS);
         if (typeof window !== "undefined") {
             window.addEventListener("blur", this.handleFocusLost);
         }
@@ -234,12 +238,29 @@ export class Input {
 
     /** Browser parity helper: element whose focused game keys should suppress browser defaults. */
     public setPreventDefaultElement(element: HTMLElement | null): void {
+        if (this.preventDefaultElement === element) {
+            return;
+        }
+        this.restorePreventDefaultElementStyle();
         this.preventDefaultElement = element;
+        this.applyPreventDefaultElementStyle();
+    }
+
+    /** Browser parity helper: controls whether accepted canvas input suppresses browser gestures. */
+    public setBrowserInputCaptureEnabled(enabled: boolean): void {
+        if (this.browserInputCapture === enabled) {
+            return;
+        }
+        this.browserInputCapture = enabled;
+        this.restorePreventDefaultElementStyle();
+        this.applyPreventDefaultElementStyle();
     }
 
     /** Browser parity helper: removes attached DOM listeners. */
     public unbind(): void {
         if (!this.target) {
+            this.clearAllInputState();
+            this.setPreventDefaultElement(null);
             return;
         }
         this.target.removeEventListener("keydown", this.handleKeyDown as EventListener);
@@ -248,6 +269,7 @@ export class Input {
         this.target.removeEventListener("pointerup", this.handlePointerUp as EventListener);
         this.target.removeEventListener("pointermove", this.handlePointerMove as EventListener);
         this.target.removeEventListener("wheel", this.handleWheel as EventListener);
+        this.target.removeEventListener("contextmenu", this.handleContextMenu as EventListener);
         if (typeof window !== "undefined") {
             window.removeEventListener("blur", this.handleFocusLost);
         }
@@ -255,6 +277,8 @@ export class Input {
             document.removeEventListener("visibilitychange", this.handleVisibilityChange);
         }
         this.target = null;
+        this.clearAllInputState();
+        this.setPreventDefaultElement(null);
     }
 
     /** Java Slick2D counterpart: Input.setDoubleClickInterval(int). */
@@ -653,6 +677,7 @@ export class Input {
         if (this.paused || !this.shouldAcceptPointerEvent(event)) {
             return;
         }
+        this.preventBrowserDefault(event);
         const button = Input.mouseButtonFromEvent(event);
         this.updateMouse(event);
         this.downMouse.add(button);
@@ -665,8 +690,12 @@ export class Input {
     };
 
     private readonly handlePointerUp = (event: PointerEvent): void => {
-        if (this.paused || (!this.shouldAcceptPointerEvent(event) && this.downMouse.size === 0)) {
+        const accepted = this.shouldAcceptPointerEvent(event);
+        if (this.paused || (!accepted && this.downMouse.size === 0)) {
             return;
+        }
+        if (accepted || this.downMouse.size > 0) {
+            this.preventBrowserDefault(event);
         }
         const button = Input.mouseButtonFromEvent(event);
         this.updateMouse(event);
@@ -680,8 +709,12 @@ export class Input {
     };
 
     private readonly handlePointerMove = (event: PointerEvent): void => {
-        if (this.paused || (!this.shouldAcceptPointerEvent(event) && this.downMouse.size === 0)) {
+        const accepted = this.shouldAcceptPointerEvent(event);
+        if (this.paused || (!accepted && this.downMouse.size === 0)) {
             return;
+        }
+        if (accepted || this.downMouse.size > 0) {
+            this.preventBrowserDefault(event);
         }
         const oldX = this.mouseX;
         const oldY = this.mouseY;
@@ -701,11 +734,19 @@ export class Input {
         if (this.paused || !this.shouldAcceptPointerEvent(event)) {
             return;
         }
+        this.preventBrowserDefault(event);
         for (const listener of this.mouseListeners) {
             if (isAccepting(listener)) {
                 listener.mouseWheelMoved(Math.trunc(-event.deltaY));
             }
         }
+    };
+
+    private readonly handleContextMenu = (event: Event): void => {
+        if (this.paused || !this.shouldAcceptPointerEvent(event)) {
+            return;
+        }
+        this.preventBrowserDefault(event);
     };
 
     private readonly handleFocusLost = (): void => {
@@ -958,7 +999,7 @@ export class Input {
     }
 
     private shouldPreventDefault(event: KeyboardEvent, key: number): boolean {
-        if (!Input.defaultPreventedKeys.has(key) || event.defaultPrevented) {
+        if (!this.browserInputCapture || !Input.defaultPreventedKeys.has(key) || event.defaultPrevented) {
             return false;
         }
         const active = typeof document !== "undefined" ? document.activeElement : null;
@@ -994,7 +1035,7 @@ export class Input {
         return typeof Node !== "undefined" && target instanceof Node && this.preventDefaultElement.contains(target);
     }
 
-    private shouldAcceptPointerEvent(event: PointerEvent | WheelEvent): boolean {
+    private shouldAcceptPointerEvent(event: Event): boolean {
         if (!this.preventDefaultElement) {
             return true;
         }
@@ -1003,6 +1044,27 @@ export class Input {
             return false;
         }
         return typeof Node !== "undefined" && target instanceof Node && (target === this.preventDefaultElement || this.preventDefaultElement.contains(target));
+    }
+
+    private preventBrowserDefault(event: Event): void {
+        if (this.browserInputCapture && !event.defaultPrevented) {
+            event.preventDefault();
+        }
+    }
+
+    private applyPreventDefaultElementStyle(): void {
+        if (!this.preventDefaultElement || !this.browserInputCapture) {
+            return;
+        }
+        this.preventDefaultTouchAction = this.preventDefaultElement.style.touchAction;
+        this.preventDefaultElement.style.touchAction = "none";
+    }
+
+    private restorePreventDefaultElementStyle(): void {
+        if (this.preventDefaultElement && this.preventDefaultTouchAction !== null) {
+            this.preventDefaultElement.style.touchAction = this.preventDefaultTouchAction;
+        }
+        this.preventDefaultTouchAction = null;
     }
 
     private static isInteractiveElement(element: Element): boolean {

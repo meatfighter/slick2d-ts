@@ -68,9 +68,14 @@ export class InternalTextureLoader {
 
     /** Java Slick2D counterpart: InternalTextureLoader.reload(). */
     public reload(): void {
+        this.invalidate();
+    }
+
+    /** Browser parity helper: drops GPU texture handles without clearing logical texture tracking. */
+    public invalidate(): void {
         const gl = Renderer.getBackend().getContext();
-        for (const texture of Array.from(this.textures)) {
-            texture.dispose(gl);
+        for (const texture of this.textures) {
+            texture.invalidateTexture(gl);
         }
     }
 

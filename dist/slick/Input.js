@@ -1,3 +1,4 @@
+const ACTIVE_EVENT_OPTIONS = { passive: false };
 function isAccepting(listener) {
     return listener.isAcceptingInput();
 }
@@ -173,6 +174,8 @@ export class Input {
     doubleClickDelay = 250;
     mouseClickTolerance = 5;
     preventDefaultElement = null;
+    preventDefaultTouchAction = null;
+    browserInputCapture = true;
     cachedGamepads = [];
     gamepadsCached = false;
     gamepadCacheGeneration = -1;
@@ -210,7 +213,8 @@ export class Input {
         target.addEventListener("pointerdown", this.handlePointerDown);
         target.addEventListener("pointerup", this.handlePointerUp);
         target.addEventListener("pointermove", this.handlePointerMove);
-        target.addEventListener("wheel", this.handleWheel);
+        target.addEventListener("wheel", this.handleWheel, ACTIVE_EVENT_OPTIONS);
+        target.addEventListener("contextmenu", this.handleContextMenu, ACTIVE_EVENT_OPTIONS);
         if (typeof window !== "undefined") {
             window.addEventListener("blur", this.handleFocusLost);
         }
@@ -220,11 +224,27 @@ export class Input {
     }
     /** Browser parity helper: element whose focused game keys should suppress browser defaults. */
     setPreventDefaultElement(element) {
+        if (this.preventDefaultElement === element) {
+            return;
+        }
+        this.restorePreventDefaultElementStyle();
         this.preventDefaultElement = element;
+        this.applyPreventDefaultElementStyle();
+    }
+    /** Browser parity helper: controls whether accepted canvas input suppresses browser gestures. */
+    setBrowserInputCaptureEnabled(enabled) {
+        if (this.browserInputCapture === enabled) {
+            return;
+        }
+        this.browserInputCapture = enabled;
+        this.restorePreventDefaultElementStyle();
+        this.applyPreventDefaultElementStyle();
     }
     /** Browser parity helper: removes attached DOM listeners. */
     unbind() {
         if (!this.target) {
+            this.clearAllInputState();
+            this.setPreventDefaultElement(null);
             return;
         }
         this.target.removeEventListener("keydown", this.handleKeyDown);
@@ -233,6 +253,7 @@ export class Input {
         this.target.removeEventListener("pointerup", this.handlePointerUp);
         this.target.removeEventListener("pointermove", this.handlePointerMove);
         this.target.removeEventListener("wheel", this.handleWheel);
+        this.target.removeEventListener("contextmenu", this.handleContextMenu);
         if (typeof window !== "undefined") {
             window.removeEventListener("blur", this.handleFocusLost);
         }
@@ -240,6 +261,8 @@ export class Input {
             document.removeEventListener("visibilitychange", this.handleVisibilityChange);
         }
         this.target = null;
+        this.clearAllInputState();
+        this.setPreventDefaultElement(null);
     }
     /** Java Slick2D counterpart: Input.setDoubleClickInterval(int). */
     setDoubleClickInterval(delay) {
@@ -572,6 +595,7 @@ export class Input {
         if (this.paused || !this.shouldAcceptPointerEvent(event)) {
             return;
         }
+        this.preventBrowserDefault(event);
         const button = Input.mouseButtonFromEvent(event);
         this.updateMouse(event);
         this.downMouse.add(button);
@@ -583,8 +607,12 @@ export class Input {
         }
     };
     handlePointerUp = (event) => {
-        if (this.paused || (!this.shouldAcceptPointerEvent(event) && this.downMouse.size === 0)) {
+        const accepted = this.shouldAcceptPointerEvent(event);
+        if (this.paused || (!accepted && this.downMouse.size === 0)) {
             return;
+        }
+        if (accepted || this.downMouse.size > 0) {
+            this.preventBrowserDefault(event);
         }
         const button = Input.mouseButtonFromEvent(event);
         this.updateMouse(event);
@@ -597,8 +625,12 @@ export class Input {
         }
     };
     handlePointerMove = (event) => {
-        if (this.paused || (!this.shouldAcceptPointerEvent(event) && this.downMouse.size === 0)) {
+        const accepted = this.shouldAcceptPointerEvent(event);
+        if (this.paused || (!accepted && this.downMouse.size === 0)) {
             return;
+        }
+        if (accepted || this.downMouse.size > 0) {
+            this.preventBrowserDefault(event);
         }
         const oldX = this.mouseX;
         const oldY = this.mouseY;
@@ -618,11 +650,18 @@ export class Input {
         if (this.paused || !this.shouldAcceptPointerEvent(event)) {
             return;
         }
+        this.preventBrowserDefault(event);
         for (const listener of this.mouseListeners) {
             if (isAccepting(listener)) {
                 listener.mouseWheelMoved(Math.trunc(-event.deltaY));
             }
         }
+    };
+    handleContextMenu = (event) => {
+        if (this.paused || !this.shouldAcceptPointerEvent(event)) {
+            return;
+        }
+        this.preventBrowserDefault(event);
     };
     handleFocusLost = () => {
         this.clearAllInputState();
@@ -850,7 +889,7 @@ export class Input {
         return document.visibilityState !== "hidden" && document.hasFocus();
     }
     shouldPreventDefault(event, key) {
-        if (!Input.defaultPreventedKeys.has(key) || event.defaultPrevented) {
+        if (!this.browserInputCapture || !Input.defaultPreventedKeys.has(key) || event.defaultPrevented) {
             return false;
         }
         const active = typeof document !== "undefined" ? document.activeElement : null;
@@ -891,6 +930,24 @@ export class Input {
             return false;
         }
         return typeof Node !== "undefined" && target instanceof Node && (target === this.preventDefaultElement || this.preventDefaultElement.contains(target));
+    }
+    preventBrowserDefault(event) {
+        if (this.browserInputCapture && !event.defaultPrevented) {
+            event.preventDefault();
+        }
+    }
+    applyPreventDefaultElementStyle() {
+        if (!this.preventDefaultElement || !this.browserInputCapture) {
+            return;
+        }
+        this.preventDefaultTouchAction = this.preventDefaultElement.style.touchAction;
+        this.preventDefaultElement.style.touchAction = "none";
+    }
+    restorePreventDefaultElementStyle() {
+        if (this.preventDefaultElement && this.preventDefaultTouchAction !== null) {
+            this.preventDefaultElement.style.touchAction = this.preventDefaultTouchAction;
+        }
+        this.preventDefaultTouchAction = null;
     }
     static isInteractiveElement(element) {
         const tag = element.tagName.toUpperCase();

@@ -8,26 +8,57 @@ export class Mouse {
     static nativeCursor = null;
     static nativeCursorBeforeTransparentHide = null;
     static element = null;
+    static pointerLockDocument = null;
     /** Browser parity helper: sets the element used for pointer lock and cursor CSS. */
     static setElement(element) {
+        if (!element && Mouse.isGrabbed()) {
+            void Mouse.setGrabbed(false).catch(() => { });
+        }
         Mouse.element = element;
+        Mouse.syncGrabbedFromDocument();
     }
     /** Java LWJGL counterpart: Mouse.setGrabbed(boolean). */
     static async setGrabbed(grabbed) {
-        Mouse.grabbed = grabbed;
-        if (!Mouse.element || typeof document === "undefined") {
+        if (typeof document === "undefined") {
+            Mouse.grabbed = grabbed;
             return;
         }
+        if (!Mouse.element) {
+            Mouse.grabbed = false;
+            return;
+        }
+        Mouse.installPointerLockListeners();
         if (grabbed && Mouse.element.requestPointerLock) {
-            Mouse.element.requestPointerLock();
+            Mouse.grabbed = false;
+            try {
+                const operation = Mouse.element.requestPointerLock();
+                if (Mouse.isPromiseLike(operation)) {
+                    await operation;
+                }
+                Mouse.syncGrabbedFromDocument();
+            }
+            catch (error) {
+                Mouse.syncGrabbedFromDocument();
+                throw error;
+            }
+            return;
         }
-        else if (!grabbed && document.exitPointerLock) {
-            document.exitPointerLock();
+        if (!grabbed && document.exitPointerLock) {
+            Mouse.grabbed = false;
+            if (!("pointerLockElement" in document) || document.pointerLockElement === Mouse.element) {
+                const operation = document.exitPointerLock();
+                if (Mouse.isPromiseLike(operation)) {
+                    await operation;
+                }
+            }
+            Mouse.syncGrabbedFromDocument();
+            return;
         }
+        Mouse.grabbed = false;
     }
     /** Java LWJGL counterpart: Mouse.isGrabbed(). */
     static isGrabbed() {
-        if (typeof document !== "undefined" && document.pointerLockElement) {
+        if (typeof document !== "undefined" && Mouse.element && "pointerLockElement" in document) {
             return document.pointerLockElement === Mouse.element;
         }
         return Mouse.grabbed;
@@ -102,6 +133,33 @@ export class Mouse {
             }
         }
         return true;
+    }
+    static installPointerLockListeners() {
+        if (typeof document === "undefined" || Mouse.pointerLockDocument === document) {
+            return;
+        }
+        Mouse.pointerLockDocument?.removeEventListener("pointerlockchange", Mouse.handlePointerLockChange);
+        Mouse.pointerLockDocument?.removeEventListener("pointerlockerror", Mouse.handlePointerLockError);
+        document.addEventListener("pointerlockchange", Mouse.handlePointerLockChange);
+        document.addEventListener("pointerlockerror", Mouse.handlePointerLockError);
+        Mouse.pointerLockDocument = document;
+    }
+    static handlePointerLockChange = () => {
+        Mouse.syncGrabbedFromDocument();
+    };
+    static handlePointerLockError = () => {
+        Mouse.syncGrabbedFromDocument();
+    };
+    static syncGrabbedFromDocument() {
+        if (typeof document !== "undefined" && Mouse.element && "pointerLockElement" in document) {
+            Mouse.grabbed = document.pointerLockElement === Mouse.element;
+        }
+        else if (!Mouse.element) {
+            Mouse.grabbed = false;
+        }
+    }
+    static isPromiseLike(value) {
+        return !!value && typeof value.then === "function";
     }
 }
 //# sourceMappingURL=Mouse.js.map

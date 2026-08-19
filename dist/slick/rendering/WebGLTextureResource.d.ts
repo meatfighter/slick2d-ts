@@ -33,10 +33,15 @@ export declare class WebGLTextureResource {
     ensureTexture(gl: WebGL2RenderingContext): WebGLTexture | null;
     /** Attaches a framebuffer texture so render-target images can be drawn. */
     attachTexture(texture: WebGLTexture, width: number, height: number): void;
+    /** Drops a context-owned WebGL texture while keeping decoded image data available. */
+    invalidateTexture(gl?: WebGL2RenderingContext | null): void;
+    /** Detaches a framebuffer-owned texture handle without unregistering this logical resource. */
+    detachTexture(texture?: WebGLTexture | null): void;
     /** Applies the Slick filter mode to the WebGL texture. */
     applyFilter(gl: WebGL2RenderingContext): void;
     /** Releases the underlying WebGL texture object. */
     dispose(gl: WebGL2RenderingContext | null): void;
+    private static isContextLost;
     private load;
     private loadBytes;
     private prepareLoadedSource;

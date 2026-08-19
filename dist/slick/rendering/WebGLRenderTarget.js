@@ -16,11 +16,17 @@ export class WebGLRenderTarget {
     /** Ensures framebuffer and texture objects exist for a WebGL context. */
     ensure(gl) {
         if (this.framebuffer && this.texture) {
-            return;
+            const framebufferValid = typeof gl.isFramebuffer !== "function" || gl.isFramebuffer(this.framebuffer);
+            const textureValid = typeof gl.isTexture !== "function" || gl.isTexture(this.texture);
+            if (framebufferValid && textureValid) {
+                return;
+            }
+            this.invalidate(gl);
         }
         this.texture = gl.createTexture();
         this.framebuffer = gl.createFramebuffer();
         if (!this.texture || !this.framebuffer) {
+            this.invalidate(gl);
             return;
         }
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
@@ -33,16 +39,27 @@ export class WebGLRenderTarget {
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.texture, 0);
         this.textureResource.attachTexture(this.texture, this.width, this.height);
     }
-    /** Releases framebuffer and texture objects. */
-    dispose(gl) {
-        if (gl && this.framebuffer) {
-            gl.deleteFramebuffer(this.framebuffer);
-        }
-        if (gl && this.texture) {
-            gl.deleteTexture(this.texture);
+    /** Drops context-owned framebuffer state while keeping the image resource alive. */
+    invalidate(gl = null) {
+        const texture = this.texture;
+        if (gl && !WebGLRenderTarget.isContextLost(gl)) {
+            if (this.framebuffer) {
+                gl.deleteFramebuffer(this.framebuffer);
+            }
+            if (this.texture) {
+                gl.deleteTexture(this.texture);
+            }
         }
         this.framebuffer = null;
         this.texture = null;
+        this.textureResource.detachTexture(texture);
+    }
+    /** Releases framebuffer and texture objects. */
+    dispose(gl) {
+        this.invalidate(gl);
+    }
+    static isContextLost(gl) {
+        return typeof gl.isContextLost === "function" && gl.isContextLost();
     }
 }
 //# sourceMappingURL=WebGLRenderTarget.js.map

@@ -517,6 +517,104 @@ test("InternalTextureLoader.clear disposes registered texture resources", () => 
     }
 });
 
+test("InternalTextureLoader.reload invalidates GPU handles without unregistering resources", () => {
+    installBrowserGlobals();
+    const loader = InternalTextureLoader.get();
+    const backend = Renderer.getBackend();
+    const oldGetContext = backend.getContext;
+    const fakeGl = { tag: "gl" };
+    const disposed = [];
+    const invalidated = [];
+    const resource = {
+        dispose: (gl) => {
+            disposed.push(gl);
+        },
+        invalidateTexture: (gl) => {
+            invalidated.push(gl);
+        },
+        ref: "images/reload.png"
+    };
+
+    backend.getContext = () => fakeGl;
+    try {
+        loader.register(resource);
+        loader.reload();
+
+        assert.deepEqual(invalidated, [fakeGl]);
+        assert.deepEqual(disposed, []);
+
+        loader.clear("images/reload.png");
+
+        assert.deepEqual(disposed, [fakeGl]);
+    } finally {
+        loader.unregister(resource);
+        backend.getContext = oldGetContext;
+    }
+});
+
+test("AppGameContainer pauses RAF during WebGL context loss and resumes after restoration", () => {
+    installBrowserGlobals();
+    const { container } = createContainer();
+    const backend = Renderer.getBackend();
+    const loader = InternalTextureLoader.get();
+    const oldHandleContextLost = backend.handleContextLost;
+    const oldHandleContextRestored = backend.handleContextRestored;
+    const oldTextureInvalidate = loader.invalidate;
+    const oldRequestAnimationFrame = globalThis.requestAnimationFrame;
+    const oldCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    const cancelledFrames = [];
+    const events = [];
+    let nextFrame = 70;
+
+    backend.handleContextLost = () => {
+        events.push("renderer-lost");
+    };
+    backend.handleContextRestored = () => {
+        events.push("renderer-restored");
+    };
+    loader.invalidate = () => {
+        events.push("textures-invalidated");
+    };
+    globalThis.requestAnimationFrame = () => nextFrame++;
+    globalThis.cancelAnimationFrame = (frame) => {
+        cancelledFrames.push(frame);
+    };
+
+    try {
+        container.started = true;
+        container.loopReady = true;
+        container.animationFrame = 44;
+        container.storedDelta = 250;
+
+        const lostEvent = {
+            defaultPrevented: false,
+            preventDefault() {
+                this.defaultPrevented = true;
+            }
+        };
+        container.handleWebGLContextLost(lostEvent);
+
+        assert.equal(lostEvent.defaultPrevented, true);
+        assert.equal(container.contextLost, true);
+        assert.equal(container.animationFrame, 0);
+        assert.equal(container.storedDelta, 0);
+        assert.deepEqual(cancelledFrames, [44]);
+        assert.deepEqual(events, ["renderer-lost", "textures-invalidated"]);
+
+        container.handleWebGLContextRestored();
+
+        assert.equal(container.contextLost, false);
+        assert.equal(container.animationFrame, 70);
+        assert.deepEqual(events, ["renderer-lost", "textures-invalidated", "renderer-restored"]);
+    } finally {
+        backend.handleContextLost = oldHandleContextLost;
+        backend.handleContextRestored = oldHandleContextRestored;
+        loader.invalidate = oldTextureInvalidate;
+        globalThis.requestAnimationFrame = oldRequestAnimationFrame;
+        globalThis.cancelAnimationFrame = oldCancelAnimationFrame;
+    }
+});
+
 test("AppGameContainer.reinit rebuilds Java container state before game init", async () => {
     installBrowserGlobals();
     const { calls, container } = createContainer();

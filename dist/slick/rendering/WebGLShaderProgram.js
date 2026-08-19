@@ -54,6 +54,12 @@ export class WebGLShaderProgram {
         this.uniformLocations.set(name, location);
         return location;
     }
+    /** Releases the linked WebGL program. */
+    dispose(gl) {
+        gl.deleteProgram(this.program);
+        this.attribLocations.clear();
+        this.uniformLocations.clear();
+    }
     static compile(gl, type, source) {
         const shader = gl.createShader(type);
         if (!shader) {

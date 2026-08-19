@@ -59,6 +59,13 @@ export class WebGLShaderProgram {
         return location;
     }
 
+    /** Releases the linked WebGL program. */
+    public dispose(gl: WebGL2RenderingContext): void {
+        gl.deleteProgram(this.program);
+        this.attribLocations.clear();
+        this.uniformLocations.clear();
+    }
+
     private static compile(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
         const shader = gl.createShader(type);
         if (!shader) {

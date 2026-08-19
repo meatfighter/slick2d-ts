@@ -20,11 +20,17 @@ export class WebGLRenderTarget {
     /** Ensures framebuffer and texture objects exist for a WebGL context. */
     public ensure(gl: WebGL2RenderingContext): void {
         if (this.framebuffer && this.texture) {
-            return;
+            const framebufferValid = typeof gl.isFramebuffer !== "function" || gl.isFramebuffer(this.framebuffer);
+            const textureValid = typeof gl.isTexture !== "function" || gl.isTexture(this.texture);
+            if (framebufferValid && textureValid) {
+                return;
+            }
+            this.invalidate(gl);
         }
         this.texture = gl.createTexture();
         this.framebuffer = gl.createFramebuffer();
         if (!this.texture || !this.framebuffer) {
+            this.invalidate(gl);
             return;
         }
         gl.bindTexture(gl.TEXTURE_2D, this.texture);
@@ -38,15 +44,28 @@ export class WebGLRenderTarget {
         this.textureResource.attachTexture(this.texture, this.width, this.height);
     }
 
-    /** Releases framebuffer and texture objects. */
-    public dispose(gl: WebGL2RenderingContext | null): void {
-        if (gl && this.framebuffer) {
-            gl.deleteFramebuffer(this.framebuffer);
-        }
-        if (gl && this.texture) {
-            gl.deleteTexture(this.texture);
+    /** Drops context-owned framebuffer state while keeping the image resource alive. */
+    public invalidate(gl: WebGL2RenderingContext | null = null): void {
+        const texture = this.texture;
+        if (gl && !WebGLRenderTarget.isContextLost(gl)) {
+            if (this.framebuffer) {
+                gl.deleteFramebuffer(this.framebuffer);
+            }
+            if (this.texture) {
+                gl.deleteTexture(this.texture);
+            }
         }
         this.framebuffer = null;
         this.texture = null;
+        this.textureResource.detachTexture(texture);
+    }
+
+    /** Releases framebuffer and texture objects. */
+    public dispose(gl: WebGL2RenderingContext | null): void {
+        this.invalidate(gl);
+    }
+
+    private static isContextLost(gl: WebGL2RenderingContext): boolean {
+        return typeof gl.isContextLost === "function" && gl.isContextLost();
     }
 }

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { Color, Graphics, Image, Renderer } from "../dist/index.js";
 import { WebGLRenderer } from "../dist/slick/rendering/WebGLRenderer.js";
+import { WebGLRenderTarget } from "../dist/slick/rendering/WebGLRenderTarget.js";
+import { WebGLTextureResource } from "../dist/slick/rendering/WebGLTextureResource.js";
 import { identityMatrix3 } from "../dist/slick/rendering/RenderBackend.js";
 
 class Fake2DContext {
@@ -129,8 +131,79 @@ class FakeCopyGL {
     viewport() {}
 }
 
+class FakeTextureGL {
+    constructor() {
+        this.CLAMP_TO_EDGE = 0x812f;
+        this.COLOR_ATTACHMENT0 = 0x8ce0;
+        this.FRAMEBUFFER = 0x8d40;
+        this.LINEAR = 0x2601;
+        this.NEAREST = 0x2600;
+        this.RGBA = 0x1908;
+        this.TEXTURE_2D = 0x0de1;
+        this.TEXTURE_MAG_FILTER = 0x2800;
+        this.TEXTURE_MIN_FILTER = 0x2801;
+        this.TEXTURE_WRAP_S = 0x2802;
+        this.TEXTURE_WRAP_T = 0x2803;
+        this.UNPACK_PREMULTIPLY_ALPHA_WEBGL = 0x9241;
+        this.UNSIGNED_BYTE = 0x1401;
+        this.deletedFramebuffers = [];
+        this.deletedTextures = [];
+        this.framebuffers = new Set();
+        this.nextFramebuffer = 1;
+        this.nextTexture = 1;
+        this.textures = new Set();
+    }
+
+    bindFramebuffer() {}
+
+    bindTexture() {}
+
+    createFramebuffer() {
+        const framebuffer = { id: this.nextFramebuffer++ };
+        this.framebuffers.add(framebuffer);
+        return framebuffer;
+    }
+
+    createTexture() {
+        const texture = { id: this.nextTexture++ };
+        this.textures.add(texture);
+        return texture;
+    }
+
+    deleteFramebuffer(framebuffer) {
+        this.deletedFramebuffers.push(framebuffer);
+        this.framebuffers.delete(framebuffer);
+    }
+
+    deleteTexture(texture) {
+        this.deletedTextures.push(texture);
+        this.textures.delete(texture);
+    }
+
+    framebufferTexture2D() {}
+
+    isContextLost() {
+        return false;
+    }
+
+    isFramebuffer(framebuffer) {
+        return this.framebuffers.has(framebuffer);
+    }
+
+    isTexture(texture) {
+        return this.textures.has(texture);
+    }
+
+    pixelStorei() {}
+
+    texImage2D() {}
+
+    texParameteri() {}
+}
+
 function fakeProgram() {
     return {
+        dispose: () => undefined,
         program: {},
         getAttribLocation: (_gl, name) => ({ a_position: 0, a_texCoord: 1, a_color: 2 })[name] ?? 0,
         getUniformLocation: (_gl, name) => name
@@ -626,6 +699,53 @@ test("WebGLRenderer color inversion resets at safe renderer lifecycle boundaries
     renderer.setColorInverted(true);
     renderer.dispose();
     assert.equal(renderer.isColorInverted(), false);
+});
+
+test("WebGLTextureResource invalidation recreates stale GPU handles without disposing the resource", () => {
+    const gl = new FakeTextureGL();
+    const source = { height: 4, width: 4 };
+    const resource = new WebGLTextureResource(source, Image.FILTER_NEAREST, null);
+
+    try {
+        const first = resource.ensureTexture(gl);
+        assert.ok(first);
+
+        resource.invalidateTexture(gl);
+
+        assert.deepEqual(gl.deletedTextures, [first]);
+        assert.equal(resource.ensureTexture(gl), resource.ensureTexture(gl));
+        assert.notEqual(resource.ensureTexture(gl), first);
+    } finally {
+        resource.dispose(null);
+    }
+});
+
+test("WebGLRenderTarget invalidation recreates framebuffer-backed texture handles", () => {
+    const gl = new FakeTextureGL();
+    const source = { height: 8, width: 8 };
+    const resource = new WebGLTextureResource(source, Image.FILTER_NEAREST, null);
+    const target = new WebGLRenderTarget(8, 8, resource);
+
+    try {
+        target.ensure(gl);
+        const firstFramebuffer = target.framebuffer;
+        const firstTexture = target.texture;
+
+        target.invalidate(gl);
+
+        assert.deepEqual(gl.deletedFramebuffers, [firstFramebuffer]);
+        assert.deepEqual(gl.deletedTextures, [firstTexture]);
+        assert.equal(target.framebuffer, null);
+        assert.equal(target.texture, null);
+
+        target.ensure(gl);
+
+        assert.notEqual(target.framebuffer, firstFramebuffer);
+        assert.notEqual(target.texture, firstTexture);
+    } finally {
+        target.dispose(null);
+        resource.dispose(null);
+    }
 });
 
 test("Graphics color inversion facade controls the active renderer state", () => {

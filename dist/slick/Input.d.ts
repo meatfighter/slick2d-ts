@@ -175,6 +175,8 @@ export declare class Input {
     private doubleClickDelay;
     private mouseClickTolerance;
     private preventDefaultElement;
+    private preventDefaultTouchAction;
+    private browserInputCapture;
     private cachedGamepads;
     private gamepadsCached;
     private gamepadCacheGeneration;
@@ -200,6 +202,8 @@ export declare class Input {
     bindToElement(target: TargetElement): void;
     /** Browser parity helper: element whose focused game keys should suppress browser defaults. */
     setPreventDefaultElement(element: HTMLElement | null): void;
+    /** Browser parity helper: controls whether accepted canvas input suppresses browser gestures. */
+    setBrowserInputCaptureEnabled(enabled: boolean): void;
     /** Browser parity helper: removes attached DOM listeners. */
     unbind(): void;
     /** Java Slick2D counterpart: Input.setDoubleClickInterval(int). */
@@ -324,6 +328,7 @@ export declare class Input {
     private readonly handlePointerUp;
     private readonly handlePointerMove;
     private readonly handleWheel;
+    private readonly handleContextMenu;
     private readonly handleFocusLost;
     private readonly handleVisibilityChange;
     private clearPressedRecords;
@@ -352,6 +357,9 @@ export declare class Input {
     private shouldPreventDefault;
     private shouldAcceptGameKey;
     private shouldAcceptPointerEvent;
+    private preventBrowserDefault;
+    private applyPreventDefaultElementStyle;
+    private restorePreventDefaultElementStyle;
     private static isInteractiveElement;
     private static readonly eventCodeToKey;
     private static readonly keyNames;

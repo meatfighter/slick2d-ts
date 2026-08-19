@@ -33,6 +33,9 @@ export declare class AppGameContainer extends GameContainer {
     private errorHandler;
     private lastWindowedDisplayMode;
     private preserveAudioCacheOnDestroy;
+    private contextLost;
+    private ownsCanvas;
+    private canvasWithContextHandlers;
     constructor(game: Game);
     constructor(game: Game, width: number, height: number, fullscreen: boolean);
     /** Java Slick2D counterpart: AppGameContainer.supportsAlphaInBackBuffer(). */
@@ -119,7 +122,12 @@ export declare class AppGameContainer extends GameContainer {
     private readonly handleWindowResize;
     private readonly handleFullscreenChange;
     private readonly handleVisibilityChange;
+    private readonly handleWebGLContextLost;
+    private readonly handleWebGLContextRestored;
     private resolveCanvas;
+    private addCanvasContextListeners;
+    private removeCanvasContextListeners;
+    private removeOwnedCanvas;
     private applyFavicon;
     private updateFps;
     private now;

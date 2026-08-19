@@ -122,7 +122,10 @@ export class WebGLTextureResource {
     /** Returns or creates the WebGL texture for a context. */
     public ensureTexture(gl: WebGL2RenderingContext): WebGLTexture | null {
         if (this.texture) {
-            return this.texture;
+            if (typeof gl.isTexture !== "function" || gl.isTexture(this.texture)) {
+                return this.texture;
+            }
+            this.texture = null;
         }
         const source = this.source;
         if (!source) {
@@ -149,6 +152,21 @@ export class WebGLTextureResource {
         this.pixelData = null;
     }
 
+    /** Drops a context-owned WebGL texture while keeping decoded image data available. */
+    public invalidateTexture(gl: WebGL2RenderingContext | null = null): void {
+        if (gl && this.texture && !WebGLTextureResource.isContextLost(gl)) {
+            gl.deleteTexture(this.texture);
+        }
+        this.texture = null;
+    }
+
+    /** Detaches a framebuffer-owned texture handle without unregistering this logical resource. */
+    public detachTexture(texture: WebGLTexture | null = this.texture): void {
+        if (!texture || this.texture === texture) {
+            this.texture = null;
+        }
+    }
+
     /** Applies the Slick filter mode to the WebGL texture. */
     public applyFilter(gl: WebGL2RenderingContext): void {
         const nearest = this.filter === 2;
@@ -159,11 +177,12 @@ export class WebGLTextureResource {
 
     /** Releases the underlying WebGL texture object. */
     public dispose(gl: WebGL2RenderingContext | null): void {
-        if (gl && this.texture) {
-            gl.deleteTexture(this.texture);
-        }
-        this.texture = null;
+        this.invalidateTexture(gl);
         InternalTextureLoader.get().unregister(this);
+    }
+
+    private static isContextLost(gl: WebGL2RenderingContext): boolean {
+        return typeof gl.isContextLost === "function" && gl.isContextLost();
     }
 
     private async load(ref: string, options: WebGLTextureLoadOptions): Promise<void> {

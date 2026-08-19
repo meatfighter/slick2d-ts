@@ -12,7 +12,10 @@ export declare class WebGLRenderTarget {
     constructor(width: number, height: number, textureResource: WebGLTextureResource);
     /** Ensures framebuffer and texture objects exist for a WebGL context. */
     ensure(gl: WebGL2RenderingContext): void;
+    /** Drops context-owned framebuffer state while keeping the image resource alive. */
+    invalidate(gl?: WebGL2RenderingContext | null): void;
     /** Releases framebuffer and texture objects. */
     dispose(gl: WebGL2RenderingContext | null): void;
+    private static isContextLost;
 }
 //# sourceMappingURL=WebGLRenderTarget.d.ts.map

@@ -32,7 +32,21 @@ function pointerEvent(button) {
         clientX: 12,
         clientY: 34,
         currentTarget: null,
-        target: null
+        defaultPrevented: false,
+        target: null,
+        preventDefault() {
+            this.defaultPrevented = true;
+        }
+    };
+}
+
+function browserEvent() {
+    return {
+        defaultPrevented: false,
+        target: null,
+        preventDefault() {
+            this.defaultPrevented = true;
+        }
     };
 }
 
@@ -249,4 +263,62 @@ test("browser pointer buttons are translated to Slick mouse constants", () => {
         ["clicked", Input.MOUSE_RIGHT_BUTTON, 12, 34, 1],
         ["pressed", Input.MOUSE_MIDDLE_BUTTON, 12, 34]
     ]);
+});
+
+test("unbind clears active keyboard and mouse state", () => {
+    const target = eventTarget();
+    const input = new Input(600);
+    input.bindToElement(target);
+
+    target.dispatch("keydown", keyEvent("KeyW", "w"));
+    target.dispatch("pointerdown", pointerEvent(0));
+
+    assert.equal(input.isKeyDown(Input.KEY_W), true);
+    assert.equal(input.isMouseButtonDown(Input.MOUSE_LEFT_BUTTON), true);
+
+    input.unbind();
+
+    assert.equal(input.isKeyDown(Input.KEY_W), false);
+    assert.equal(input.isMouseButtonDown(Input.MOUSE_LEFT_BUTTON), false);
+    assert.equal(input.isKeyPressed(Input.KEY_W), false);
+    assert.equal(input.isMousePressed(Input.MOUSE_LEFT_BUTTON), false);
+});
+
+test("accepted wheel and context menu events suppress browser defaults", () => {
+    const target = eventTarget();
+    const input = new Input(600);
+    const wheelMoves = [];
+    input.bindToElement(target);
+    input.addMouseListener({
+        inputEnded: () => undefined,
+        inputStarted: () => undefined,
+        isAcceptingInput: () => true,
+        mouseClicked: () => undefined,
+        mouseDragged: () => undefined,
+        mouseMoved: () => undefined,
+        mousePressed: () => undefined,
+        mouseReleased: () => undefined,
+        mouseWheelMoved: (change) => wheelMoves.push(change),
+        setInput: () => undefined
+    });
+
+    const wheel = { ...browserEvent(), deltaY: 4 };
+    const contextMenu = browserEvent();
+    target.dispatch("wheel", wheel);
+    target.dispatch("contextmenu", contextMenu);
+
+    assert.equal(wheel.defaultPrevented, true);
+    assert.equal(contextMenu.defaultPrevented, true);
+    assert.deepEqual(wheelMoves, [-4]);
+});
+
+test("prevent default element touch-action is restored", () => {
+    const input = new Input(600);
+    const element = { style: { touchAction: "pan-x" } };
+
+    input.setPreventDefaultElement(element);
+    assert.equal(element.style.touchAction, "none");
+
+    input.setPreventDefaultElement(null);
+    assert.equal(element.style.touchAction, "pan-x");
 });

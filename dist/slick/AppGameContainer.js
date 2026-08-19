@@ -48,6 +48,9 @@ export class AppGameContainer extends GameContainer {
     errorHandler = null;
     lastWindowedDisplayMode;
     preserveAudioCacheOnDestroy = false;
+    contextLost = false;
+    ownsCanvas = false;
+    canvasWithContextHandlers = null;
     /** Java Slick2D counterpart: AppGameContainer constructors. */
     constructor(game, width = 640, height = 480, fullscreen = false) {
         super(game);
@@ -265,8 +268,10 @@ export class AppGameContainer extends GameContainer {
         this.destroyed = false;
         this.started = true;
         this.loopReady = false;
+        this.contextLost = false;
         try {
             this.canvas = this.resolveCanvas();
+            this.addCanvasContextListeners(this.canvas);
             this.applySizedCanvas(this.width, this.height, `${this.width}px`, `${this.height}px`, false);
             this.canvas.tabIndex = this.canvas.tabIndex < 0 ? 0 : this.canvas.tabIndex;
             this.canvas.focus();
@@ -353,18 +358,22 @@ export class AppGameContainer extends GameContainer {
     }
     /** Java Slick2D counterpart: AppGameContainer.destroy(). */
     destroy() {
+        const canvas = this.canvas;
         this.destroyed = true;
         this.started = false;
         this.loopReady = false;
         this.loopSuspended = false;
+        this.contextLost = false;
         this.waitingForResources = false;
         this.resourceError = null;
         this.cancelScheduledFrame();
         if (typeof document !== "undefined") {
             this.exitBrowserFullscreenForDestroy();
         }
+        this.removeCanvasContextListeners();
         this.input.unbind();
         this.input.setPreventDefaultElement(null);
+        void Mouse.setGrabbed(false).catch(() => { });
         Mouse.setElement(null);
         if (typeof window !== "undefined") {
             window.removeEventListener("resize", this.handleWindowResize);
@@ -383,6 +392,8 @@ export class AppGameContainer extends GameContainer {
         }
         Display.destroy();
         Display.setActiveContainer(null);
+        this.removeOwnedCanvas(canvas);
+        this.canvas = null;
     }
     /** Java Slick2D counterpart: AppGameContainer.setDefaultMouseCursor(). */
     setDefaultMouseCursor() {
@@ -410,7 +421,7 @@ export class AppGameContainer extends GameContainer {
     }
     loop = (time) => {
         this.animationFrame = 0;
-        if (this.destroyed || this.loopSuspended || !this.loopReady) {
+        if (this.destroyed || this.loopSuspended || this.contextLost || !this.loopReady) {
             return;
         }
         try {
@@ -447,7 +458,7 @@ export class AppGameContainer extends GameContainer {
         Music.poll(delta);
         SoundStore.get().poll(delta);
         this.updateGame(delta);
-        if (this.destroyed || this.loopSuspended) {
+        if (this.destroyed || this.loopSuspended || this.contextLost) {
             return;
         }
         let waitForResources = ResourceLoader.hasPending();
@@ -561,7 +572,13 @@ export class AppGameContainer extends GameContainer {
         this.fpsDisplayText = "FPS: 0";
     }
     scheduleNextFrame() {
-        if (this.destroyed || this.loopSuspended || !this.started || !this.loopReady || this.waitingForResources || this.animationFrame !== 0) {
+        if (this.destroyed ||
+            this.loopSuspended ||
+            this.contextLost ||
+            !this.started ||
+            !this.loopReady ||
+            this.waitingForResources ||
+            this.animationFrame !== 0) {
             return;
         }
         this.animationFrame = requestAnimationFrame(this.loop);
@@ -609,7 +626,34 @@ export class AppGameContainer extends GameContainer {
             this.refreshCurrentCanvasBacking();
         }
     };
+    handleWebGLContextLost = (event) => {
+        event.preventDefault();
+        if (this.contextLost) {
+            return;
+        }
+        this.contextLost = true;
+        this.cancelScheduledFrame();
+        this.storedDelta = 0;
+        Renderer.getBackend().handleContextLost();
+        InternalTextureLoader.get().invalidate();
+    };
+    handleWebGLContextRestored = () => {
+        if (!this.canvas || this.destroyed || !this.contextLost) {
+            return;
+        }
+        try {
+            Renderer.getBackend().handleContextRestored();
+            this.contextLost = false;
+            this.refreshCurrentCanvasBacking();
+            this.resetLoopResumeTiming();
+            this.scheduleNextFrame();
+        }
+        catch (error) {
+            this.reportError(error);
+        }
+    };
     resolveCanvas() {
+        this.ownsCanvas = false;
         const parent = Display.getParent();
         if (isCanvas(parent)) {
             return parent;
@@ -621,11 +665,34 @@ export class AppGameContainer extends GameContainer {
             }
             const canvas = document.createElement("canvas");
             parent.appendChild(canvas);
+            this.ownsCanvas = true;
             return canvas;
         }
         const canvas = document.createElement("canvas");
         document.body.appendChild(canvas);
+        this.ownsCanvas = true;
         return canvas;
+    }
+    addCanvasContextListeners(canvas) {
+        this.removeCanvasContextListeners();
+        canvas.addEventListener("webglcontextlost", this.handleWebGLContextLost);
+        canvas.addEventListener("webglcontextrestored", this.handleWebGLContextRestored);
+        this.canvasWithContextHandlers = canvas;
+    }
+    removeCanvasContextListeners() {
+        if (!this.canvasWithContextHandlers) {
+            return;
+        }
+        this.canvasWithContextHandlers.removeEventListener("webglcontextlost", this.handleWebGLContextLost);
+        this.canvasWithContextHandlers.removeEventListener("webglcontextrestored", this.handleWebGLContextRestored);
+        this.canvasWithContextHandlers = null;
+    }
+    removeOwnedCanvas(canvas) {
+        if (!this.ownsCanvas || !canvas) {
+            return;
+        }
+        canvas.parentNode?.removeChild(canvas);
+        this.ownsCanvas = false;
     }
     applyFavicon(ref) {
         if (typeof document === "undefined") {

@@ -13,6 +13,8 @@ export declare class WebGLShaderProgram {
     getAttribLocation(gl: WebGL2RenderingContext, name: string): number;
     /** Returns a uniform location, throwing if it is missing. */
     getUniformLocation(gl: WebGL2RenderingContext, name: string): WebGLUniformLocation;
+    /** Releases the linked WebGL program. */
+    dispose(gl: WebGL2RenderingContext): void;
     private static compile;
 }
 //# sourceMappingURL=WebGLShaderProgram.d.ts.map

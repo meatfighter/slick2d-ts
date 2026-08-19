@@ -9,6 +9,7 @@ export declare class Mouse {
     private static nativeCursor;
     private static nativeCursorBeforeTransparentHide;
     private static element;
+    private static pointerLockDocument;
     /** Browser parity helper: sets the element used for pointer lock and cursor CSS. */
     static setElement(element: HTMLElement | null): void;
     /** Java LWJGL counterpart: Mouse.setGrabbed(boolean). */
@@ -24,5 +25,10 @@ export declare class Mouse {
     private static cursorCss;
     private static isTransparentNativeCursor;
     private static isTransparentCursor;
+    private static installPointerLockListeners;
+    private static readonly handlePointerLockChange;
+    private static readonly handlePointerLockError;
+    private static syncGrabbedFromDocument;
+    private static isPromiseLike;
 }
 //# sourceMappingURL=Mouse.d.ts.map

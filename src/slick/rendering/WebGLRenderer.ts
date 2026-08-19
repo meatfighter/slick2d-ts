@@ -147,6 +147,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     private canvas: HTMLCanvasElement | null = null;
     private gl: WebGL2RenderingContext | null = null;
+    private contextOptions: WebGLContextAttributes = {};
+    private contextLost = false;
     private solidProgram: WebGLShaderProgram | null = null;
     private textureProgram: WebGLShaderProgram | null = null;
     private buffer: WebGLBuffer | null = null;
@@ -201,21 +203,25 @@ export class WebGLRenderer implements RenderBackend, SGL {
         backingWidth: number = canvas.width,
         backingHeight: number = canvas.height
     ): void {
-        this.colorInverted = false;
-        this.textureBatchInverted = false;
-        this.canvas = canvas;
-        const gl = canvas.getContext("webgl2", {
+        const contextOptions: WebGLContextAttributes = {
             alpha: options.alpha ?? true,
             antialias: options.antialias ?? false,
             stencil: options.stencil ?? false
-        });
+        };
+        this.colorInverted = false;
+        this.textureBatchInverted = false;
+        this.canvas = canvas;
+        this.contextOptions = contextOptions;
+        const gl = canvas.getContext("webgl2", contextOptions);
         if (!gl) {
             throw new SlickException("Unable to create WebGL2 context");
         }
+        this.contextLost = false;
         this.gl = gl;
         this.solidProgram = new WebGLShaderProgram(gl, SOLID_VERTEX, SOLID_FRAGMENT);
         this.textureProgram = new WebGLShaderProgram(gl, TEXTURE_VERTEX, TEXTURE_FRAGMENT);
         this.buffer = gl.createBuffer();
+        this.currentTarget = null;
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         this.initDisplay(logicalWidth, logicalHeight, backingWidth, backingHeight);
@@ -722,11 +728,16 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Handles browser WebGL context loss. */
     public handleContextLost(): void {
+        const gl = this.gl;
+        this.contextLost = true;
         this.textureBatchVertexCount = 0;
         this.textureBatchTexture = null;
         this.textureBatchFlash = false;
         this.textureBatchInverted = false;
         this.colorInverted = false;
+        this.currentTarget?.invalidate(gl);
+        this.textures.clear();
+        this.currentTextureId = 0;
         this.gl = null;
         this.solidProgram = null;
         this.textureProgram = null;
@@ -735,23 +746,34 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Handles browser WebGL context restoration. */
     public handleContextRestored(): void {
-        if (this.canvas) {
-            this.initialize(this.canvas, {}, this.defaultWidth, this.defaultHeight, this.defaultBackingWidth, this.defaultBackingHeight);
+        if (this.canvas && (this.contextLost || !this.gl)) {
+            this.initialize(this.canvas, this.contextOptions, this.defaultWidth, this.defaultHeight, this.defaultBackingWidth, this.defaultBackingHeight);
         }
     }
 
     /** Releases renderer-owned WebGL state. */
     public dispose(): void {
         const gl = this.gl;
-        if (gl && this.buffer) {
+        const canDelete = gl !== null && !WebGLRenderer.isContextLost(gl);
+        if (canDelete && this.buffer) {
             gl.deleteBuffer(this.buffer);
         }
-        if (gl) {
+        if (canDelete && this.solidProgram) {
+            this.solidProgram.dispose(gl);
+        }
+        if (canDelete && this.textureProgram) {
+            this.textureProgram.dispose(gl);
+        }
+        if (canDelete) {
             for (const texture of this.textures.values()) {
                 gl.deleteTexture(texture.texture);
             }
         }
-        this.currentTarget?.dispose(gl);
+        if (canDelete) {
+            this.currentTarget?.dispose(gl);
+        } else {
+            this.currentTarget?.invalidate(null);
+        }
         this.textures.clear();
         this.currentTextureId = 0;
         this.textureBatchVertexCount = 0;
@@ -759,8 +781,12 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.textureBatchFlash = false;
         this.textureBatchInverted = false;
         this.colorInverted = false;
+        this.contextLost = false;
         this.gl = null;
         this.buffer = null;
+        this.solidProgram = null;
+        this.textureProgram = null;
+        this.currentTarget = null;
         this.canvas = null;
     }
 
@@ -1603,6 +1629,10 @@ export class WebGLRenderer implements RenderBackend, SGL {
             width: Math.max(0, x2 - x1),
             height: Math.max(0, y2 - y1)
         };
+    }
+
+    private static isContextLost(gl: WebGL2RenderingContext): boolean {
+        return typeof gl.isContextLost === "function" && gl.isContextLost();
     }
 
     private currentMatrix(): Matrix3 {

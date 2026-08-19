@@ -10,28 +10,59 @@ export class Mouse {
     private static nativeCursor: Cursor | null = null;
     private static nativeCursorBeforeTransparentHide: Cursor | null = null;
     private static element: HTMLElement | null = null;
+    private static pointerLockDocument: Document | null = null;
 
     /** Browser parity helper: sets the element used for pointer lock and cursor CSS. */
     public static setElement(element: HTMLElement | null): void {
+        if (!element && Mouse.isGrabbed()) {
+            void Mouse.setGrabbed(false).catch(() => {});
+        }
         Mouse.element = element;
+        Mouse.syncGrabbedFromDocument();
     }
 
     /** Java LWJGL counterpart: Mouse.setGrabbed(boolean). */
     public static async setGrabbed(grabbed: boolean): Promise<void> {
-        Mouse.grabbed = grabbed;
-        if (!Mouse.element || typeof document === "undefined") {
+        if (typeof document === "undefined") {
+            Mouse.grabbed = grabbed;
             return;
         }
-        if (grabbed && Mouse.element.requestPointerLock) {
-            Mouse.element.requestPointerLock();
-        } else if (!grabbed && document.exitPointerLock) {
-            document.exitPointerLock();
+        if (!Mouse.element) {
+            Mouse.grabbed = false;
+            return;
         }
+        Mouse.installPointerLockListeners();
+        if (grabbed && Mouse.element.requestPointerLock) {
+            Mouse.grabbed = false;
+            try {
+                const operation = Mouse.element.requestPointerLock();
+                if (Mouse.isPromiseLike(operation)) {
+                    await operation;
+                }
+                Mouse.syncGrabbedFromDocument();
+            } catch (error) {
+                Mouse.syncGrabbedFromDocument();
+                throw error;
+            }
+            return;
+        }
+        if (!grabbed && document.exitPointerLock) {
+            Mouse.grabbed = false;
+            if (!("pointerLockElement" in document) || document.pointerLockElement === Mouse.element) {
+                const operation = document.exitPointerLock();
+                if (Mouse.isPromiseLike(operation)) {
+                    await operation;
+                }
+            }
+            Mouse.syncGrabbedFromDocument();
+            return;
+        }
+        Mouse.grabbed = false;
     }
 
     /** Java LWJGL counterpart: Mouse.isGrabbed(). */
     public static isGrabbed(): boolean {
-        if (typeof document !== "undefined" && document.pointerLockElement) {
+        if (typeof document !== "undefined" && Mouse.element && "pointerLockElement" in document) {
             return document.pointerLockElement === Mouse.element;
         }
         return Mouse.grabbed;
@@ -113,5 +144,36 @@ export class Mouse {
             }
         }
         return true;
+    }
+
+    private static installPointerLockListeners(): void {
+        if (typeof document === "undefined" || Mouse.pointerLockDocument === document) {
+            return;
+        }
+        Mouse.pointerLockDocument?.removeEventListener("pointerlockchange", Mouse.handlePointerLockChange);
+        Mouse.pointerLockDocument?.removeEventListener("pointerlockerror", Mouse.handlePointerLockError);
+        document.addEventListener("pointerlockchange", Mouse.handlePointerLockChange);
+        document.addEventListener("pointerlockerror", Mouse.handlePointerLockError);
+        Mouse.pointerLockDocument = document;
+    }
+
+    private static readonly handlePointerLockChange = (): void => {
+        Mouse.syncGrabbedFromDocument();
+    };
+
+    private static readonly handlePointerLockError = (): void => {
+        Mouse.syncGrabbedFromDocument();
+    };
+
+    private static syncGrabbedFromDocument(): void {
+        if (typeof document !== "undefined" && Mouse.element && "pointerLockElement" in document) {
+            Mouse.grabbed = document.pointerLockElement === Mouse.element;
+        } else if (!Mouse.element) {
+            Mouse.grabbed = false;
+        }
+    }
+
+    private static isPromiseLike(value: unknown): value is Promise<void> {
+        return !!value && typeof (value as Promise<void>).then === "function";
     }
 }

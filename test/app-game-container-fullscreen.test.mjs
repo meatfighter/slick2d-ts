@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { AppGameContainer, Cursor, Display, Mouse } from "../dist/index.js";
+import { AppGameContainer, ApplicationGameContainer, Cursor, Display, Mouse } from "../dist/index.js";
 
 class FakeCanvas {
     constructor() {
@@ -49,10 +49,12 @@ function installBrowserGlobals() {
             appendChild: () => undefined
         },
         exitFullscreenCalls: 0,
+        exitPointerLockCalls: 0,
         fullscreenElement: null,
         head: {
             appendChild: () => undefined
         },
+        pointerLockElement: null,
         title: "",
         visibilityState: "visible",
         addEventListener: (type, listener) => {
@@ -74,6 +76,17 @@ function installBrowserGlobals() {
             for (const listener of listeners.get("fullscreenchange") ?? []) {
                 listener();
             }
+            return Promise.resolve();
+        },
+        dispatch(type) {
+            for (const listener of listeners.get(type) ?? []) {
+                listener();
+            }
+        },
+        exitPointerLock() {
+            this.exitPointerLockCalls += 1;
+            this.pointerLockElement = null;
+            this.dispatch("pointerlockchange");
             return Promise.resolve();
         },
         hasFocus: () => true,
@@ -200,6 +213,70 @@ test("high-DPI sizing keeps display APIs logical and canvas backing capped", () 
     assert.equal(container.getDevicePixelRatio(), 1);
     assert.equal(canvas.width, 320);
     assert.equal(canvas.height, 200);
+});
+
+test("destroy removes internally owned canvases", () => {
+    installBrowserGlobals();
+    const { canvas, container } = createContainer();
+    const parent = {
+        removed: [],
+        removeChild(child) {
+            this.removed.push(child);
+        }
+    };
+    canvas.parentNode = parent;
+    container.ownsCanvas = true;
+
+    container.destroy();
+
+    assert.deepEqual(parent.removed, [canvas]);
+    assert.equal(container.canvas, null);
+});
+
+test("ApplicationGameContainer destroy resets resizable state", () => {
+    installBrowserGlobals();
+    const game = createGame();
+    const container = new ApplicationGameContainer(game, 800, 600, false);
+
+    container.setResizable(true);
+    assert.equal(container.isResizable(), true);
+    assert.equal(Display.isResizable(), true);
+
+    container.destroy();
+
+    assert.equal(container.isResizable(), false);
+    assert.equal(Display.isResizable(), false);
+});
+
+test("Mouse grabbed state follows browser pointer lock success and release", async () => {
+    const { document } = installBrowserGlobals();
+    const canvas = new FakeCanvas();
+    canvas.requestPointerLock = () => {
+        document.pointerLockElement = canvas;
+        document.dispatch("pointerlockchange");
+        return Promise.resolve();
+    };
+    Mouse.setElement(canvas);
+
+    await Mouse.setGrabbed(true);
+
+    assert.equal(Mouse.isGrabbed(), true);
+
+    await Mouse.setGrabbed(false);
+
+    assert.equal(Mouse.isGrabbed(), false);
+    assert.equal(document.exitPointerLockCalls, 1);
+});
+
+test("Mouse grabbed state resets after rejected pointer lock requests", async () => {
+    installBrowserGlobals();
+    const canvas = new FakeCanvas();
+    canvas.requestPointerLock = () => Promise.reject(new Error("gesture required"));
+    Mouse.setElement(canvas);
+
+    await assert.rejects(() => Mouse.setGrabbed(true), /gesture required/);
+
+    assert.equal(Mouse.isGrabbed(), false);
 });
 
 test("high-DPI fullscreen restore preserves logical size and backing size separately", async () => {

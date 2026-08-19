@@ -60,6 +60,8 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     readonly GL_MODELVIEW_MATRIX = 2982;
     private canvas;
     private gl;
+    private contextOptions;
+    private contextLost;
     private solidProgram;
     private textureProgram;
     private buffer;
@@ -291,6 +293,7 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private applyActiveClip;
     private static normalizeClip;
     private static intersectClips;
+    private static isContextLost;
     private currentMatrix;
 }
 //# sourceMappingURL=WebGLRenderer.d.ts.map
