@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { AppGameContainer, ApplicationGameContainer, Cursor, Display, Mouse } from "../dist/index.js";
+import { AppGameContainer, ApplicationGameContainer, Cursor, Display, Mouse, Renderer } from "../dist/index.js";
 
 class FakeCanvas {
     constructor() {
+        this.listeners = new Map();
         this.fullscreenError = null;
+        this.parentNode = null;
+        this.tabIndex = -1;
         this.width = 800;
         this.height = 600;
         this.style = {
@@ -16,6 +19,20 @@ class FakeCanvas {
 
     getContext() {
         return null;
+    }
+
+    addEventListener(type, listener) {
+        this.listeners.set(type, listener);
+    }
+
+    removeEventListener(type, listener) {
+        if (this.listeners.get(type) === listener) {
+            this.listeners.delete(type);
+        }
+    }
+
+    focus() {
+        globalThis.document.activeElement = this;
     }
 
     requestFullscreen() {
@@ -44,10 +61,23 @@ function createGame() {
 
 function installBrowserGlobals() {
     const listeners = new Map();
-    const document = {
-        body: {
-            appendChild: () => undefined
+    const body = {
+        children: [],
+        appendChild(child) {
+            this.children.push(child);
+            child.parentNode = this;
+            return child;
         },
+        removeChild(child) {
+            this.children = this.children.filter((entry) => entry !== child);
+            child.parentNode = null;
+            return child;
+        }
+    };
+    const document = {
+        activeElement: null,
+        body,
+        documentElement: {},
         exitFullscreenCalls: 0,
         exitPointerLockCalls: 0,
         fullscreenElement: null,
@@ -112,6 +142,21 @@ function installBrowserGlobals() {
         value: window,
         writable: true
     });
+    Object.defineProperty(globalThis, "HTMLCanvasElement", {
+        configurable: true,
+        value: FakeCanvas,
+        writable: true
+    });
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+        configurable: true,
+        value: () => 1,
+        writable: true
+    });
+    Object.defineProperty(globalThis, "cancelAnimationFrame", {
+        configurable: true,
+        value: () => undefined,
+        writable: true
+    });
 
     return { document, window };
 }
@@ -146,12 +191,33 @@ function installVisibleThenTransparentCursor(canvas) {
     assert.equal(canvas.style.cursor, "none");
 }
 
+async function withMockedRenderer(callback) {
+    const backend = Renderer.getBackend();
+    const originalInitialize = backend.initialize;
+    const originalInitDisplay = backend.initDisplay;
+    const originalDispose = backend.dispose;
+    backend.initialize = () => undefined;
+    backend.initDisplay = () => undefined;
+    backend.dispose = () => undefined;
+    try {
+        await callback();
+    } finally {
+        backend.initialize = originalInitialize;
+        backend.initDisplay = originalInitDisplay;
+        backend.dispose = originalDispose;
+    }
+}
+
 afterEach(() => {
     Mouse.setNativeCursor(null);
     Mouse.setElement(null);
     Display.destroy();
     Display.setActiveContainer(null);
+    Display.setParent(null);
+    delete globalThis.cancelAnimationFrame;
     delete globalThis.document;
+    delete globalThis.HTMLCanvasElement;
+    delete globalThis.requestAnimationFrame;
     delete globalThis.window;
 });
 
@@ -231,6 +297,72 @@ test("destroy removes internally owned canvases", () => {
 
     assert.deepEqual(parent.removed, [canvas]);
     assert.equal(container.canvas, null);
+});
+
+test("owned canvas defaults to browser input capture", async () => {
+    const { document } = installBrowserGlobals();
+    const container = new AppGameContainer(createGame(), 320, 200, false);
+
+    await withMockedRenderer(async () => {
+        await container.start();
+        try {
+            assert.equal(document.body.children[0].style.touchAction, "none");
+        } finally {
+            container.destroy();
+        }
+    });
+});
+
+test("host canvas defaults to browser input non-capture", async () => {
+    installBrowserGlobals();
+    const canvas = new FakeCanvas();
+    canvas.style.touchAction = "pan-x";
+    Display.setParent(canvas);
+    const container = new AppGameContainer(createGame(), 320, 200, false);
+
+    await withMockedRenderer(async () => {
+        await container.start();
+        try {
+            assert.equal(canvas.style.touchAction, "pan-x");
+        } finally {
+            container.destroy();
+        }
+    });
+});
+
+test("explicit browser input capture true overrides host canvas default", async () => {
+    installBrowserGlobals();
+    const canvas = new FakeCanvas();
+    canvas.style.touchAction = "pan-x";
+    Display.setParent(canvas);
+    const container = new AppGameContainer(createGame(), 320, 200, false);
+    container.getInput().setBrowserInputCaptureEnabled(true);
+
+    await withMockedRenderer(async () => {
+        await container.start();
+        try {
+            assert.equal(canvas.style.touchAction, "none");
+        } finally {
+            container.destroy();
+        }
+    });
+
+    assert.equal(canvas.style.touchAction, "pan-x");
+});
+
+test("explicit browser input capture false overrides owned canvas default", async () => {
+    const { document } = installBrowserGlobals();
+    const container = new AppGameContainer(createGame(), 320, 200, false);
+    container.getInput().setBrowserInputCaptureEnabled(false);
+
+    await withMockedRenderer(async () => {
+        await container.start();
+        try {
+            assert.equal(document.body.children[0].style.touchAction, undefined);
+        } finally {
+            container.destroy();
+        }
+    });
 });
 
 test("ApplicationGameContainer destroy resets resizable state", () => {

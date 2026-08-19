@@ -277,6 +277,7 @@ export class AppGameContainer extends GameContainer {
             this.canvas.focus();
             Mouse.setElement(this.canvas);
             this.input.bindToElement(window);
+            this.input.setBrowserInputCaptureDefault(this.ownsCanvas);
             this.input.setPreventDefaultElement(this.canvas);
             Display.setActiveContainer(this);
             Display.create();

@@ -176,6 +176,7 @@ export class Input {
     preventDefaultElement = null;
     preventDefaultTouchAction = null;
     browserInputCapture = true;
+    browserInputCaptureConfigured = false;
     cachedGamepads = [];
     gamepadsCached = false;
     gamepadCacheGeneration = -1;
@@ -233,6 +234,17 @@ export class Input {
     }
     /** Browser parity helper: controls whether accepted canvas input suppresses browser gestures. */
     setBrowserInputCaptureEnabled(enabled) {
+        this.browserInputCaptureConfigured = true;
+        this.setBrowserInputCapture(enabled);
+    }
+    /** Browser parity helper: applies a container default unless the caller chose explicitly. */
+    setBrowserInputCaptureDefault(enabled) {
+        if (this.browserInputCaptureConfigured) {
+            return;
+        }
+        this.setBrowserInputCapture(enabled);
+    }
+    setBrowserInputCapture(enabled) {
         if (this.browserInputCapture === enabled) {
             return;
         }

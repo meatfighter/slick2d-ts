@@ -9,6 +9,15 @@
 - Fullscreen, pointer lock, audio unlock, high-DPI backing stores, visibility throttling, and gamepad polling follow browser security and lifecycle rules.
 - Keyboard, pointer, wheel, context-menu, touch-action, and gamepad input are mapped to Slick/LWJGL-style APIs. Browser-reserved keys or gestures may still be intercepted by the user agent.
 
+## Approximate / Configuration-Only Compatibility
+
+These APIs are present for Java source compatibility, and their requested values are stored or queried, but the browser runtime does not currently emulate the full desktop behavior behind them:
+
+- `Input.setDoubleClickInterval(...)` and `Input.setMouseClickTolerance(...)`: values are stored, but pointer click detection currently reports single-click callbacks with click count `1`.
+- `Input.enableKeyRepeat(initial, interval)`: enables repeated browser `keydown` events, but does not synthesize Slick-style repeat timing from the requested initial delay or repeat interval.
+- `InternalTextureLoader.setHoldTextureData(...)`, `InternalTextureLoader.setDeferredLoading(...)`, and `InternalTextureLoader.set16BitMode()`: values are stored/queryable, but browser image decoding, retained image data, texture upload, and texture storage continue to follow the WebGL renderer's normal path.
+- `SoundStore.setDeferredLoading(...)`: the value is stored/queryable, but `Sound` and `Music` constructors still queue browser audio fetch/decode work through the current resource-loading path.
+
 ## Intentional Compatibility No-Ops
 
 These methods exist so copied Java code can call familiar APIs without crashing, but the browser port does not currently emulate their desktop effects:
