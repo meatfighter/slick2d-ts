@@ -93,10 +93,7 @@ export class WebGLTextureResource {
     /** Returns or creates the WebGL texture for a context. */
     ensureTexture(gl) {
         if (this.texture) {
-            if (typeof gl.isTexture !== "function" || gl.isTexture(this.texture)) {
-                return this.texture;
-            }
-            this.texture = null;
+            return this.texture;
         }
         const source = this.source;
         if (!source) {

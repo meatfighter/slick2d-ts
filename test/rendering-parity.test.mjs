@@ -149,6 +149,7 @@ class FakeTextureGL {
         this.deletedFramebuffers = [];
         this.deletedTextures = [];
         this.framebuffers = new Set();
+        this.isTextureCalls = 0;
         this.nextFramebuffer = 1;
         this.nextTexture = 1;
         this.textures = new Set();
@@ -191,6 +192,7 @@ class FakeTextureGL {
     }
 
     isTexture(texture) {
+        this.isTextureCalls += 1;
         return this.textures.has(texture);
     }
 
@@ -715,6 +717,23 @@ test("WebGLTextureResource invalidation recreates stale GPU handles without disp
         assert.deepEqual(gl.deletedTextures, [first]);
         assert.equal(resource.ensureTexture(gl), resource.ensureTexture(gl));
         assert.notEqual(resource.ensureTexture(gl), first);
+    } finally {
+        resource.dispose(null);
+    }
+});
+
+test("WebGLTextureResource cached reuse avoids WebGL validity checks", () => {
+    const gl = new FakeTextureGL();
+    const source = { height: 4, width: 4 };
+    const resource = new WebGLTextureResource(source, Image.FILTER_NEAREST, null);
+
+    try {
+        const first = resource.ensureTexture(gl);
+
+        assert.ok(first);
+        assert.equal(resource.ensureTexture(gl), first);
+        assert.equal(resource.ensureTexture(gl), first);
+        assert.equal(gl.isTextureCalls, 0);
     } finally {
         resource.dispose(null);
     }
