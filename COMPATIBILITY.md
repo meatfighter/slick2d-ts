@@ -9,6 +9,13 @@
 - Fullscreen, pointer lock, audio unlock, high-DPI backing stores, visibility throttling, and gamepad polling follow browser security and lifecycle rules.
 - Keyboard, pointer, wheel, context-menu, touch-action, and gamepad input are mapped to Slick/LWJGL-style APIs. Browser-reserved keys or gestures may still be intercepted by the user agent.
 
+## Browser Rendering Extensions
+
+These APIs are available for browser ports that need whole-scene display treatments. They are not Java Slick2D APIs:
+
+- `Graphics.setColorInverted(...)` and `Graphics.isColorInverted()`: invert subsequent renderer draw calls until the next safe renderer reset or explicit clear through `setColorInverted(false)`.
+- `Graphics.setMonochromePalette(...)`, `Graphics.clearMonochromePalette()`, and `Graphics.isMonochromePaletteEnabled()`: map rendered RGB luminance between two replacement colors while preserving the rendered alpha. Endpoint alpha values are ignored. Palette shaders are compiled lazily on first use, and callers should clear the palette with `try`/`finally` when applying it to a bounded render section.
+
 ## Approximate / Configuration-Only Compatibility
 
 These APIs are present for Java source compatibility, and their requested values are stored or queried, but the browser runtime does not currently emulate the full desktop behavior behind them:

@@ -52,6 +52,17 @@ export declare class Graphics {
     setColorInverted(inverted: boolean): void;
     /** Browser extension: reports the active renderer RGB inversion state. */
     isColorInverted(): boolean;
+    /**
+     * Browser extension: maps rendered luminance between two replacement colors.
+     *
+     * Source black maps to blackReplacement and source white maps to
+     * whiteReplacement. Alpha is preserved.
+     */
+    setMonochromePalette(blackReplacement: Color, whiteReplacement: Color): void;
+    /** Browser extension: restores the renderer programs active before the monochrome palette. */
+    clearMonochromePalette(): void;
+    /** Browser extension: reports whether the optional monochrome palette renderer is active. */
+    isMonochromePaletteEnabled(): boolean;
     /** Java Slick2D counterpart: Graphics.getFont(). */
     getFont(): Font;
     /** Java Slick2D counterpart: Graphics.setFont(Font). */

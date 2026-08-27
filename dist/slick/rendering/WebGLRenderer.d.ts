@@ -62,8 +62,12 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private gl;
     private contextOptions;
     private contextLost;
+    private normalSolidProgram;
+    private normalTextureProgram;
     private solidProgram;
     private textureProgram;
+    private monochromeSolidProgram;
+    private monochromeTextureProgram;
     private buffer;
     private batch;
     private width;
@@ -79,6 +83,8 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private lineWidth;
     private globalAlphaScale;
     private colorInverted;
+    private monochromePalette;
+    private monochromePaletteEnabled;
     private currentColor;
     private transformStack;
     private readonly matrixPool;
@@ -145,6 +151,17 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     setColorInverted(inverted: boolean): void;
     /** Browser extension: reports the active RGB inversion state. */
     isColorInverted(): boolean;
+    /**
+     * Browser extension: maps rendered luminance between replacement colors.
+     *
+     * Palette programs are compiled lazily. The normal and inversion shader
+     * programs remain untouched and active for callers that never opt in.
+     */
+    setMonochromePalette(blackReplacement: Color, whiteReplacement: Color): void;
+    /** Browser extension: restores the normal programs active before the palette was enabled. */
+    clearMonochromePalette(): void;
+    /** Browser extension: reports whether the optional palette programs are active. */
+    isMonochromePaletteEnabled(): boolean;
     /** Saves the current matrix. */
     pushTransform(): void;
     /** Restores the previous matrix. */
@@ -274,6 +291,11 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     /** Returns the current renderer matrix. */
     getCurrentMatrix(): Matrix3;
     private recordListCommand;
+    private ensureMonochromePalettePrograms;
+    private applyMonochromePaletteUniforms;
+    private disableMonochromePalette;
+    private static normalizeColorChannel;
+    private static monochromePaletteMatches;
     private queueTextureQuad;
     private flushTextureBatch;
     private drawSolidPolygon;

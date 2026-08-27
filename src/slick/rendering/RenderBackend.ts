@@ -89,6 +89,9 @@ export interface RenderBackend {
     clearWorldClip(): void;
     setColorInverted(inverted: boolean): void;
     isColorInverted(): boolean;
+    setMonochromePalette(blackReplacement: Color, whiteReplacement: Color): void;
+    clearMonochromePalette(): void;
+    isMonochromePaletteEnabled(): boolean;
     pushTransform(): void;
     popTransform(): void;
     translate(x: number, y: number): void;

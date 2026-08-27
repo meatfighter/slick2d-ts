@@ -25,6 +25,11 @@ type ScreenClip = {
     width: number;
     height: number;
 };
+type RgbColor = readonly [red: number, green: number, blue: number];
+type MonochromePaletteState = Readonly<{
+    black: RgbColor;
+    white: RgbColor;
+}>;
 
 const SOLID_VERTEX = `#version 300 es
 in vec2 a_position;
@@ -81,6 +86,56 @@ void main() {
     if (u_invert > 0.5) {
         color.rgb = 1.0 - color.rgb;
     }
+    outColor = color;
+}`;
+
+/*
+ * These programs are deliberately separate from the normal programs above.
+ * They are compiled only after setMonochromePalette() is first called, so a
+ * game that never opts in executes the original shaders unchanged.
+ */
+const MONOCHROME_SOLID_FRAGMENT = `#version 300 es
+precision mediump float;
+uniform vec4 u_color;
+uniform float u_invert;
+uniform vec3 u_paletteBlack;
+uniform vec3 u_paletteWhite;
+in vec4 v_color;
+out vec4 outColor;
+void main() {
+    vec4 color = v_color * u_color;
+    float luminance = clamp(dot(color.rgb, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+    if (u_invert > 0.5) {
+        luminance = 1.0 - luminance;
+    }
+    color.rgb = mix(u_paletteBlack, u_paletteWhite, luminance);
+    outColor = color;
+}`;
+
+const MONOCHROME_TEXTURE_FRAGMENT = `#version 300 es
+precision mediump float;
+uniform sampler2D u_texture;
+uniform vec4 u_color;
+uniform float u_flash;
+uniform float u_invert;
+uniform vec3 u_paletteBlack;
+uniform vec3 u_paletteWhite;
+in vec2 v_texCoord;
+in vec4 v_color;
+out vec4 outColor;
+void main() {
+    vec4 texel = texture(u_texture, v_texCoord);
+    vec4 color;
+    if (u_flash > 0.5) {
+        color = vec4(v_color.rgb * u_color.rgb, texel.a * v_color.a * u_color.a);
+    } else {
+        color = texel * v_color * u_color;
+    }
+    float luminance = clamp(dot(color.rgb, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+    if (u_invert > 0.5) {
+        luminance = 1.0 - luminance;
+    }
+    color.rgb = mix(u_paletteBlack, u_paletteWhite, luminance);
     outColor = color;
 }`;
 
@@ -149,8 +204,12 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private gl: WebGL2RenderingContext | null = null;
     private contextOptions: WebGLContextAttributes = {};
     private contextLost = false;
+    private normalSolidProgram: WebGLShaderProgram | null = null;
+    private normalTextureProgram: WebGLShaderProgram | null = null;
     private solidProgram: WebGLShaderProgram | null = null;
     private textureProgram: WebGLShaderProgram | null = null;
+    private monochromeSolidProgram: WebGLShaderProgram | null = null;
+    private monochromeTextureProgram: WebGLShaderProgram | null = null;
     private buffer: WebGLBuffer | null = null;
     private batch = new WebGLBatch();
     private width = 1;
@@ -166,6 +225,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private lineWidth = 1;
     private globalAlphaScale = 1;
     private colorInverted = false;
+    private monochromePalette: MonochromePaletteState | null = null;
+    private monochromePaletteEnabled = false;
     private currentColor = [1, 1, 1, 1];
     private transformStack: Matrix3[] = [identityMatrix3()];
     private readonly matrixPool: Matrix3[] = [];
@@ -210,6 +271,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
         };
         this.colorInverted = false;
         this.textureBatchInverted = false;
+        this.monochromePalette = null;
+        this.monochromePaletteEnabled = false;
+        this.normalSolidProgram = null;
+        this.normalTextureProgram = null;
+        this.monochromeSolidProgram = null;
+        this.monochromeTextureProgram = null;
+        this.solidProgram = null;
+        this.textureProgram = null;
         this.canvas = canvas;
         this.contextOptions = contextOptions;
         const gl = canvas.getContext("webgl2", contextOptions);
@@ -218,8 +287,10 @@ export class WebGLRenderer implements RenderBackend, SGL {
         }
         this.contextLost = false;
         this.gl = gl;
-        this.solidProgram = new WebGLShaderProgram(gl, SOLID_VERTEX, SOLID_FRAGMENT);
-        this.textureProgram = new WebGLShaderProgram(gl, TEXTURE_VERTEX, TEXTURE_FRAGMENT);
+        this.normalSolidProgram = new WebGLShaderProgram(gl, SOLID_VERTEX, SOLID_FRAGMENT);
+        this.normalTextureProgram = new WebGLShaderProgram(gl, TEXTURE_VERTEX, TEXTURE_FRAGMENT);
+        this.solidProgram = this.normalSolidProgram;
+        this.textureProgram = this.normalTextureProgram;
         this.buffer = gl.createBuffer();
         this.currentTarget = null;
         gl.enable(gl.BLEND);
@@ -621,6 +692,82 @@ export class WebGLRenderer implements RenderBackend, SGL {
         return this.colorInverted;
     }
 
+    /**
+     * Browser extension: maps rendered luminance between replacement colors.
+     *
+     * Palette programs are compiled lazily. The normal and inversion shader
+     * programs remain untouched and active for callers that never opt in.
+     */
+    public setMonochromePalette(blackReplacement: Color, whiteReplacement: Color): void {
+        const blackRed = WebGLRenderer.normalizeColorChannel(blackReplacement.r);
+        const blackGreen = WebGLRenderer.normalizeColorChannel(blackReplacement.g);
+        const blackBlue = WebGLRenderer.normalizeColorChannel(blackReplacement.b);
+        const whiteRed = WebGLRenderer.normalizeColorChannel(whiteReplacement.r);
+        const whiteGreen = WebGLRenderer.normalizeColorChannel(whiteReplacement.g);
+        const whiteBlue = WebGLRenderer.normalizeColorChannel(whiteReplacement.b);
+        const paletteChanged = !WebGLRenderer.monochromePaletteMatches(
+            this.monochromePalette,
+            blackRed,
+            blackGreen,
+            blackBlue,
+            whiteRed,
+            whiteGreen,
+            whiteBlue
+        );
+        if (this.monochromePaletteEnabled && !paletteChanged) {
+            return;
+        }
+
+        this.flushTextureBatch();
+        if (!this.monochromePaletteEnabled) {
+            this.normalSolidProgram ??= this.solidProgram;
+            this.normalTextureProgram ??= this.textureProgram;
+        }
+        if (paletteChanged) {
+            this.monochromePalette = {
+                black: [blackRed, blackGreen, blackBlue],
+                white: [whiteRed, whiteGreen, whiteBlue]
+            };
+        }
+        this.monochromePaletteEnabled = true;
+
+        const gl = this.gl;
+        if (!gl) {
+            return;
+        }
+        try {
+            const programsCreated = this.ensureMonochromePalettePrograms(gl);
+            if (programsCreated || paletteChanged) {
+                this.applyMonochromePaletteUniforms(gl);
+            }
+            this.solidProgram = this.monochromeSolidProgram;
+            this.textureProgram = this.monochromeTextureProgram;
+        } catch (error) {
+            if (!WebGLRenderer.isContextLost(gl)) {
+                this.monochromeSolidProgram?.dispose(gl);
+                this.monochromeTextureProgram?.dispose(gl);
+            }
+            this.monochromeSolidProgram = null;
+            this.monochromeTextureProgram = null;
+            this.disableMonochromePalette(false);
+            throw error;
+        }
+    }
+
+    /** Browser extension: restores the normal programs active before the palette was enabled. */
+    public clearMonochromePalette(): void {
+        if (!this.monochromePaletteEnabled) {
+            return;
+        }
+        this.flushTextureBatch();
+        this.disableMonochromePalette(false);
+    }
+
+    /** Browser extension: reports whether the optional palette programs are active. */
+    public isMonochromePaletteEnabled(): boolean {
+        return this.monochromePaletteEnabled;
+    }
+
     /** Saves the current matrix. */
     public pushTransform(): void {
         const matrix = this.matrixPool.pop() ?? identityMatrix3();
@@ -735,12 +882,18 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.textureBatchFlash = false;
         this.textureBatchInverted = false;
         this.colorInverted = false;
+        this.monochromePalette = null;
+        this.monochromePaletteEnabled = false;
         this.currentTarget?.invalidate(gl);
         this.textures.clear();
         this.currentTextureId = 0;
         this.gl = null;
+        this.normalSolidProgram = null;
+        this.normalTextureProgram = null;
         this.solidProgram = null;
         this.textureProgram = null;
+        this.monochromeSolidProgram = null;
+        this.monochromeTextureProgram = null;
         this.buffer = null;
     }
 
@@ -758,11 +911,29 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (canDelete && this.buffer) {
             gl.deleteBuffer(this.buffer);
         }
-        if (canDelete && this.solidProgram) {
-            this.solidProgram.dispose(gl);
-        }
-        if (canDelete && this.textureProgram) {
-            this.textureProgram.dispose(gl);
+        if (canDelete) {
+            const programs = new Set<WebGLShaderProgram>();
+            if (this.normalSolidProgram) {
+                programs.add(this.normalSolidProgram);
+            }
+            if (this.normalTextureProgram) {
+                programs.add(this.normalTextureProgram);
+            }
+            if (this.solidProgram) {
+                programs.add(this.solidProgram);
+            }
+            if (this.textureProgram) {
+                programs.add(this.textureProgram);
+            }
+            if (this.monochromeSolidProgram) {
+                programs.add(this.monochromeSolidProgram);
+            }
+            if (this.monochromeTextureProgram) {
+                programs.add(this.monochromeTextureProgram);
+            }
+            for (const program of programs) {
+                program.dispose(gl);
+            }
         }
         if (canDelete) {
             for (const texture of this.textures.values()) {
@@ -781,11 +952,17 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.textureBatchFlash = false;
         this.textureBatchInverted = false;
         this.colorInverted = false;
+        this.monochromePalette = null;
+        this.monochromePaletteEnabled = false;
         this.contextLost = false;
         this.gl = null;
         this.buffer = null;
+        this.normalSolidProgram = null;
+        this.normalTextureProgram = null;
         this.solidProgram = null;
         this.textureProgram = null;
+        this.monochromeSolidProgram = null;
+        this.monochromeTextureProgram = null;
         this.currentTarget = null;
         this.canvas = null;
     }
@@ -1317,6 +1494,84 @@ export class WebGLRenderer implements RenderBackend, SGL {
         }
         this.lists.get(this.recordingList)?.push(command);
         return this.recordingOption === this.GL_COMPILE;
+    }
+
+    private ensureMonochromePalettePrograms(gl: WebGL2RenderingContext): boolean {
+        if (this.monochromeSolidProgram !== null && this.monochromeTextureProgram !== null) {
+            return false;
+        }
+
+        let solidProgram: WebGLShaderProgram | null = null;
+        try {
+            solidProgram = new WebGLShaderProgram(gl, SOLID_VERTEX, MONOCHROME_SOLID_FRAGMENT);
+            const textureProgram = new WebGLShaderProgram(gl, TEXTURE_VERTEX, MONOCHROME_TEXTURE_FRAGMENT);
+            this.monochromeSolidProgram = solidProgram;
+            this.monochromeTextureProgram = textureProgram;
+            return true;
+        } catch (error) {
+            if (solidProgram !== null && !WebGLRenderer.isContextLost(gl)) {
+                solidProgram.dispose(gl);
+            }
+            this.monochromeSolidProgram = null;
+            this.monochromeTextureProgram = null;
+            throw error;
+        }
+    }
+
+    private applyMonochromePaletteUniforms(gl: WebGL2RenderingContext): void {
+        const palette = this.monochromePalette;
+        const solidProgram = this.monochromeSolidProgram;
+        const textureProgram = this.monochromeTextureProgram;
+        if (palette === null || solidProgram === null || textureProgram === null) {
+            return;
+        }
+
+        for (const program of [solidProgram, textureProgram]) {
+            gl.useProgram(program.program);
+            const blackLocation = program.getUniformLocation(gl, "u_paletteBlack");
+            gl.uniform3f(blackLocation, palette.black[0], palette.black[1], palette.black[2]);
+            const whiteLocation = program.getUniformLocation(gl, "u_paletteWhite");
+            gl.uniform3f(whiteLocation, palette.white[0], palette.white[1], palette.white[2]);
+        }
+    }
+
+    private disableMonochromePalette(clearCachedPalette: boolean): void {
+        const wasEnabled = this.monochromePaletteEnabled;
+        this.monochromePaletteEnabled = false;
+        if (wasEnabled) {
+            this.solidProgram = this.normalSolidProgram;
+            this.textureProgram = this.normalTextureProgram;
+        }
+        if (clearCachedPalette) {
+            this.monochromePalette = null;
+        }
+    }
+
+    private static normalizeColorChannel(value: number): number {
+        if (!Number.isFinite(value)) {
+            return 0;
+        }
+        return Math.max(0, Math.min(1, value));
+    }
+
+    private static monochromePaletteMatches(
+        palette: MonochromePaletteState | null,
+        blackRed: number,
+        blackGreen: number,
+        blackBlue: number,
+        whiteRed: number,
+        whiteGreen: number,
+        whiteBlue: number
+    ): boolean {
+        return (
+            palette !== null &&
+            palette.black[0] === blackRed &&
+            palette.black[1] === blackGreen &&
+            palette.black[2] === blackBlue &&
+            palette.white[0] === whiteRed &&
+            palette.white[1] === whiteGreen &&
+            palette.white[2] === whiteBlue
+        );
     }
 
     private queueTextureQuad(

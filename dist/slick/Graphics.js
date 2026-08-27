@@ -128,6 +128,23 @@ export class Graphics {
     isColorInverted() {
         return Renderer.getBackend().isColorInverted();
     }
+    /**
+     * Browser extension: maps rendered luminance between two replacement colors.
+     *
+     * Source black maps to blackReplacement and source white maps to
+     * whiteReplacement. Alpha is preserved.
+     */
+    setMonochromePalette(blackReplacement, whiteReplacement) {
+        Renderer.getBackend().setMonochromePalette(blackReplacement, whiteReplacement);
+    }
+    /** Browser extension: restores the renderer programs active before the monochrome palette. */
+    clearMonochromePalette() {
+        Renderer.getBackend().clearMonochromePalette();
+    }
+    /** Browser extension: reports whether the optional monochrome palette renderer is active. */
+    isMonochromePaletteEnabled() {
+        return Renderer.getBackend().isMonochromePaletteEnabled();
+    }
     /** Java Slick2D counterpart: Graphics.getFont(). */
     getFont() {
         return this.font;
