@@ -1,6 +1,7 @@
 export * from "./slick/AppGameContainer.js";
 export * from "./slick/ApplicationGameContainer.js";
 export * from "./slick/BasicGame.js";
+export * from "./slick/BufferedScalableGame.js";
 export * from "./slick/Color.js";
 export * from "./slick/ControlledInputReciever.js";
 export * from "./slick/ControllerListener.js";

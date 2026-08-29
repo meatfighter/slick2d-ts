@@ -96,6 +96,37 @@ class FakeBatchGL {
     viewport() {}
 }
 
+class FakeTargetStackGL extends FakeBatchGL {
+    constructor() {
+        super();
+        this.bindFramebufferCalls = [];
+        this.disableCalls = [];
+        this.enableCalls = [];
+        this.scissorCalls = [];
+        this.viewportCalls = [];
+    }
+
+    bindFramebuffer(target, framebuffer) {
+        this.bindFramebufferCalls.push([target, framebuffer]);
+    }
+
+    disable(capability) {
+        this.disableCalls.push(capability);
+    }
+
+    enable(capability) {
+        this.enableCalls.push(capability);
+    }
+
+    scissor(...args) {
+        this.scissorCalls.push(args);
+    }
+
+    viewport(...args) {
+        this.viewportCalls.push(args);
+    }
+}
+
 class FakeCopyGL {
     constructor() {
         this.COLOR_BUFFER_BIT = 0x4000;
@@ -565,6 +596,47 @@ test("WebGLRenderer copyArea resolves high-DPI source rectangles into logical re
     assert.deepEqual(gl.copyTexSubImage2DCalls, []);
     assert.deepEqual(gl.blitFramebufferCalls, [[4, 10, 10, 14, 0, 0, 3, 2, gl.COLOR_BUFFER_BIT, gl.NEAREST]]);
     assert.deepEqual(gl.bindFramebufferCalls.at(-1), [gl.FRAMEBUFFER, "source-framebuffer"]);
+});
+
+test("WebGLRenderer render target stack restores display and target dimensions", () => {
+    const gl = new FakeTargetStackGL();
+    const renderer = new WebGLRenderer();
+    renderer.gl = gl;
+    renderer.initDisplay(100, 50, 200, 100);
+    renderer.setClip(10, 5, 20, 10);
+    const targetA = {
+        framebuffer: "target-a",
+        height: 25,
+        width: 50,
+        ensure: () => undefined
+    };
+    const targetB = {
+        framebuffer: "target-b",
+        height: 30,
+        width: 60,
+        ensure: () => undefined
+    };
+
+    renderer.pushRenderTarget(targetA);
+
+    assert.equal(renderer.getRenderTarget(), targetA);
+    assert.deepEqual(gl.bindFramebufferCalls.at(-1), [gl.FRAMEBUFFER, "target-a"]);
+    assert.deepEqual(gl.viewportCalls.at(-1), [0, 0, 50, 25]);
+    assert.deepEqual(gl.scissorCalls.at(-1), [10, 10, 20, 10]);
+
+    renderer.pushRenderTarget(targetB);
+    assert.equal(renderer.getRenderTarget(), targetB);
+
+    renderer.popRenderTarget();
+    assert.equal(renderer.getRenderTarget(), targetA);
+    assert.deepEqual(gl.bindFramebufferCalls.at(-1), [gl.FRAMEBUFFER, "target-a"]);
+
+    renderer.popRenderTarget();
+    assert.equal(renderer.getRenderTarget(), null);
+    assert.deepEqual(gl.bindFramebufferCalls.at(-1), [gl.FRAMEBUFFER, null]);
+    assert.deepEqual(gl.viewportCalls.at(-1), [0, 0, 200, 100]);
+    assert.deepEqual(gl.scissorCalls.at(-1), [20, 70, 40, 20]);
+    assert.throws(() => renderer.popRenderTarget(), /underflow/);
 });
 
 test("WebGLRenderer flash image draws use flash shader mode and split normal batches", () => {

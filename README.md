@@ -8,6 +8,7 @@ The goal is API and behavior parity for Java game ports that already depend on S
 
 - Slick-style container lifecycle with browser `requestAnimationFrame` timing.
 - WebGL2 rendering backend with logical CSS-pixel coordinates and high-DPI backing stores.
+- Optional native-resolution buffered scaling for pixel-art ports that need stable tile and sprite sampling.
 - Web Audio-backed `Sound`, `Music`, and `SoundStore` compatibility.
 - Keyboard, mouse, touch-style pointer, and browser Gamepad API input mapping.
 - Java parity helpers for numeric behavior, random numbers, binary reads, bitmap text, songs, and sprite drawing.

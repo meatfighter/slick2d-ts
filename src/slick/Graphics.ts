@@ -33,6 +33,7 @@ export class Graphics {
     public static readonly MODE_SCREEN = 6;
 
     private static current: Graphics | null = null;
+    private static readonly currentStack: Array<Graphics | null> = [];
     private color = Color.white.copy();
     private background = Color.black.copy();
     private font: Font = new CanvasFont();
@@ -744,14 +745,24 @@ export class Graphics {
 
     private beginRenderTarget(): WebGLRenderer {
         const renderer = Renderer.getBackend();
-        renderer.setRenderTarget(this.renderTarget);
+        if (this.renderTarget) {
+            Graphics.currentStack.push(Graphics.current);
+            renderer.pushRenderTarget(this.renderTarget);
+        } else {
+            renderer.setRenderTarget(null);
+        }
         Graphics.current = this;
         return renderer;
     }
 
     private endRenderTarget(renderer: WebGLRenderer): void {
         if (this.renderTarget) {
-            renderer.setRenderTarget(null);
+            const previous = Graphics.currentStack.pop();
+            if (previous === undefined) {
+                throw new SlickException("Graphics current stack underflow");
+            }
+            Graphics.current = previous;
+            renderer.popRenderTarget();
         }
     }
 }

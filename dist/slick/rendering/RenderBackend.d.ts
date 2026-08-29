@@ -17,7 +17,10 @@ export interface RenderBackend {
     initialize(canvas: HTMLCanvasElement, options: RenderBackendOptions, logicalWidth?: number, logicalHeight?: number, backingWidth?: number, backingHeight?: number): void;
     beginFrame(width: number, height: number, background: Color, backingWidth?: number, backingHeight?: number): void;
     endFrame(): void;
+    getRenderTarget(): WebGLRenderTarget | null;
     setRenderTarget(target: WebGLRenderTarget | null): void;
+    pushRenderTarget(target: WebGLRenderTarget | null): void;
+    popRenderTarget(): void;
     drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors?: boolean, useCurrentColorForNullTint?: boolean): void;
     drawImageFlash(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, tint: Color, transform: Matrix3): void;
     drawImageWarped(image: Image, x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors?: boolean, useCurrentColorForNullTint?: boolean): void;
@@ -36,6 +39,8 @@ export interface RenderBackend {
     setMonochromePalette(blackReplacement: Color, whiteReplacement: Color): void;
     clearMonochromePalette(): void;
     isMonochromePaletteEnabled(): boolean;
+    pushGlobalColorEffectsDisabled(): void;
+    popGlobalColorEffects(): void;
     pushTransform(): void;
     popTransform(): void;
     translate(x: number, y: number): void;

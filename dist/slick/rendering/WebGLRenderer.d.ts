@@ -1,4 +1,4 @@
-import type { Color } from "../Color.js";
+import { Color } from "../Color.js";
 import type { Image } from "../Image.js";
 import type { SGL } from "../opengl/renderer/SGL.js";
 import { Matrix3, RenderBackend, RenderBackendOptions } from "./RenderBackend.js";
@@ -99,6 +99,8 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private readonly modelViewScratch;
     private readonly scratchColor;
     private currentTarget;
+    private readonly renderTargetStack;
+    private readonly globalColorEffectStack;
     private immediateType;
     private immediateTexCoord;
     private immediateVertices;
@@ -118,8 +120,14 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     beginFrame(width: number, height: number, background: Color, backingWidth?: number, backingHeight?: number): void;
     /** Ends a frame by flushing pending work. */
     endFrame(): void;
+    /** Returns the active framebuffer-backed render target, or null for the display. */
+    getRenderTarget(): WebGLRenderTarget | null;
     /** Sets the active framebuffer-backed render target. */
     setRenderTarget(target: WebGLRenderTarget | null): void;
+    /** Saves the active render target and switches to another target. */
+    pushRenderTarget(target: WebGLRenderTarget | null): void;
+    /** Restores the render target saved by pushRenderTarget(). */
+    popRenderTarget(): void;
     /** Draws a textured quad. */
     drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors?: boolean, useCurrentColorForNullTint?: boolean): void;
     /** Draws a textured quad as a Slick flash/silhouette. */
@@ -162,6 +170,10 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     clearMonochromePalette(): void;
     /** Browser extension: reports whether the optional palette programs are active. */
     isMonochromePaletteEnabled(): boolean;
+    /** Browser extension: disables whole-frame color effects until restored. */
+    pushGlobalColorEffectsDisabled(): void;
+    /** Browser extension: restores color effects saved by pushGlobalColorEffectsDisabled(). */
+    popGlobalColorEffects(): void;
     /** Saves the current matrix. */
     pushTransform(): void;
     /** Restores the previous matrix. */
@@ -294,6 +306,7 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private ensureMonochromePalettePrograms;
     private applyMonochromePaletteUniforms;
     private disableMonochromePalette;
+    private static cloneMonochromePalette;
     private static normalizeColorChannel;
     private static monochromePaletteMatches;
     private queueTextureQuad;

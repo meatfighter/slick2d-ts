@@ -1,3 +1,4 @@
+import { Color } from "../Color.js";
 import { SlickException } from "../SlickException.js";
 import { identityMatrix3 } from "./RenderBackend.js";
 import { WebGLBatch } from "./WebGLBatch.js";
@@ -204,6 +205,8 @@ export class WebGLRenderer {
     modelViewScratch = new Float32Array(16);
     scratchColor = { r: 1, g: 1, b: 1, a: 1 };
     currentTarget = null;
+    renderTargetStack = [];
+    globalColorEffectStack = [];
     immediateType = 0;
     immediateTexCoord = [0, 0];
     immediateVertices = [];
@@ -248,6 +251,8 @@ export class WebGLRenderer {
         this.textureProgram = this.normalTextureProgram;
         this.buffer = gl.createBuffer();
         this.currentTarget = null;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         this.initDisplay(logicalWidth, logicalHeight, backingWidth, backingHeight);
@@ -260,6 +265,8 @@ export class WebGLRenderer {
         this.setDefaultDimensions(width, height, backingWidth, backingHeight);
         this.useDefaultDimensions();
         this.currentTarget = null;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         const gl = this.gl;
         if (!gl) {
             return;
@@ -277,6 +284,10 @@ export class WebGLRenderer {
     /** Ends a frame by flushing pending work. */
     endFrame() {
         this.flush();
+    }
+    /** Returns the active framebuffer-backed render target, or null for the display. */
+    getRenderTarget() {
+        return this.currentTarget;
     }
     /** Sets the active framebuffer-backed render target. */
     setRenderTarget(target) {
@@ -299,6 +310,20 @@ export class WebGLRenderer {
             this.useDefaultDimensions();
         }
         gl.viewport(0, 0, this.backingWidth, this.backingHeight);
+        this.applyActiveClip();
+    }
+    /** Saves the active render target and switches to another target. */
+    pushRenderTarget(target) {
+        this.renderTargetStack.push(this.currentTarget);
+        this.setRenderTarget(target);
+    }
+    /** Restores the render target saved by pushRenderTarget(). */
+    popRenderTarget() {
+        const target = this.renderTargetStack.pop();
+        if (target === undefined) {
+            throw new SlickException("Render target stack underflow");
+        }
+        this.setRenderTarget(target);
     }
     /** Draws a textured quad. */
     drawImage(image, x, y, width, height, srcX, srcY, srcWidth, srcHeight, alpha, tint, transform, useCornerColors = true, useCurrentColorForNullTint = false) {
@@ -530,6 +555,31 @@ export class WebGLRenderer {
     isMonochromePaletteEnabled() {
         return this.monochromePaletteEnabled;
     }
+    /** Browser extension: disables whole-frame color effects until restored. */
+    pushGlobalColorEffectsDisabled() {
+        this.flushTextureBatch();
+        this.globalColorEffectStack.push({
+            colorInverted: this.colorInverted,
+            monochromePalette: WebGLRenderer.cloneMonochromePalette(this.monochromePalette),
+            monochromePaletteEnabled: this.monochromePaletteEnabled
+        });
+        this.colorInverted = false;
+        this.disableMonochromePalette(false);
+    }
+    /** Browser extension: restores color effects saved by pushGlobalColorEffectsDisabled(). */
+    popGlobalColorEffects() {
+        const state = this.globalColorEffectStack.pop();
+        if (state === undefined) {
+            throw new SlickException("Global color effect stack underflow");
+        }
+        this.flushTextureBatch();
+        this.disableMonochromePalette(false);
+        this.monochromePalette = WebGLRenderer.cloneMonochromePalette(state.monochromePalette);
+        this.colorInverted = state.colorInverted;
+        if (state.monochromePaletteEnabled && state.monochromePalette !== null) {
+            this.setMonochromePalette(Color.fromFloats(state.monochromePalette.black[0], state.monochromePalette.black[1], state.monochromePalette.black[2], 1), Color.fromFloats(state.monochromePalette.white[0], state.monochromePalette.white[1], state.monochromePalette.white[2], 1));
+        }
+    }
     /** Saves the current matrix. */
     pushTransform() {
         const matrix = this.matrixPool.pop() ?? identityMatrix3();
@@ -640,6 +690,9 @@ export class WebGLRenderer {
         this.monochromePalette = null;
         this.monochromePaletteEnabled = false;
         this.currentTarget?.invalidate(gl);
+        this.currentTarget = null;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         this.textures.clear();
         this.currentTextureId = 0;
         this.gl = null;
@@ -708,6 +761,8 @@ export class WebGLRenderer {
         this.colorInverted = false;
         this.monochromePalette = null;
         this.monochromePaletteEnabled = false;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         this.contextLost = false;
         this.gl = null;
         this.buffer = null;
@@ -730,6 +785,9 @@ export class WebGLRenderer {
         this.flushTextureBatch();
         this.colorInverted = false;
         this.textureBatchInverted = false;
+        this.currentTarget = null;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         this.setDefaultDimensions(width, height, backingWidth, backingHeight);
         this.useDefaultDimensions();
         this.gl?.viewport(0, 0, this.backingWidth, this.backingHeight);
@@ -739,6 +797,9 @@ export class WebGLRenderer {
         this.flushTextureBatch();
         this.colorInverted = false;
         this.textureBatchInverted = false;
+        this.currentTarget = null;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         this.setDefaultDimensions(xsize, ysize, this.defaultBackingWidth, this.defaultBackingHeight);
         this.useDefaultDimensions();
         this.gl?.viewport(0, 0, this.backingWidth, this.backingHeight);
@@ -1215,6 +1276,15 @@ export class WebGLRenderer {
         if (clearCachedPalette) {
             this.monochromePalette = null;
         }
+    }
+    static cloneMonochromePalette(palette) {
+        if (palette === null) {
+            return null;
+        }
+        return {
+            black: [palette.black[0], palette.black[1], palette.black[2]],
+            white: [palette.white[0], palette.white[1], palette.white[2]]
+        };
     }
     static normalizeColorChannel(value) {
         if (!Number.isFinite(value)) {

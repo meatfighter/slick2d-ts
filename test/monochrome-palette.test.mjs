@@ -241,6 +241,27 @@ test("context loss and disposal clear optional palette state and program referen
     assert.equal(renderer.monochromePalette, null);
 });
 
+test("global color effect stack disables and restores inversion and monochrome palette", () => {
+    const renderer = new WebGLRenderer();
+    renderer.setColorInverted(true);
+    renderer.setMonochromePalette(Color.red, Color.white);
+
+    renderer.pushGlobalColorEffectsDisabled();
+
+    assert.equal(renderer.isColorInverted(), false);
+    assert.equal(renderer.isMonochromePaletteEnabled(), false);
+
+    renderer.setColorInverted(true);
+    renderer.setMonochromePalette(Color.black, Color.green);
+    renderer.popGlobalColorEffects();
+
+    assert.equal(renderer.isColorInverted(), true);
+    assert.equal(renderer.isMonochromePaletteEnabled(), true);
+    assert.deepEqual(renderer.monochromePalette.black, [1, 0, 0]);
+    assert.deepEqual(renderer.monochromePalette.white, [1, 1, 1]);
+    assert.throws(() => renderer.popGlobalColorEffects(), /underflow/);
+});
+
 test("Graphics monochrome-palette facade controls the active renderer state", () => {
     const renderer = Renderer.getBackend();
     const graphics = new Graphics(32, 16);

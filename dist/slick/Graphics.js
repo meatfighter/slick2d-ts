@@ -20,6 +20,7 @@ export class Graphics {
     static MODE_ADD = 5;
     static MODE_SCREEN = 6;
     static current = null;
+    static currentStack = [];
     color = Color.white.copy();
     background = Color.black.copy();
     font = new CanvasFont();
@@ -605,13 +606,24 @@ export class Graphics {
     }
     beginRenderTarget() {
         const renderer = Renderer.getBackend();
-        renderer.setRenderTarget(this.renderTarget);
+        if (this.renderTarget) {
+            Graphics.currentStack.push(Graphics.current);
+            renderer.pushRenderTarget(this.renderTarget);
+        }
+        else {
+            renderer.setRenderTarget(null);
+        }
         Graphics.current = this;
         return renderer;
     }
     endRenderTarget(renderer) {
         if (this.renderTarget) {
-            renderer.setRenderTarget(null);
+            const previous = Graphics.currentStack.pop();
+            if (previous === undefined) {
+                throw new SlickException("Graphics current stack underflow");
+            }
+            Graphics.current = previous;
+            renderer.popRenderTarget();
         }
     }
 }

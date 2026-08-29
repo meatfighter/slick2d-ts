@@ -27,7 +27,10 @@ export interface RenderBackend {
     ): void;
     beginFrame(width: number, height: number, background: Color, backingWidth?: number, backingHeight?: number): void;
     endFrame(): void;
+    getRenderTarget(): WebGLRenderTarget | null;
     setRenderTarget(target: WebGLRenderTarget | null): void;
+    pushRenderTarget(target: WebGLRenderTarget | null): void;
+    popRenderTarget(): void;
     drawImage(
         image: Image,
         x: number,
@@ -92,6 +95,8 @@ export interface RenderBackend {
     setMonochromePalette(blackReplacement: Color, whiteReplacement: Color): void;
     clearMonochromePalette(): void;
     isMonochromePaletteEnabled(): boolean;
+    pushGlobalColorEffectsDisabled(): void;
+    popGlobalColorEffects(): void;
     pushTransform(): void;
     popTransform(): void;
     translate(x: number, y: number): void;

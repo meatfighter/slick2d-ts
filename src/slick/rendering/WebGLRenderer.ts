@@ -1,4 +1,4 @@
-import type { Color } from "../Color.js";
+import { Color } from "../Color.js";
 import { SlickException } from "../SlickException.js";
 import type { Image } from "../Image.js";
 import type { SGL } from "../opengl/renderer/SGL.js";
@@ -29,6 +29,11 @@ type RgbColor = readonly [red: number, green: number, blue: number];
 type MonochromePaletteState = Readonly<{
     black: RgbColor;
     white: RgbColor;
+}>;
+type GlobalColorEffectState = Readonly<{
+    colorInverted: boolean;
+    monochromePalette: MonochromePaletteState | null;
+    monochromePaletteEnabled: boolean;
 }>;
 
 const SOLID_VERTEX = `#version 300 es
@@ -241,6 +246,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private readonly modelViewScratch = new Float32Array(16);
     private readonly scratchColor: Color = { r: 1, g: 1, b: 1, a: 1 } as Color;
     private currentTarget: WebGLRenderTarget | null = null;
+    private readonly renderTargetStack: Array<WebGLRenderTarget | null> = [];
+    private readonly globalColorEffectStack: GlobalColorEffectState[] = [];
     private immediateType = 0;
     private immediateTexCoord: [number, number] = [0, 0];
     private immediateVertices: number[] = [];
@@ -293,6 +300,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.textureProgram = this.normalTextureProgram;
         this.buffer = gl.createBuffer();
         this.currentTarget = null;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         this.initDisplay(logicalWidth, logicalHeight, backingWidth, backingHeight);
@@ -312,6 +321,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.setDefaultDimensions(width, height, backingWidth, backingHeight);
         this.useDefaultDimensions();
         this.currentTarget = null;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         const gl = this.gl;
         if (!gl) {
             return;
@@ -330,6 +341,11 @@ export class WebGLRenderer implements RenderBackend, SGL {
     /** Ends a frame by flushing pending work. */
     public endFrame(): void {
         this.flush();
+    }
+
+    /** Returns the active framebuffer-backed render target, or null for the display. */
+    public getRenderTarget(): WebGLRenderTarget | null {
+        return this.currentTarget;
     }
 
     /** Sets the active framebuffer-backed render target. */
@@ -352,6 +368,22 @@ export class WebGLRenderer implements RenderBackend, SGL {
             this.useDefaultDimensions();
         }
         gl.viewport(0, 0, this.backingWidth, this.backingHeight);
+        this.applyActiveClip();
+    }
+
+    /** Saves the active render target and switches to another target. */
+    public pushRenderTarget(target: WebGLRenderTarget | null): void {
+        this.renderTargetStack.push(this.currentTarget);
+        this.setRenderTarget(target);
+    }
+
+    /** Restores the render target saved by pushRenderTarget(). */
+    public popRenderTarget(): void {
+        const target = this.renderTargetStack.pop();
+        if (target === undefined) {
+            throw new SlickException("Render target stack underflow");
+        }
+        this.setRenderTarget(target);
     }
 
     /** Draws a textured quad. */
@@ -768,6 +800,36 @@ export class WebGLRenderer implements RenderBackend, SGL {
         return this.monochromePaletteEnabled;
     }
 
+    /** Browser extension: disables whole-frame color effects until restored. */
+    public pushGlobalColorEffectsDisabled(): void {
+        this.flushTextureBatch();
+        this.globalColorEffectStack.push({
+            colorInverted: this.colorInverted,
+            monochromePalette: WebGLRenderer.cloneMonochromePalette(this.monochromePalette),
+            monochromePaletteEnabled: this.monochromePaletteEnabled
+        });
+        this.colorInverted = false;
+        this.disableMonochromePalette(false);
+    }
+
+    /** Browser extension: restores color effects saved by pushGlobalColorEffectsDisabled(). */
+    public popGlobalColorEffects(): void {
+        const state = this.globalColorEffectStack.pop();
+        if (state === undefined) {
+            throw new SlickException("Global color effect stack underflow");
+        }
+        this.flushTextureBatch();
+        this.disableMonochromePalette(false);
+        this.monochromePalette = WebGLRenderer.cloneMonochromePalette(state.monochromePalette);
+        this.colorInverted = state.colorInverted;
+        if (state.monochromePaletteEnabled && state.monochromePalette !== null) {
+            this.setMonochromePalette(
+                Color.fromFloats(state.monochromePalette.black[0], state.monochromePalette.black[1], state.monochromePalette.black[2], 1),
+                Color.fromFloats(state.monochromePalette.white[0], state.monochromePalette.white[1], state.monochromePalette.white[2], 1)
+            );
+        }
+    }
+
     /** Saves the current matrix. */
     public pushTransform(): void {
         const matrix = this.matrixPool.pop() ?? identityMatrix3();
@@ -885,6 +947,9 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.monochromePalette = null;
         this.monochromePaletteEnabled = false;
         this.currentTarget?.invalidate(gl);
+        this.currentTarget = null;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         this.textures.clear();
         this.currentTextureId = 0;
         this.gl = null;
@@ -954,6 +1019,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.colorInverted = false;
         this.monochromePalette = null;
         this.monochromePaletteEnabled = false;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         this.contextLost = false;
         this.gl = null;
         this.buffer = null;
@@ -978,6 +1045,9 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.flushTextureBatch();
         this.colorInverted = false;
         this.textureBatchInverted = false;
+        this.currentTarget = null;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         this.setDefaultDimensions(width, height, backingWidth, backingHeight);
         this.useDefaultDimensions();
         this.gl?.viewport(0, 0, this.backingWidth, this.backingHeight);
@@ -988,6 +1058,9 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.flushTextureBatch();
         this.colorInverted = false;
         this.textureBatchInverted = false;
+        this.currentTarget = null;
+        this.renderTargetStack.length = 0;
+        this.globalColorEffectStack.length = 0;
         this.setDefaultDimensions(xsize, ysize, this.defaultBackingWidth, this.defaultBackingHeight);
         this.useDefaultDimensions();
         this.gl?.viewport(0, 0, this.backingWidth, this.backingHeight);
@@ -1545,6 +1618,16 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (clearCachedPalette) {
             this.monochromePalette = null;
         }
+    }
+
+    private static cloneMonochromePalette(palette: MonochromePaletteState | null): MonochromePaletteState | null {
+        if (palette === null) {
+            return null;
+        }
+        return {
+            black: [palette.black[0], palette.black[1], palette.black[2]],
+            white: [palette.white[0], palette.white[1], palette.white[2]]
+        };
     }
 
     private static normalizeColorChannel(value: number): number {
