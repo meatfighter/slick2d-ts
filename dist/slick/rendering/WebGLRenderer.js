@@ -216,6 +216,7 @@ export class WebGLRenderer {
     drawModeBlendSourceFactorStack = [];
     drawModeBlendDestinationFactorStack = [];
     drawModeColorMaskBitsStack = [];
+    colorMaskStateStack = [];
     immediateType = 0;
     immediateTexCoord = [0, 0];
     immediateVertices = [];
@@ -288,14 +289,15 @@ export class WebGLRenderer {
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, this.backingWidth, this.backingHeight);
-        // WebGL clear obeys colorMask, so force a full-channel clear.
-        this.pushNormalDrawModeState();
+        // WebGL clear obeys colorMask but ignores blend state, so widen only
+        // the color mask while preserving the persistent draw-mode blend state.
+        this.pushFullColorMask();
         try {
             gl.clearColor(background.r, background.g, background.b, background.a);
             gl.clear(gl.COLOR_BUFFER_BIT);
         }
         finally {
-            this.popDrawModeState();
+            this.popColorMask();
         }
         this.transformStack.length = 1;
         this.writeIdentity(this.transformStack[0]);
@@ -349,7 +351,6 @@ export class WebGLRenderer {
     }
     /** Saves the exact WebGL state controlled by Graphics.setDrawMode(). */
     pushDrawModeState() {
-        this.flushTextureBatch();
         this.drawModeBlendEnabledStack.push(this.blendEnabled);
         this.drawModeBlendSourceFactorStack.push(this.blendSourceFactor);
         this.drawModeBlendDestinationFactorStack.push(this.blendDestinationFactor);
@@ -369,12 +370,24 @@ export class WebGLRenderer {
             this.drawModeColorMaskBitsStack.length !== depth) {
             throw new SlickException("Draw-mode state stack underflow or corruption");
         }
-        this.flushTextureBatch();
         const colorMaskBits = this.drawModeColorMaskBitsStack.pop();
         const destinationFactor = this.drawModeBlendDestinationFactorStack.pop();
         const sourceFactor = this.drawModeBlendSourceFactorStack.pop();
         const blendEnabled = this.drawModeBlendEnabledStack.pop();
         this.applyDrawModeState(blendEnabled, sourceFactor, destinationFactor, colorMaskBits);
+    }
+    /** Saves the current color mask and makes all four channels writable. */
+    pushFullColorMask() {
+        this.colorMaskStateStack.push(this.colorMaskBits);
+        this.applyColorMaskBits(0b1111);
+    }
+    /** Restores the color mask saved by pushFullColorMask(). */
+    popColorMask() {
+        const colorMaskBits = this.colorMaskStateStack.pop();
+        if (colorMaskBits === undefined) {
+            throw new SlickException("Color-mask state stack underflow");
+        }
+        this.applyColorMaskBits(colorMaskBits);
     }
     /** Draws a textured quad. */
     drawImage(image, x, y, width, height, srcX, srcY, srcWidth, srcHeight, alpha, tint, transform, useCornerColors = true, useCurrentColorForNullTint = false) {
@@ -925,7 +938,7 @@ export class WebGLRenderer {
     }
     /** Java Slick2D counterpart: SGL.glColorMask(boolean, boolean, boolean, boolean). */
     glColorMask(red, green, blue, alpha) {
-        this.applyDrawModeState(this.blendEnabled, this.blendSourceFactor, this.blendDestinationFactor, WebGLRenderer.encodeColorMask(red, green, blue, alpha));
+        this.applyColorMaskBits(WebGLRenderer.encodeColorMask(red, green, blue, alpha));
     }
     /** Java Slick2D counterpart: SGL.glLoadIdentity(). */
     glLoadIdentity() {
@@ -1379,17 +1392,18 @@ export class WebGLRenderer {
         this.drawModeBlendSourceFactorStack.length = 0;
         this.drawModeBlendDestinationFactorStack.length = 0;
         this.drawModeColorMaskBitsStack.length = 0;
+        this.colorMaskStateStack.length = 0;
     }
     applyDrawModeState(blendEnabled, sourceFactor, destinationFactor, colorMaskBits) {
-        if (this.blendEnabled === blendEnabled &&
-            this.blendSourceFactor === sourceFactor &&
-            this.blendDestinationFactor === destinationFactor &&
-            this.colorMaskBits === colorMaskBits) {
+        const blendEnabledChanged = this.blendEnabled !== blendEnabled;
+        const blendFunctionChanged = this.blendSourceFactor !== sourceFactor || this.blendDestinationFactor !== destinationFactor;
+        const colorMaskChanged = this.colorMaskBits !== colorMaskBits;
+        if (!blendEnabledChanged && !blendFunctionChanged && !colorMaskChanged) {
             return;
         }
         this.flushTextureBatch();
         const gl = this.gl;
-        if (this.blendEnabled !== blendEnabled) {
+        if (blendEnabledChanged) {
             this.blendEnabled = blendEnabled;
             if (blendEnabled) {
                 gl?.enable(this.GL_BLEND);
@@ -1398,15 +1412,23 @@ export class WebGLRenderer {
                 gl?.disable(this.GL_BLEND);
             }
         }
-        if (this.blendSourceFactor !== sourceFactor || this.blendDestinationFactor !== destinationFactor) {
+        if (blendFunctionChanged) {
             this.blendSourceFactor = sourceFactor;
             this.blendDestinationFactor = destinationFactor;
             gl?.blendFunc(sourceFactor, destinationFactor);
         }
-        if (this.colorMaskBits !== colorMaskBits) {
+        if (colorMaskChanged) {
             this.colorMaskBits = colorMaskBits;
             gl?.colorMask((colorMaskBits & 0b0001) !== 0, (colorMaskBits & 0b0010) !== 0, (colorMaskBits & 0b0100) !== 0, (colorMaskBits & 0b1000) !== 0);
         }
+    }
+    applyColorMaskBits(colorMaskBits) {
+        if (this.colorMaskBits === colorMaskBits) {
+            return;
+        }
+        this.flushTextureBatch();
+        this.colorMaskBits = colorMaskBits;
+        this.gl?.colorMask((colorMaskBits & 0b0001) !== 0, (colorMaskBits & 0b0010) !== 0, (colorMaskBits & 0b0100) !== 0, (colorMaskBits & 0b1000) !== 0);
     }
     static encodeColorMask(red, green, blue, alpha) {
         return (red ? 0b0001 : 0) | (green ? 0b0010 : 0) | (blue ? 0b0100 : 0) | (alpha ? 0b1000 : 0);

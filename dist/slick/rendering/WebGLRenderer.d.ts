@@ -111,6 +111,7 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private readonly drawModeBlendSourceFactorStack;
     private readonly drawModeBlendDestinationFactorStack;
     private readonly drawModeColorMaskBitsStack;
+    private readonly colorMaskStateStack;
     private immediateType;
     private immediateTexCoord;
     private immediateVertices;
@@ -144,6 +145,10 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     pushNormalDrawModeState(): void;
     /** Restores the exact state saved by pushDrawModeState() or pushNormalDrawModeState(). */
     popDrawModeState(): void;
+    /** Saves the current color mask and makes all four channels writable. */
+    pushFullColorMask(): void;
+    /** Restores the color mask saved by pushFullColorMask(). */
+    popColorMask(): void;
     /** Draws a textured quad. */
     drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors?: boolean, useCurrentColorForNullTint?: boolean): void;
     /** Draws a textured quad as a Slick flash/silhouette. */
@@ -324,6 +329,7 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private disableMonochromePalette;
     private resetDrawModeStateTracking;
     private applyDrawModeState;
+    private applyColorMaskBits;
     private static encodeColorMask;
     private static normalizeColorChannel;
     private static monochromePaletteMatches;

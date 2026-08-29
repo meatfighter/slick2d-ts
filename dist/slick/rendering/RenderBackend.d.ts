@@ -44,6 +44,8 @@ export interface RenderBackend {
     pushDrawModeState(): void;
     pushNormalDrawModeState(): void;
     popDrawModeState(): void;
+    pushFullColorMask(): void;
+    popColorMask(): void;
     pushTransform(): void;
     popTransform(): void;
     translate(x: number, y: number): void;

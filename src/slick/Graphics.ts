@@ -83,6 +83,16 @@ export class Graphics {
         return Graphics.current;
     }
 
+    /** @internal Enters this Graphics object's complete renderer context. */
+    public __beginRenderContext(): void {
+        this.beginRenderTarget();
+    }
+
+    /** @internal Leaves a context entered by __beginRenderContext(). */
+    public __endRenderContext(): void {
+        this.endRenderTarget(Renderer.getBackend());
+    }
+
     /** Java Slick2D counterpart: Graphics.setDrawMode(int). */
     public setDrawMode(mode: number): void {
         const renderer = this.beginRenderTarget();

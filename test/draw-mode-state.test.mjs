@@ -57,26 +57,38 @@ class FakeWebGLContext {
         this.destinationFactor = renderer.GL_ONE_MINUS_SRC_ALPHA;
         this.colorMaskBits = 0b1111;
         this.clearState = null;
+        this.resetCalls();
+    }
+
+    resetCalls() {
+        this.enableCalls = [];
+        this.disableCalls = [];
+        this.blendFuncCalls = [];
+        this.colorMaskCalls = [];
     }
 
     enable(id) {
+        this.enableCalls.push(id);
         if (id === this.BLEND) {
             this.blendEnabled = true;
         }
     }
 
     disable(id) {
+        this.disableCalls.push(id);
         if (id === this.BLEND) {
             this.blendEnabled = false;
         }
     }
 
     blendFunc(sourceFactor, destinationFactor) {
+        this.blendFuncCalls.push([sourceFactor, destinationFactor]);
         this.sourceFactor = sourceFactor;
         this.destinationFactor = destinationFactor;
     }
 
     colorMask(red, green, blue, alpha) {
+        this.colorMaskCalls.push([red, green, blue, alpha]);
         this.colorMaskBits = (red ? 0b0001 : 0) | (green ? 0b0010 : 0) | (blue ? 0b0100 : 0) | (alpha ? 0b1000 : 0);
     }
 
@@ -147,13 +159,23 @@ function screenState(renderer) {
     };
 }
 
-test("draw-mode scopes restore blend enablement, factors, and every color-mask channel", () => {
+test("draw-mode scopes restore exact state and no-op save/restore does not flush", () => {
     const renderer = new WebGLRenderer();
+    let flushCalls = 0;
+    renderer.flushTextureBatch = () => {
+        flushCalls++;
+    };
 
     renderer.glDisable(renderer.GL_BLEND);
     renderer.glBlendFunc(renderer.GL_ONE, renderer.GL_ONE_MINUS_SRC_COLOR);
     renderer.glColorMask(false, true, false, true);
     const original = rendererDrawModeState(renderer);
+
+    flushCalls = 0;
+    renderer.pushDrawModeState();
+    renderer.popDrawModeState();
+    assert.equal(flushCalls, 0);
+    assert.deepEqual(rendererDrawModeState(renderer), original);
 
     renderer.pushNormalDrawModeState();
     assert.deepEqual(rendererDrawModeState(renderer), normalState(renderer));
@@ -174,7 +196,65 @@ test("draw-mode scopes restore blend enablement, factors, and every color-mask c
     assert.throws(() => renderer.popDrawModeState(), /underflow|corruption/i);
 });
 
-test("beginFrame clears every channel with normal state and restores persistent draw state", () => {
+test("full-color-mask scope preserves blend state and avoids no-op batch boundaries", () => {
+    const renderer = new WebGLRenderer();
+    const gl = new FakeWebGLContext(renderer);
+    renderer.gl = gl;
+
+    let flushCalls = 0;
+    renderer.flushTextureBatch = () => {
+        flushCalls++;
+    };
+
+    renderer.glDisable(renderer.GL_BLEND);
+    renderer.glBlendFunc(renderer.GL_ONE, renderer.GL_ONE_MINUS_SRC_COLOR);
+    renderer.glColorMask(false, true, false, true);
+    const persistent = rendererDrawModeState(renderer);
+
+    gl.resetCalls();
+    flushCalls = 0;
+    renderer.pushFullColorMask();
+    assert.deepEqual(rendererDrawModeState(renderer), {
+        ...persistent,
+        colorMaskBits: 0b1111
+    });
+    assert.equal(flushCalls, 1);
+    assert.deepEqual(
+        gl.enableCalls.filter((id) => id === renderer.GL_BLEND),
+        []
+    );
+    assert.deepEqual(
+        gl.disableCalls.filter((id) => id === renderer.GL_BLEND),
+        []
+    );
+    assert.equal(gl.blendFuncCalls.length, 0);
+    assert.equal(gl.colorMaskCalls.length, 1);
+
+    renderer.popColorMask();
+    assert.deepEqual(rendererDrawModeState(renderer), persistent);
+    assert.equal(flushCalls, 2);
+    assert.deepEqual(
+        gl.enableCalls.filter((id) => id === renderer.GL_BLEND),
+        []
+    );
+    assert.deepEqual(
+        gl.disableCalls.filter((id) => id === renderer.GL_BLEND),
+        []
+    );
+    assert.equal(gl.blendFuncCalls.length, 0);
+    assert.equal(gl.colorMaskCalls.length, 2);
+    assert.throws(() => renderer.popColorMask(), /underflow/i);
+
+    renderer.glColorMask(true, true, true, true);
+    gl.resetCalls();
+    flushCalls = 0;
+    renderer.pushFullColorMask();
+    renderer.popColorMask();
+    assert.equal(flushCalls, 0);
+    assert.equal(gl.colorMaskCalls.length, 0);
+});
+
+test("beginFrame clears every channel without changing persistent blend state", () => {
     const renderer = new WebGLRenderer();
     const gl = new FakeWebGLContext(renderer);
     renderer.gl = gl;
@@ -184,14 +264,29 @@ test("beginFrame clears every channel with normal state and restores persistent 
     renderer.glColorMask(false, true, false, true);
     const persistent = rendererDrawModeState(renderer);
 
+    gl.resetCalls();
     renderer.beginFrame(320, 240, { r: 0, g: 0, b: 0, a: 1 }, 640, 480);
 
-    assert.deepEqual(gl.clearState, normalState(renderer));
+    assert.deepEqual(gl.clearState, {
+        blendEnabled: persistent.blendEnabled,
+        sourceFactor: persistent.sourceFactor,
+        destinationFactor: persistent.destinationFactor,
+        colorMaskBits: 0b1111
+    });
     assert.deepEqual(rendererDrawModeState(renderer), persistent);
-    assert.equal(gl.blendEnabled, persistent.blendEnabled);
-    assert.equal(gl.sourceFactor, persistent.sourceFactor);
-    assert.equal(gl.destinationFactor, persistent.destinationFactor);
-    assert.equal(gl.colorMaskBits, persistent.colorMaskBits);
+    assert.deepEqual(
+        gl.enableCalls.filter((id) => id === renderer.GL_BLEND),
+        []
+    );
+    assert.deepEqual(
+        gl.disableCalls.filter((id) => id === renderer.GL_BLEND),
+        []
+    );
+    assert.equal(gl.blendFuncCalls.length, 0);
+    assert.deepEqual(gl.colorMaskCalls, [
+        [true, true, true, true],
+        [false, true, false, true]
+    ]);
 });
 
 test("Graphics context switches activate local modes and restore the enclosing exact state", () => {
@@ -249,7 +344,7 @@ test("Graphics.setCurrent reapplies the selected mode after renderer state track
     assert.deepEqual(rendererDrawModeState(renderer), addState(renderer));
 });
 
-test("BufferedScalableGame isolates native draw modes and presents with normal blending", async () => {
+test("BufferedScalableGame clears natively under normal state and avoids redundant setCurrent transitions", async (t) => {
     globalThis.OffscreenCanvas = FakeCanvas;
 
     const renderer = new WebGLRenderer();
@@ -297,6 +392,21 @@ test("BufferedScalableGame isolates native draw modes and presents with normal b
     screenGraphics.setDrawMode(Graphics.MODE_SCREEN);
     assert.deepEqual(rendererDrawModeState(renderer), screenState(renderer));
 
+    const originalSetCurrent = Graphics.setCurrent;
+    let setCurrentCallsDuringRender = 0;
+    Graphics.setCurrent = function (current) {
+        setCurrentCallsDuringRender++;
+        return originalSetCurrent.call(Graphics, current);
+    };
+    t.after(() => {
+        Graphics.setCurrent = originalSetCurrent;
+    });
+
+    const nativeClearStates = [];
+    game.nativeGraphics.clear = () => {
+        nativeClearStates.push(rendererDrawModeState(renderer));
+    };
+
     let presentationState = null;
     const nativeFrame = game.nativeFrame;
     assert.ok(nativeFrame);
@@ -305,6 +415,8 @@ test("BufferedScalableGame isolates native draw modes and presents with normal b
     };
 
     game.render(container, screenGraphics);
+    assert.equal(setCurrentCallsDuringRender, 0);
+    assert.deepEqual(nativeClearStates[0], normalState(renderer));
     assert.deepEqual(presentationState, normalState(renderer));
     assert.deepEqual(overlayState, screenState(renderer));
     assert.deepEqual(rendererDrawModeState(renderer), screenState(renderer));
@@ -313,6 +425,8 @@ test("BufferedScalableGame isolates native draw modes and presents with normal b
     presentationState = null;
     overlayState = null;
     game.render(container, screenGraphics);
+    assert.equal(setCurrentCallsDuringRender, 0);
+    assert.deepEqual(nativeClearStates[1], normalState(renderer));
     assert.deepEqual(secondHeldRenderStart, addState(renderer));
     assert.deepEqual(presentationState, normalState(renderer));
     assert.deepEqual(overlayState, screenState(renderer));

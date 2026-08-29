@@ -43,6 +43,10 @@ export declare class Graphics {
     static setCurrent(current: Graphics | null): void;
     /** Browser parity helper: returns the current graphics context. */
     static getCurrent(): Graphics | null;
+    /** @internal Enters this Graphics object's complete renderer context. */
+    __beginRenderContext(): void;
+    /** @internal Leaves a context entered by __beginRenderContext(). */
+    __endRenderContext(): void;
     /** Java Slick2D counterpart: Graphics.setDrawMode(int). */
     setDrawMode(mode: number): void;
     /** Java Slick2D counterpart: Graphics.clearAlphaMap(). */

@@ -1,4 +1,3 @@
-import { Graphics } from "./Graphics.js";
 import { Image } from "./Image.js";
 import { Renderer } from "./opengl/renderer/Renderer.js";
 function isInputListener(value) {
@@ -87,14 +86,9 @@ export class BufferedScalableGame {
             return;
         }
         const renderer = Renderer.getBackend();
-        const previousGraphics = Graphics.getCurrent();
-        renderer.pushRenderTarget(nativeTarget);
-        let nativeDrawModeStatePushed = false;
+        nativeGraphics.__beginRenderContext();
         let nativeTransformPushed = false;
         try {
-            renderer.pushDrawModeState();
-            nativeDrawModeStatePushed = true;
-            Graphics.setCurrent(nativeGraphics);
             renderer.pushTransform();
             nativeTransformPushed = true;
             nativeGraphics.resetTransform();
@@ -125,15 +119,7 @@ export class BufferedScalableGame {
                 }
             }
             finally {
-                Graphics.setCurrent(previousGraphics);
-                try {
-                    if (nativeDrawModeStatePushed) {
-                        renderer.popDrawModeState();
-                    }
-                }
-                finally {
-                    renderer.popRenderTarget();
-                }
+                nativeGraphics.__endRenderContext();
             }
         }
         const previousScreenClip = screenGraphics.getClip();
