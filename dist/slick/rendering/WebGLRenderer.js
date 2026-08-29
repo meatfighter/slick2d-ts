@@ -208,6 +208,14 @@ export class WebGLRenderer {
     globalColorInvertedStack = [];
     monochromePaletteStack = [];
     monochromePaletteEnabledStack = [];
+    blendEnabled = true;
+    blendSourceFactor = this.GL_SRC_ALPHA;
+    blendDestinationFactor = this.GL_ONE_MINUS_SRC_ALPHA;
+    colorMaskBits = 0b1111;
+    drawModeBlendEnabledStack = [];
+    drawModeBlendSourceFactorStack = [];
+    drawModeBlendDestinationFactorStack = [];
+    drawModeColorMaskBitsStack = [];
     immediateType = 0;
     immediateTexCoord = [0, 0];
     immediateVertices = [];
@@ -223,6 +231,7 @@ export class WebGLRenderer {
     worldClip = null;
     /** Initializes the renderer with a canvas and WebGL2 context attributes. */
     initialize(canvas, options, logicalWidth = canvas.width, logicalHeight = canvas.height, backingWidth = canvas.width, backingHeight = canvas.height) {
+        this.resetDrawModeStateTracking();
         const contextOptions = {
             alpha: options.alpha ?? true,
             antialias: options.antialias ?? false,
@@ -257,6 +266,7 @@ export class WebGLRenderer {
         this.monochromePaletteStack.length = 0;
         this.monochromePaletteEnabledStack.length = 0;
         gl.enable(gl.BLEND);
+        gl.colorMask(true, true, true, true);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         this.initDisplay(logicalWidth, logicalHeight, backingWidth, backingHeight);
     }
@@ -278,8 +288,15 @@ export class WebGLRenderer {
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, this.backingWidth, this.backingHeight);
-        gl.clearColor(background.r, background.g, background.b, background.a);
-        gl.clear(gl.COLOR_BUFFER_BIT);
+        // WebGL clear obeys colorMask, so force a full-channel clear.
+        this.pushNormalDrawModeState();
+        try {
+            gl.clearColor(background.r, background.g, background.b, background.a);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+        }
+        finally {
+            this.popDrawModeState();
+        }
         this.transformStack.length = 1;
         this.writeIdentity(this.transformStack[0]);
         this.screenClip = null;
@@ -329,6 +346,35 @@ export class WebGLRenderer {
             throw new SlickException("Render target stack underflow");
         }
         this.setRenderTarget(target);
+    }
+    /** Saves the exact WebGL state controlled by Graphics.setDrawMode(). */
+    pushDrawModeState() {
+        this.flushTextureBatch();
+        this.drawModeBlendEnabledStack.push(this.blendEnabled);
+        this.drawModeBlendSourceFactorStack.push(this.blendSourceFactor);
+        this.drawModeBlendDestinationFactorStack.push(this.blendDestinationFactor);
+        this.drawModeColorMaskBitsStack.push(this.colorMaskBits);
+    }
+    /** Saves the current draw-mode state and applies Graphics.MODE_NORMAL semantics. */
+    pushNormalDrawModeState() {
+        this.pushDrawModeState();
+        this.applyDrawModeState(true, this.GL_SRC_ALPHA, this.GL_ONE_MINUS_SRC_ALPHA, 0b1111);
+    }
+    /** Restores the exact state saved by pushDrawModeState() or pushNormalDrawModeState(). */
+    popDrawModeState() {
+        const depth = this.drawModeBlendEnabledStack.length;
+        if (depth === 0 ||
+            this.drawModeBlendSourceFactorStack.length !== depth ||
+            this.drawModeBlendDestinationFactorStack.length !== depth ||
+            this.drawModeColorMaskBitsStack.length !== depth) {
+            throw new SlickException("Draw-mode state stack underflow or corruption");
+        }
+        this.flushTextureBatch();
+        const colorMaskBits = this.drawModeColorMaskBitsStack.pop();
+        const destinationFactor = this.drawModeBlendDestinationFactorStack.pop();
+        const sourceFactor = this.drawModeBlendSourceFactorStack.pop();
+        const blendEnabled = this.drawModeBlendEnabledStack.pop();
+        this.applyDrawModeState(blendEnabled, sourceFactor, destinationFactor, colorMaskBits);
     }
     /** Draws a textured quad. */
     drawImage(image, x, y, width, height, srcX, srcY, srcWidth, srcHeight, alpha, tint, transform, useCornerColors = true, useCurrentColorForNullTint = false) {
@@ -700,6 +746,7 @@ export class WebGLRenderer {
     }
     /** Handles browser WebGL context loss. */
     handleContextLost() {
+        this.resetDrawModeStateTracking();
         const gl = this.gl;
         this.contextLost = true;
         this.textureBatchVertexCount = 0;
@@ -737,6 +784,7 @@ export class WebGLRenderer {
     }
     /** Releases renderer-owned WebGL state. */
     dispose() {
+        this.resetDrawModeStateTracking();
         const gl = this.gl;
         const canDelete = gl !== null && !WebGLRenderer.isContextLost(gl);
         if (canDelete && this.buffer) {
@@ -877,8 +925,7 @@ export class WebGLRenderer {
     }
     /** Java Slick2D counterpart: SGL.glColorMask(boolean, boolean, boolean, boolean). */
     glColorMask(red, green, blue, alpha) {
-        this.flushTextureBatch();
-        this.gl?.colorMask(red, green, blue, alpha);
+        this.applyDrawModeState(this.blendEnabled, this.blendSourceFactor, this.blendDestinationFactor, WebGLRenderer.encodeColorMask(red, green, blue, alpha));
     }
     /** Java Slick2D counterpart: SGL.glLoadIdentity(). */
     glLoadIdentity() {
@@ -924,12 +971,20 @@ export class WebGLRenderer {
         if (this.recordListCommand(() => this.glEnable(id))) {
             return;
         }
+        if (id === this.GL_BLEND) {
+            this.applyDrawModeState(true, this.blendSourceFactor, this.blendDestinationFactor, this.colorMaskBits);
+            return;
+        }
         this.flushTextureBatch();
         this.gl?.enable(id);
     }
     /** Java Slick2D counterpart: SGL.glDisable(int). */
     glDisable(id) {
         if (this.recordListCommand(() => this.glDisable(id))) {
+            return;
+        }
+        if (id === this.GL_BLEND) {
+            this.applyDrawModeState(false, this.blendSourceFactor, this.blendDestinationFactor, this.colorMaskBits);
             return;
         }
         this.flushTextureBatch();
@@ -1106,8 +1161,7 @@ export class WebGLRenderer {
         if (this.recordListCommand(() => this.glBlendFunc(src, dest))) {
             return;
         }
-        this.flushTextureBatch();
-        this.gl?.blendFunc(src, dest);
+        this.applyDrawModeState(this.blendEnabled, src, dest, this.colorMaskBits);
     }
     /** Java Slick2D counterpart: SGL.glGenLists(int). */
     glGenLists(count) {
@@ -1315,6 +1369,47 @@ export class WebGLRenderer {
         if (clearCachedPalette) {
             this.monochromePalette = null;
         }
+    }
+    resetDrawModeStateTracking() {
+        this.blendEnabled = true;
+        this.blendSourceFactor = this.GL_SRC_ALPHA;
+        this.blendDestinationFactor = this.GL_ONE_MINUS_SRC_ALPHA;
+        this.colorMaskBits = 0b1111;
+        this.drawModeBlendEnabledStack.length = 0;
+        this.drawModeBlendSourceFactorStack.length = 0;
+        this.drawModeBlendDestinationFactorStack.length = 0;
+        this.drawModeColorMaskBitsStack.length = 0;
+    }
+    applyDrawModeState(blendEnabled, sourceFactor, destinationFactor, colorMaskBits) {
+        if (this.blendEnabled === blendEnabled &&
+            this.blendSourceFactor === sourceFactor &&
+            this.blendDestinationFactor === destinationFactor &&
+            this.colorMaskBits === colorMaskBits) {
+            return;
+        }
+        this.flushTextureBatch();
+        const gl = this.gl;
+        if (this.blendEnabled !== blendEnabled) {
+            this.blendEnabled = blendEnabled;
+            if (blendEnabled) {
+                gl?.enable(this.GL_BLEND);
+            }
+            else {
+                gl?.disable(this.GL_BLEND);
+            }
+        }
+        if (this.blendSourceFactor !== sourceFactor || this.blendDestinationFactor !== destinationFactor) {
+            this.blendSourceFactor = sourceFactor;
+            this.blendDestinationFactor = destinationFactor;
+            gl?.blendFunc(sourceFactor, destinationFactor);
+        }
+        if (this.colorMaskBits !== colorMaskBits) {
+            this.colorMaskBits = colorMaskBits;
+            gl?.colorMask((colorMaskBits & 0b0001) !== 0, (colorMaskBits & 0b0010) !== 0, (colorMaskBits & 0b0100) !== 0, (colorMaskBits & 0b1000) !== 0);
+        }
+    }
+    static encodeColorMask(red, green, blue, alpha) {
+        return (red ? 0b0001 : 0) | (green ? 0b0010 : 0) | (blue ? 0b0100 : 0) | (alpha ? 0b1000 : 0);
     }
     static normalizeColorChannel(value) {
         if (!Number.isFinite(value)) {

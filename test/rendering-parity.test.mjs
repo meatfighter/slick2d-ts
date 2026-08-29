@@ -903,6 +903,7 @@ test("Graphics draw modes drive Java Slick2D blend and color-mask state", () => 
     const gl = new FakeStateGL();
     renderer.gl = gl;
     try {
+        renderer.resetDrawModeStateTracking();
         const graphics = new Graphics(32, 16);
         Graphics.setCurrent(graphics);
 
@@ -919,19 +920,16 @@ test("Graphics draw modes drive Java Slick2D blend and color-mask state", () => 
             ["enable", renderer.GL_BLEND],
             ["colorMask", true, true, true, false],
             ["blendFunc", renderer.GL_DST_ALPHA, renderer.GL_ONE_MINUS_DST_ALPHA],
-            ["enable", renderer.GL_BLEND],
             ["colorMask", true, true, true, true],
             ["blendFunc", renderer.GL_ONE_MINUS_SRC_COLOR, renderer.GL_SRC_COLOR],
-            ["enable", renderer.GL_BLEND],
-            ["colorMask", true, true, true, true],
             ["blendFunc", renderer.GL_ONE, renderer.GL_ONE],
-            ["enable", renderer.GL_BLEND],
-            ["colorMask", true, true, true, true],
             ["blendFunc", renderer.GL_ONE, renderer.GL_ONE_MINUS_SRC_COLOR],
-            ["enable", renderer.GL_BLEND],
-            ["colorMask", true, true, true, true],
             ["blendFunc", renderer.GL_SRC_ALPHA, renderer.GL_ONE_MINUS_SRC_ALPHA]
         ]);
+        assert.equal(renderer.blendEnabled, true);
+        assert.equal(renderer.blendSourceFactor, renderer.GL_SRC_ALPHA);
+        assert.equal(renderer.blendDestinationFactor, renderer.GL_ONE_MINUS_SRC_ALPHA);
+        assert.equal(renderer.colorMaskBits, 0b1111);
     } finally {
         renderer.gl = originalGl;
     }

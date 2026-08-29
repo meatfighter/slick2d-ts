@@ -97,6 +97,9 @@ export interface RenderBackend {
     isMonochromePaletteEnabled(): boolean;
     pushGlobalColorEffectsDisabled(): void;
     popGlobalColorEffects(): void;
+    pushDrawModeState(): void;
+    pushNormalDrawModeState(): void;
+    popDrawModeState(): void;
     pushTransform(): void;
     popTransform(): void;
     translate(x: number, y: number): void;

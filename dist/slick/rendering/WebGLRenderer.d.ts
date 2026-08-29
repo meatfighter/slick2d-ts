@@ -103,6 +103,14 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private readonly globalColorInvertedStack;
     private readonly monochromePaletteStack;
     private readonly monochromePaletteEnabledStack;
+    private blendEnabled;
+    private blendSourceFactor;
+    private blendDestinationFactor;
+    private colorMaskBits;
+    private readonly drawModeBlendEnabledStack;
+    private readonly drawModeBlendSourceFactorStack;
+    private readonly drawModeBlendDestinationFactorStack;
+    private readonly drawModeColorMaskBitsStack;
     private immediateType;
     private immediateTexCoord;
     private immediateVertices;
@@ -130,6 +138,12 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     pushRenderTarget(target: WebGLRenderTarget | null): void;
     /** Restores the render target saved by pushRenderTarget(). */
     popRenderTarget(): void;
+    /** Saves the exact WebGL state controlled by Graphics.setDrawMode(). */
+    pushDrawModeState(): void;
+    /** Saves the current draw-mode state and applies Graphics.MODE_NORMAL semantics. */
+    pushNormalDrawModeState(): void;
+    /** Restores the exact state saved by pushDrawModeState() or pushNormalDrawModeState(). */
+    popDrawModeState(): void;
     /** Draws a textured quad. */
     drawImage(image: Image, x: number, y: number, width: number, height: number, srcX: number, srcY: number, srcWidth: number, srcHeight: number, alpha: number, tint: Color | null, transform: Matrix3, useCornerColors?: boolean, useCurrentColorForNullTint?: boolean): void;
     /** Draws a textured quad as a Slick flash/silhouette. */
@@ -308,6 +322,9 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private ensureMonochromePalettePrograms;
     private applyMonochromePaletteUniforms;
     private disableMonochromePalette;
+    private resetDrawModeStateTracking;
+    private applyDrawModeState;
+    private static encodeColorMask;
     private static normalizeColorChannel;
     private static monochromePaletteMatches;
     private queueTextureQuad;

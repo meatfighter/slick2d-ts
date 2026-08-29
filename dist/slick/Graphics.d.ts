@@ -189,6 +189,7 @@ export declare class Graphics {
     private withRenderTarget;
     private beginRenderTarget;
     private endRenderTarget;
+    private applyDrawMode;
     private applyClipState;
 }
 //# sourceMappingURL=Graphics.d.ts.map

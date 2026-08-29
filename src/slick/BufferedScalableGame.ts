@@ -116,25 +116,51 @@ export class BufferedScalableGame implements Game {
 
         const renderer = Renderer.getBackend();
         const previousGraphics = Graphics.getCurrent();
+
         renderer.pushRenderTarget(nativeTarget);
-        Graphics.setCurrent(nativeGraphics);
-        renderer.pushTransform();
+        let nativeDrawModeStatePushed = false;
+        let nativeTransformPushed = false;
         try {
+            renderer.pushDrawModeState();
+            nativeDrawModeStatePushed = true;
+            Graphics.setCurrent(nativeGraphics);
+            renderer.pushTransform();
+            nativeTransformPushed = true;
+
             nativeGraphics.resetTransform();
             nativeGraphics.clearClip();
             nativeGraphics.clearWorldClip();
             nativeGraphics.setBackground(screenGraphics.getBackground());
-            nativeGraphics.clear();
+
+            // The native Graphics draw mode is persistent; clear under normal draw state.
+            renderer.pushNormalDrawModeState();
+            try {
+                nativeGraphics.clear();
+            } finally {
+                renderer.popDrawModeState();
+            }
+
             this.held.render(container, nativeGraphics);
             nativeGraphics.flush();
         } finally {
             try {
-                nativeGraphics.clearClip();
-                nativeGraphics.clearWorldClip();
+                if (nativeTransformPushed) {
+                    try {
+                        nativeGraphics.clearClip();
+                        nativeGraphics.clearWorldClip();
+                    } finally {
+                        renderer.popTransform();
+                    }
+                }
             } finally {
-                renderer.popTransform();
                 Graphics.setCurrent(previousGraphics);
-                renderer.popRenderTarget();
+                try {
+                    if (nativeDrawModeStatePushed) {
+                        renderer.popDrawModeState();
+                    }
+                } finally {
+                    renderer.popRenderTarget();
+                }
             }
         }
 
@@ -146,20 +172,27 @@ export class BufferedScalableGame implements Game {
             screenGraphics.resetTransform();
             screenGraphics.clearWorldClip();
             screenGraphics.setClip(this.xoffset, this.yoffset, this.targetWidth, this.targetHeight);
-            renderer.pushGlobalColorEffectsDisabled();
+
+            // Held-game draw state and effects are already baked into nativeFrame.
+            renderer.pushNormalDrawModeState();
             try {
-                nativeFrame.draw(
-                    this.xoffset,
-                    this.yoffset,
-                    this.xoffset + this.targetWidth,
-                    this.yoffset + this.targetHeight,
-                    this.sourceX,
-                    this.sourceY,
-                    this.sourceX + this.sourceWidth,
-                    this.sourceY + this.sourceHeight
-                );
+                renderer.pushGlobalColorEffectsDisabled();
+                try {
+                    nativeFrame.draw(
+                        this.xoffset,
+                        this.yoffset,
+                        this.xoffset + this.targetWidth,
+                        this.yoffset + this.targetHeight,
+                        this.sourceX,
+                        this.sourceY,
+                        this.sourceX + this.sourceWidth,
+                        this.sourceY + this.sourceHeight
+                    );
+                } finally {
+                    renderer.popGlobalColorEffects();
+                }
             } finally {
-                renderer.popGlobalColorEffects();
+                renderer.popDrawModeState();
             }
         } finally {
             if (previousScreenClip === null) {
