@@ -33,11 +33,15 @@ class FakeInput {
     }
 }
 
-function fakeContainer(width, height, input = new FakeInput()) {
+function fakeContainer(width, height, input = new FakeInput(), graphics = null) {
     return {
+        graphics,
         input,
         height,
         width,
+        getGraphics() {
+            return this.graphics;
+        },
         getHeight() {
             return this.height;
         },
@@ -127,7 +131,9 @@ test("BufferedScalableGame validates source rectangles against the native frame"
 test("BufferedScalableGame renders into the native target before the presentation blit", async () => {
     installOffscreenCanvas();
     const input = new FakeInput();
-    const container = fakeContainer(800, 600, input);
+    const screenGraphics = new Graphics(800, 600);
+    screenGraphics.setBackground(Color.blue);
+    const container = fakeContainer(800, 600, input, screenGraphics);
     const renderer = Renderer.getBackend();
     const calls = [];
     const drawCalls = [];
@@ -141,6 +147,7 @@ test("BufferedScalableGame renders into the native target before the presentatio
         "drawImage",
         "fillRect",
         "flush",
+        "getRenderTarget",
         "glLoadIdentity",
         "popGlobalColorEffects",
         "popRenderTarget",
@@ -165,6 +172,7 @@ test("BufferedScalableGame renders into the native target before the presentatio
         calls.push(["fillRect", activeTarget]);
     };
     renderer.flush = () => calls.push(["flush", activeTarget]);
+    renderer.getRenderTarget = () => activeTarget;
     renderer.glLoadIdentity = () => calls.push(["loadIdentity", activeTarget]);
     renderer.popGlobalColorEffects = () => calls.push(["popEffects", activeTarget]);
     renderer.popRenderTarget = () => {
@@ -186,7 +194,9 @@ test("BufferedScalableGame renders into the native target before the presentatio
     };
 
     const held = fakeGame({
-        render: (_container, g) => {
+        render: (heldContainer, g) => {
+            assert.equal(Graphics.getCurrent(), g);
+            heldContainer.getGraphics().fillRect(9, 10, 11, 12);
             assert.equal(Graphics.getCurrent(), g);
             g.fillRect(1, 2, 3, 4);
             assert.equal(Graphics.getCurrent(), g);
@@ -199,18 +209,22 @@ test("BufferedScalableGame renders into the native target before the presentatio
         sourceX: 16,
         sourceY: 8
     });
-    const screenGraphics = new Graphics(800, 600);
-    screenGraphics.setBackground(Color.blue);
 
     try {
         await game.init(container);
+        Graphics.setCurrent(screenGraphics);
         game.render(container, screenGraphics);
 
         assert.equal(activeTarget, null);
+        assert.equal(Graphics.getCurrent(), screenGraphics);
         assert.equal(targetStack.length, 0);
-        assert.ok(fillCalls.length >= 2);
-        assert.notEqual(fillCalls[0].target, null);
-        assert.equal(fillCalls[1].target, fillCalls[0].target);
+        assert.ok(fillCalls.length >= 3);
+        const nativeClearFill = fillCalls[0];
+        const screenFill = fillCalls.find(({ args }) => args[0] === 9);
+        const nativeHeldFill = fillCalls.find(({ args }) => args[0] === 1);
+        assert.notEqual(nativeClearFill.target, null);
+        assert.equal(screenFill?.target, null);
+        assert.equal(nativeHeldFill?.target, nativeClearFill.target);
         assert.equal(drawCalls.length, 1);
         assert.equal(drawCalls[0].target, null);
         assert.deepEqual(drawCalls[0].args.slice(1, 10), [0, 0, 800, 600, 16, 128, 160, -120, 1]);

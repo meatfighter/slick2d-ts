@@ -34,6 +34,7 @@ export class Graphics {
 
     private static current: Graphics | null = null;
     private static readonly currentStack: Array<Graphics | null> = [];
+    private static readonly renderTargetScopeStack: boolean[] = [];
     private color = Color.white.copy();
     private background = Color.black.copy();
     private font: Font = new CanvasFont();
@@ -745,24 +746,32 @@ export class Graphics {
 
     private beginRenderTarget(): WebGLRenderer {
         const renderer = Renderer.getBackend();
-        if (this.renderTarget) {
+        const shouldRestore = renderer.getRenderTarget() !== this.renderTarget || Graphics.current !== this;
+        Graphics.renderTargetScopeStack.push(shouldRestore);
+        if (shouldRestore) {
             Graphics.currentStack.push(Graphics.current);
             renderer.pushRenderTarget(this.renderTarget);
-        } else {
-            renderer.setRenderTarget(null);
+            Graphics.current = this;
         }
-        Graphics.current = this;
         return renderer;
     }
 
     private endRenderTarget(renderer: WebGLRenderer): void {
-        if (this.renderTarget) {
-            const previous = Graphics.currentStack.pop();
-            if (previous === undefined) {
-                throw new SlickException("Graphics current stack underflow");
-            }
-            Graphics.current = previous;
+        const shouldRestore = Graphics.renderTargetScopeStack.pop();
+        if (shouldRestore === undefined) {
+            throw new SlickException("Graphics render target scope stack underflow");
+        }
+        if (!shouldRestore) {
+            return;
+        }
+        const previous = Graphics.currentStack.pop();
+        if (previous === undefined) {
+            throw new SlickException("Graphics current stack underflow");
+        }
+        try {
             renderer.popRenderTarget();
+        } finally {
+            Graphics.current = previous;
         }
     }
 }

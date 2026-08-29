@@ -23,6 +23,7 @@ export declare class Graphics {
     static readonly MODE_SCREEN = 6;
     private static current;
     private static readonly currentStack;
+    private static readonly renderTargetScopeStack;
     private color;
     private background;
     private font;
