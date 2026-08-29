@@ -100,7 +100,9 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private readonly scratchColor;
     private currentTarget;
     private readonly renderTargetStack;
-    private readonly globalColorEffectStack;
+    private readonly globalColorInvertedStack;
+    private readonly monochromePaletteStack;
+    private readonly monochromePaletteEnabledStack;
     private immediateType;
     private immediateTexCoord;
     private immediateVertices;
@@ -306,7 +308,6 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private ensureMonochromePalettePrograms;
     private applyMonochromePaletteUniforms;
     private disableMonochromePalette;
-    private static cloneMonochromePalette;
     private static normalizeColorChannel;
     private static monochromePaletteMatches;
     private queueTextureQuad;

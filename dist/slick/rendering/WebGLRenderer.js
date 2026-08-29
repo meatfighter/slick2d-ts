@@ -1,4 +1,3 @@
-import { Color } from "../Color.js";
 import { SlickException } from "../SlickException.js";
 import { identityMatrix3 } from "./RenderBackend.js";
 import { WebGLBatch } from "./WebGLBatch.js";
@@ -206,7 +205,9 @@ export class WebGLRenderer {
     scratchColor = { r: 1, g: 1, b: 1, a: 1 };
     currentTarget = null;
     renderTargetStack = [];
-    globalColorEffectStack = [];
+    globalColorInvertedStack = [];
+    monochromePaletteStack = [];
+    monochromePaletteEnabledStack = [];
     immediateType = 0;
     immediateTexCoord = [0, 0];
     immediateVertices = [];
@@ -252,7 +253,9 @@ export class WebGLRenderer {
         this.buffer = gl.createBuffer();
         this.currentTarget = null;
         this.renderTargetStack.length = 0;
-        this.globalColorEffectStack.length = 0;
+        this.globalColorInvertedStack.length = 0;
+        this.monochromePaletteStack.length = 0;
+        this.monochromePaletteEnabledStack.length = 0;
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
         this.initDisplay(logicalWidth, logicalHeight, backingWidth, backingHeight);
@@ -266,7 +269,9 @@ export class WebGLRenderer {
         this.useDefaultDimensions();
         this.currentTarget = null;
         this.renderTargetStack.length = 0;
-        this.globalColorEffectStack.length = 0;
+        this.globalColorInvertedStack.length = 0;
+        this.monochromePaletteStack.length = 0;
+        this.monochromePaletteEnabledStack.length = 0;
         const gl = this.gl;
         if (!gl) {
             return;
@@ -558,27 +563,42 @@ export class WebGLRenderer {
     /** Browser extension: disables whole-frame color effects until restored. */
     pushGlobalColorEffectsDisabled() {
         this.flushTextureBatch();
-        this.globalColorEffectStack.push({
-            colorInverted: this.colorInverted,
-            monochromePalette: WebGLRenderer.cloneMonochromePalette(this.monochromePalette),
-            monochromePaletteEnabled: this.monochromePaletteEnabled
-        });
+        this.globalColorInvertedStack.push(this.colorInverted);
+        this.monochromePaletteStack.push(this.monochromePalette);
+        this.monochromePaletteEnabledStack.push(this.monochromePaletteEnabled);
         this.colorInverted = false;
         this.disableMonochromePalette(false);
     }
     /** Browser extension: restores color effects saved by pushGlobalColorEffectsDisabled(). */
     popGlobalColorEffects() {
-        const state = this.globalColorEffectStack.pop();
-        if (state === undefined) {
+        if (this.globalColorInvertedStack.length === 0 || this.monochromePaletteStack.length === 0 || this.monochromePaletteEnabledStack.length === 0) {
             throw new SlickException("Global color effect stack underflow");
         }
         this.flushTextureBatch();
-        this.disableMonochromePalette(false);
-        this.monochromePalette = WebGLRenderer.cloneMonochromePalette(state.monochromePalette);
-        this.colorInverted = state.colorInverted;
-        if (state.monochromePaletteEnabled && state.monochromePalette !== null) {
-            this.setMonochromePalette(Color.fromFloats(state.monochromePalette.black[0], state.monochromePalette.black[1], state.monochromePalette.black[2], 1), Color.fromFloats(state.monochromePalette.white[0], state.monochromePalette.white[1], state.monochromePalette.white[2], 1));
+        const colorInverted = this.globalColorInvertedStack.pop();
+        const monochromePalette = this.monochromePaletteStack.pop();
+        const monochromePaletteEnabled = this.monochromePaletteEnabledStack.pop();
+        const paletteChanged = this.monochromePalette !== monochromePalette;
+        this.colorInverted = colorInverted;
+        this.monochromePalette = monochromePalette;
+        this.monochromePaletteEnabled = monochromePaletteEnabled;
+        if (!monochromePaletteEnabled) {
+            this.solidProgram = this.normalSolidProgram;
+            this.textureProgram = this.normalTextureProgram;
+            return;
         }
+        if (monochromePalette === null) {
+            throw new SlickException("Global color effect stack contains an invalid palette state");
+        }
+        const gl = this.gl;
+        if (gl) {
+            const programsCreated = this.ensureMonochromePalettePrograms(gl);
+            if (programsCreated || paletteChanged) {
+                this.applyMonochromePaletteUniforms(gl);
+            }
+        }
+        this.solidProgram = this.monochromeSolidProgram;
+        this.textureProgram = this.monochromeTextureProgram;
     }
     /** Saves the current matrix. */
     pushTransform() {
@@ -689,10 +709,15 @@ export class WebGLRenderer {
         this.colorInverted = false;
         this.monochromePalette = null;
         this.monochromePaletteEnabled = false;
+        for (const target of this.renderTargetStack) {
+            target?.invalidate(gl);
+        }
         this.currentTarget?.invalidate(gl);
         this.currentTarget = null;
         this.renderTargetStack.length = 0;
-        this.globalColorEffectStack.length = 0;
+        this.globalColorInvertedStack.length = 0;
+        this.monochromePaletteStack.length = 0;
+        this.monochromePaletteEnabledStack.length = 0;
         this.textures.clear();
         this.currentTextureId = 0;
         this.gl = null;
@@ -746,6 +771,14 @@ export class WebGLRenderer {
                 gl.deleteTexture(texture.texture);
             }
         }
+        for (const target of this.renderTargetStack) {
+            if (canDelete) {
+                target?.dispose(gl);
+            }
+            else {
+                target?.invalidate(null);
+            }
+        }
         if (canDelete) {
             this.currentTarget?.dispose(gl);
         }
@@ -762,7 +795,9 @@ export class WebGLRenderer {
         this.monochromePalette = null;
         this.monochromePaletteEnabled = false;
         this.renderTargetStack.length = 0;
-        this.globalColorEffectStack.length = 0;
+        this.globalColorInvertedStack.length = 0;
+        this.monochromePaletteStack.length = 0;
+        this.monochromePaletteEnabledStack.length = 0;
         this.contextLost = false;
         this.gl = null;
         this.buffer = null;
@@ -787,7 +822,9 @@ export class WebGLRenderer {
         this.textureBatchInverted = false;
         this.currentTarget = null;
         this.renderTargetStack.length = 0;
-        this.globalColorEffectStack.length = 0;
+        this.globalColorInvertedStack.length = 0;
+        this.monochromePaletteStack.length = 0;
+        this.monochromePaletteEnabledStack.length = 0;
         this.setDefaultDimensions(width, height, backingWidth, backingHeight);
         this.useDefaultDimensions();
         this.gl?.viewport(0, 0, this.backingWidth, this.backingHeight);
@@ -799,7 +836,9 @@ export class WebGLRenderer {
         this.textureBatchInverted = false;
         this.currentTarget = null;
         this.renderTargetStack.length = 0;
-        this.globalColorEffectStack.length = 0;
+        this.globalColorInvertedStack.length = 0;
+        this.monochromePaletteStack.length = 0;
+        this.monochromePaletteEnabledStack.length = 0;
         this.setDefaultDimensions(xsize, ysize, this.defaultBackingWidth, this.defaultBackingHeight);
         this.useDefaultDimensions();
         this.gl?.viewport(0, 0, this.backingWidth, this.backingHeight);
@@ -1276,15 +1315,6 @@ export class WebGLRenderer {
         if (clearCachedPalette) {
             this.monochromePalette = null;
         }
-    }
-    static cloneMonochromePalette(palette) {
-        if (palette === null) {
-            return null;
-        }
-        return {
-            black: [palette.black[0], palette.black[1], palette.black[2]],
-            white: [palette.white[0], palette.white[1], palette.white[2]]
-        };
     }
     static normalizeColorChannel(value) {
         if (!Number.isFinite(value)) {

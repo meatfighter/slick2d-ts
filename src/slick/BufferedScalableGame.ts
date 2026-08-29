@@ -6,15 +6,22 @@ import type { InputListener } from "./InputListener.js";
 import { Renderer } from "./opengl/renderer/Renderer.js";
 
 function isInputListener(value: unknown): value is InputListener {
-    const candidate = value as Partial<InputListener> | null;
+    const candidate = value as Partial<InputListener> | null | undefined;
     return (
-        !!candidate &&
+        candidate !== null &&
+        candidate !== undefined &&
         typeof candidate.setInput === "function" &&
         typeof candidate.isAcceptingInput === "function" &&
         typeof candidate.keyPressed === "function" &&
         typeof candidate.mousePressed === "function" &&
         typeof candidate.controllerButtonPressed === "function"
     );
+}
+
+function validateNativeDimension(name: string, value: number): void {
+    if (!Number.isInteger(value) || value <= 0) {
+        throw new RangeError(`BufferedScalableGame ${name} must be a positive integer`);
+    }
 }
 
 export interface BufferedScalableGameOptions {
@@ -53,6 +60,9 @@ export class BufferedScalableGame implements Game {
     public constructor(held: Game, normalWidth: number, normalHeight: number, maintainAspect: boolean);
     public constructor(held: Game, normalWidth: number, normalHeight: number, options: BufferedScalableGameOptions);
     public constructor(held: Game, normalWidth: number, normalHeight: number, maintainAspectOrOptions: boolean | BufferedScalableGameOptions = false) {
+        validateNativeDimension("width", normalWidth);
+        validateNativeDimension("height", normalHeight);
+
         this.held = held;
         this.normalWidth = normalWidth;
         this.normalHeight = normalHeight;
@@ -62,15 +72,24 @@ export class BufferedScalableGame implements Game {
         this.sourceY = options.sourceY ?? 0;
         this.sourceWidth = options.sourceWidth ?? normalWidth;
         this.sourceHeight = options.sourceHeight ?? normalHeight;
-        this.validateSourceRectangle();
+        this.validateSourceRectangle(this.sourceX, this.sourceY, this.sourceWidth, this.sourceHeight);
     }
 
     public init(container: GameContainer): void | Promise<void> {
         this.container = container;
-        this.nativeFrame = new Image(this.normalWidth, this.normalHeight, Image.FILTER_NEAREST);
-        this.nativeFrame.setFilter(Image.FILTER_NEAREST);
-        this.nativeFrame.ensureInverted();
-        this.nativeGraphics = this.nativeFrame.getGraphics();
+        this.releaseNativeFrame();
+
+        const nativeFrame = new Image(this.normalWidth, this.normalHeight, Image.FILTER_NEAREST);
+        try {
+            nativeFrame.setFilter(Image.FILTER_NEAREST);
+            nativeFrame.ensureInverted();
+            this.nativeGraphics = nativeFrame.getGraphics();
+            this.nativeFrame = nativeFrame;
+        } catch (error) {
+            nativeFrame.destroy();
+            throw error;
+        }
+
         this.recalculateScale();
         if (isInputListener(this.held)) {
             container.getInput().addListener(this.held);
@@ -80,13 +99,14 @@ export class BufferedScalableGame implements Game {
 
     public update(container: GameContainer, delta: number): void {
         this.container = container;
-        if (container.getWidth() !== this.lastContainerWidth || container.getHeight() !== this.lastContainerHeight) {
-            this.recalculateScale();
-        }
+        this.recalculateScaleIfNeeded(container);
         this.held.update(container, delta);
     }
 
     public render(container: GameContainer, screenGraphics: Graphics): void {
+        this.container = container;
+        this.recalculateScaleIfNeeded(container);
+
         const nativeFrame = this.nativeFrame;
         const nativeGraphics = this.nativeGraphics;
         const nativeTarget = nativeFrame?.__getRenderTarget() ?? null;
@@ -107,31 +127,37 @@ export class BufferedScalableGame implements Game {
             nativeGraphics.clear();
             this.held.render(container, nativeGraphics);
             nativeGraphics.flush();
-            nativeGraphics.clearClip();
-            nativeGraphics.clearWorldClip();
         } finally {
-            renderer.popTransform();
-            Graphics.setCurrent(previousGraphics);
-            renderer.popRenderTarget();
+            try {
+                nativeGraphics.clearClip();
+                nativeGraphics.clearWorldClip();
+            } finally {
+                renderer.popTransform();
+                Graphics.setCurrent(previousGraphics);
+                renderer.popRenderTarget();
+            }
         }
 
         screenGraphics.pushTransform();
-        screenGraphics.resetTransform();
-        screenGraphics.setClip(this.xoffset, this.yoffset, this.targetWidth, this.targetHeight);
-        renderer.pushGlobalColorEffectsDisabled();
         try {
-            nativeFrame.draw(
-                this.xoffset,
-                this.yoffset,
-                this.xoffset + this.targetWidth,
-                this.yoffset + this.targetHeight,
-                this.sourceX,
-                this.sourceY,
-                this.sourceX + this.sourceWidth,
-                this.sourceY + this.sourceHeight
-            );
+            screenGraphics.resetTransform();
+            screenGraphics.setClip(this.xoffset, this.yoffset, this.targetWidth, this.targetHeight);
+            renderer.pushGlobalColorEffectsDisabled();
+            try {
+                nativeFrame.draw(
+                    this.xoffset,
+                    this.yoffset,
+                    this.xoffset + this.targetWidth,
+                    this.yoffset + this.targetHeight,
+                    this.sourceX,
+                    this.sourceY,
+                    this.sourceX + this.sourceWidth,
+                    this.sourceY + this.sourceHeight
+                );
+            } finally {
+                renderer.popGlobalColorEffects();
+            }
         } finally {
-            renderer.popGlobalColorEffects();
             screenGraphics.clearClip();
             screenGraphics.popTransform();
         }
@@ -146,8 +172,8 @@ export class BufferedScalableGame implements Game {
         if (container === null) {
             return;
         }
-        this.lastContainerWidth = container.getWidth();
-        this.lastContainerHeight = container.getHeight();
+        this.lastContainerWidth = Math.max(1, Math.trunc(container.getWidth()));
+        this.lastContainerHeight = Math.max(1, Math.trunc(container.getHeight()));
         this.targetWidth = this.lastContainerWidth;
         this.targetHeight = this.lastContainerHeight;
         if (this.maintainAspect) {
@@ -170,11 +196,11 @@ export class BufferedScalableGame implements Game {
     }
 
     public setSourceRectangle(x: number, y: number, width: number, height: number): void {
+        this.validateSourceRectangle(x, y, width, height);
         this.sourceX = x;
         this.sourceY = y;
         this.sourceWidth = width;
         this.sourceHeight = height;
-        this.validateSourceRectangle();
         this.recalculateScale();
     }
 
@@ -194,14 +220,32 @@ export class BufferedScalableGame implements Game {
         return this.normalHeight;
     }
 
-    private validateSourceRectangle(): void {
+    private recalculateScaleIfNeeded(container: GameContainer): void {
+        const width = Math.max(1, Math.trunc(container.getWidth()));
+        const height = Math.max(1, Math.trunc(container.getHeight()));
+        if (width !== this.lastContainerWidth || height !== this.lastContainerHeight) {
+            this.recalculateScale();
+        }
+    }
+
+    private releaseNativeFrame(): void {
+        this.nativeGraphics = null;
+        this.nativeFrame?.destroy();
+        this.nativeFrame = null;
+    }
+
+    private validateSourceRectangle(x: number, y: number, width: number, height: number): void {
         if (
-            this.sourceX < 0 ||
-            this.sourceY < 0 ||
-            this.sourceWidth <= 0 ||
-            this.sourceHeight <= 0 ||
-            this.sourceX + this.sourceWidth > this.normalWidth ||
-            this.sourceY + this.sourceHeight > this.normalHeight
+            !Number.isFinite(x) ||
+            !Number.isFinite(y) ||
+            !Number.isFinite(width) ||
+            !Number.isFinite(height) ||
+            x < 0 ||
+            y < 0 ||
+            width <= 0 ||
+            height <= 0 ||
+            x + width > this.normalWidth ||
+            y + height > this.normalHeight
         ) {
             throw new RangeError("BufferedScalableGame source rectangle is outside the native frame");
         }

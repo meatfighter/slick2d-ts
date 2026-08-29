@@ -44,6 +44,8 @@ export declare class BufferedScalableGame implements Game {
     getTitle(): string;
     getNormalWidth(): number;
     getNormalHeight(): number;
+    private recalculateScaleIfNeeded;
+    private releaseNativeFrame;
     private validateSourceRectangle;
 }
 //# sourceMappingURL=BufferedScalableGame.d.ts.map

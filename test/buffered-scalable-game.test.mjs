@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { BufferedScalableGame, Color, Graphics, Renderer } from "../dist/index.js";
+import { BufferedScalableGame, Color, Graphics, Image, Renderer } from "../dist/index.js";
+import { WebGLRenderer } from "../dist/slick/rendering/WebGLRenderer.js";
 
 class FakeOffscreenCanvas {
     constructor(width, height) {
@@ -126,6 +127,60 @@ test("BufferedScalableGame scales source rectangles and maps input into source c
 test("BufferedScalableGame validates source rectangles against the native frame", () => {
     assert.throws(() => new BufferedScalableGame(fakeGame(), 320, 240, { sourceWidth: 321 }), RangeError);
     assert.throws(() => new BufferedScalableGame(fakeGame(), 320, 240, { sourceHeight: 0 }), RangeError);
+    assert.throws(() => new BufferedScalableGame(fakeGame(), 0, 240), RangeError);
+    assert.throws(() => new BufferedScalableGame(fakeGame(), 320.5, 240), RangeError);
+    assert.throws(() => new BufferedScalableGame(fakeGame(), 320, 240, { sourceX: Number.NaN }), RangeError);
+    assert.throws(() => new BufferedScalableGame(fakeGame(), 320, 240, { sourceWidth: Number.POSITIVE_INFINITY }), RangeError);
+});
+
+test("BufferedScalableGame rejects source rectangle updates before mutating state", async () => {
+    installOffscreenCanvas();
+    const game = new BufferedScalableGame(fakeGame(), 320, 240, {
+        sourceHeight: 120,
+        sourceWidth: 160,
+        sourceX: 16,
+        sourceY: 8
+    });
+
+    await game.init(fakeContainer(800, 600));
+
+    assert.throws(() => game.setSourceRectangle(300, 0, 32, 32), RangeError);
+    assert.equal(game.sourceX, 16);
+    assert.equal(game.sourceY, 8);
+    assert.equal(game.sourceWidth, 160);
+    assert.equal(game.sourceHeight, 120);
+});
+
+test("BufferedScalableGame releases the previous native frame during reinit", async () => {
+    installOffscreenCanvas();
+    let initCalls = 0;
+    const game = new BufferedScalableGame(
+        fakeGame({
+            init: () => {
+                initCalls++;
+            }
+        }),
+        320,
+        240
+    );
+    const container = fakeContainer(640, 480);
+
+    await game.init(container);
+    const firstNativeFrame = game.nativeFrame;
+    assert.ok(firstNativeFrame instanceof Image);
+
+    let destroyCalls = 0;
+    const originalDestroy = firstNativeFrame.destroy.bind(firstNativeFrame);
+    firstNativeFrame.destroy = () => {
+        destroyCalls++;
+        originalDestroy();
+    };
+
+    await game.init(container);
+
+    assert.equal(destroyCalls, 1);
+    assert.notEqual(game.nativeFrame, firstNativeFrame);
+    assert.equal(initCalls, 2);
 });
 
 test("BufferedScalableGame renders into the native target before the presentation blit", async () => {
@@ -233,4 +288,100 @@ test("BufferedScalableGame renders into the native target before the presentatio
     } finally {
         restoreRendererMethods(renderer, originals);
     }
+});
+
+test("render-target scopes restore nested targets and reject underflow", () => {
+    const renderer = new WebGLRenderer();
+    const outerTarget = { width: 320, height: 240 };
+    const innerTarget = { width: 64, height: 64 };
+
+    assert.equal(renderer.getRenderTarget(), null);
+    renderer.pushRenderTarget(outerTarget);
+    assert.equal(renderer.getRenderTarget(), outerTarget);
+    renderer.pushRenderTarget(innerTarget);
+    assert.equal(renderer.getRenderTarget(), innerTarget);
+    renderer.popRenderTarget();
+    assert.equal(renderer.getRenderTarget(), outerTarget);
+    renderer.popRenderTarget();
+    assert.equal(renderer.getRenderTarget(), null);
+    assert.throws(() => renderer.popRenderTarget(), /underflow/i);
+});
+
+test("global color-effect scopes disable presentation effects and restore exact prior state", () => {
+    const renderer = new WebGLRenderer();
+
+    renderer.setColorInverted(true);
+    renderer.setMonochromePalette(Color.black, Color.white);
+    const originalPalette = renderer.monochromePalette;
+
+    renderer.pushGlobalColorEffectsDisabled();
+    assert.equal(renderer.isColorInverted(), false);
+    assert.equal(renderer.isMonochromePaletteEnabled(), false);
+
+    renderer.setColorInverted(true);
+    renderer.setMonochromePalette(Color.red, Color.white);
+    assert.notEqual(renderer.monochromePalette, originalPalette);
+
+    renderer.popGlobalColorEffects();
+    assert.equal(renderer.isColorInverted(), true);
+    assert.equal(renderer.isMonochromePaletteEnabled(), true);
+    assert.equal(renderer.monochromePalette, originalPalette);
+    assert.throws(() => renderer.popGlobalColorEffects(), /underflow/i);
+});
+
+test("nested Graphics operations restore the enclosing render target, current Graphics, and clip state", () => {
+    const renderer = new WebGLRenderer();
+    Renderer.setRenderer(renderer);
+
+    const outerTarget = { width: 320, height: 240 };
+    const innerTarget = { width: 64, height: 64 };
+    const outer = new Graphics(outerTarget);
+    const inner = new Graphics(innerTarget);
+
+    Graphics.setCurrent(outer);
+    outer.setClip(1, 2, 30, 40);
+    outer.setWorldClip(3, 4, 20, 10);
+
+    renderer.pushRenderTarget(outerTarget);
+    inner.setClip(5, 6, 7, 8);
+
+    assert.equal(renderer.getRenderTarget(), outerTarget);
+    assert.equal(Graphics.getCurrent(), outer);
+    assert.deepEqual(renderer.screenClip, { x: 1, y: 2, width: 30, height: 40 });
+    assert.deepEqual(renderer.worldClip, { x: 3, y: 4, width: 20, height: 10 });
+
+    renderer.popRenderTarget();
+});
+
+test("destroying a writable Image disposes its framebuffer and texture resource exactly once", () => {
+    installOffscreenCanvas();
+
+    const image = new Image(16, 8, Image.FILTER_NEAREST);
+    const renderTarget = image.__getRenderTarget();
+    const textureResource = image.__getTextureResource();
+    assert.ok(renderTarget);
+    assert.ok(textureResource);
+
+    let renderTargetDisposeCalls = 0;
+    let textureDisposeCalls = 0;
+    const originalTargetDispose = renderTarget.dispose.bind(renderTarget);
+    const originalTextureDispose = textureResource.dispose.bind(textureResource);
+
+    renderTarget.dispose = (gl) => {
+        renderTargetDisposeCalls++;
+        originalTargetDispose(gl);
+    };
+    textureResource.dispose = (gl) => {
+        textureDisposeCalls++;
+        originalTextureDispose(gl);
+    };
+
+    image.destroy();
+    image.destroy();
+
+    assert.equal(renderTargetDisposeCalls, 1);
+    assert.equal(textureDisposeCalls, 1);
+    assert.equal(image.isDestroyed(), true);
+    assert.equal(image.__getRenderTarget(), null);
+    assert.equal(image.__getTextureResource(), null);
 });

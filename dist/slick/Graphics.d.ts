@@ -24,6 +24,7 @@ export declare class Graphics {
     private static current;
     private static readonly currentStack;
     private static readonly renderTargetScopeStack;
+    private static readonly clipStateScopeStack;
     private color;
     private background;
     private font;
@@ -190,5 +191,6 @@ export declare class Graphics {
     private withRenderTarget;
     private beginRenderTarget;
     private endRenderTarget;
+    private applyClipState;
 }
 //# sourceMappingURL=Graphics.d.ts.map

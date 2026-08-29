@@ -439,8 +439,14 @@ export class Image {
     }
     /** Java Slick2D counterpart: Image.destroy(). */
     destroy() {
+        if (this.destroyed) {
+            return;
+        }
         this.destroyed = true;
-        this.textureResource.dispose(Renderer.getBackend().getContext());
+        const gl = Renderer.getBackend().getContext();
+        this.renderTarget?.dispose(gl);
+        this.renderTarget = null;
+        this.textureResource.dispose(gl);
     }
     /** Java Slick2D counterpart: Image.flushPixelData(). */
     flushPixelData() { }
@@ -450,7 +456,7 @@ export class Image {
     }
     /** Internal renderer hook returning the render target if this image is writable. */
     __getRenderTarget() {
-        return this.renderTarget;
+        return this.destroyed ? null : this.renderTarget;
     }
     /** Internal renderer hook returning Slick per-corner tint colors. */
     __getCornerColors() {

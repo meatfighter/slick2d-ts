@@ -584,8 +584,15 @@ export class Image implements Renderable {
 
     /** Java Slick2D counterpart: Image.destroy(). */
     public destroy(): void {
+        if (this.destroyed) {
+            return;
+        }
+
         this.destroyed = true;
-        this.textureResource.dispose(Renderer.getBackend().getContext());
+        const gl = Renderer.getBackend().getContext();
+        this.renderTarget?.dispose(gl);
+        this.renderTarget = null;
+        this.textureResource.dispose(gl);
     }
 
     /** Java Slick2D counterpart: Image.flushPixelData(). */
@@ -598,7 +605,7 @@ export class Image implements Renderable {
 
     /** Internal renderer hook returning the render target if this image is writable. */
     public __getRenderTarget(): WebGLRenderTarget | null {
-        return this.renderTarget;
+        return this.destroyed ? null : this.renderTarget;
     }
 
     /** Internal renderer hook returning Slick per-corner tint colors. */
