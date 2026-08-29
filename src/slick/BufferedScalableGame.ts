@@ -138,9 +138,13 @@ export class BufferedScalableGame implements Game {
             }
         }
 
+        const previousScreenClip = screenGraphics.getClip();
+        const previousWorldClip = screenGraphics.getWorldClip();
+
         screenGraphics.pushTransform();
         try {
             screenGraphics.resetTransform();
+            screenGraphics.clearWorldClip();
             screenGraphics.setClip(this.xoffset, this.yoffset, this.targetWidth, this.targetHeight);
             renderer.pushGlobalColorEffectsDisabled();
             try {
@@ -158,7 +162,18 @@ export class BufferedScalableGame implements Game {
                 renderer.popGlobalColorEffects();
             }
         } finally {
-            screenGraphics.clearClip();
+            if (previousScreenClip === null) {
+                screenGraphics.clearClip();
+            } else {
+                screenGraphics.setClip(previousScreenClip.x, previousScreenClip.y, previousScreenClip.width, previousScreenClip.height);
+            }
+
+            if (previousWorldClip === null) {
+                screenGraphics.clearWorldClip();
+            } else {
+                screenGraphics.setWorldClip(previousWorldClip);
+            }
+
             screenGraphics.popTransform();
         }
 

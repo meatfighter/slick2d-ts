@@ -203,6 +203,7 @@ export class Image {
     }
     /** Java Slick2D counterpart: Image.getGraphics(). */
     getGraphics() {
+        this.throwIfDestroyed();
         if (!this.renderTarget) {
             throw new SlickException("Image is not a writable render target");
         }
@@ -444,9 +445,14 @@ export class Image {
         }
         this.destroyed = true;
         const gl = Renderer.getBackend().getContext();
-        this.renderTarget?.dispose(gl);
+        const renderTarget = this.renderTarget;
         this.renderTarget = null;
-        this.textureResource.dispose(gl);
+        try {
+            renderTarget?.dispose(gl);
+        }
+        finally {
+            this.textureResource.dispose(gl);
+        }
     }
     /** Java Slick2D counterpart: Image.flushPixelData(). */
     flushPixelData() { }

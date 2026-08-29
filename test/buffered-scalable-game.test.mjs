@@ -290,6 +290,54 @@ test("BufferedScalableGame renders into the native target before the presentatio
     }
 });
 
+test("BufferedScalableGame preserves caller display clip state during presentation", async () => {
+    installOffscreenCanvas();
+    const screenGraphics = new Graphics(800, 600);
+    const container = fakeContainer(800, 600, new FakeInput(), screenGraphics);
+    const game = new BufferedScalableGame(fakeGame(), 320, 240, true);
+
+    await game.init(container);
+
+    Graphics.setCurrent(screenGraphics);
+    screenGraphics.setClip(7, 8, 500, 300);
+    screenGraphics.setWorldClip(11, 12, 200, 100);
+
+    game.render(container, screenGraphics);
+
+    assert.deepEqual(screenGraphics.getClip(), { x: 7, y: 8, width: 500, height: 300 });
+    assert.deepEqual(screenGraphics.getWorldClip(), { x: 11, y: 12, width: 200, height: 100 });
+});
+
+test("display Graphics used inside an offscreen scope restores target, current Graphics, and clips", () => {
+    const previousRenderer = Renderer.get();
+    const renderer = new WebGLRenderer();
+    Renderer.setRenderer(renderer);
+
+    try {
+        const nativeTarget = { width: 320, height: 240 };
+        const nativeGraphics = new Graphics(nativeTarget);
+        const displayGraphics = new Graphics(1280, 720);
+
+        renderer.pushRenderTarget(nativeTarget);
+        Graphics.setCurrent(nativeGraphics);
+
+        nativeGraphics.setClip(1, 2, 300, 200);
+        nativeGraphics.setWorldClip(3, 4, 100, 80);
+
+        displayGraphics.fillRect(0, 0, 10, 10);
+
+        assert.equal(renderer.getRenderTarget(), nativeTarget);
+        assert.equal(Graphics.getCurrent(), nativeGraphics);
+        assert.deepEqual(renderer.screenClip, { x: 1, y: 2, width: 300, height: 200 });
+        assert.deepEqual(renderer.worldClip, { x: 3, y: 4, width: 100, height: 80 });
+
+        renderer.popRenderTarget();
+    } finally {
+        Graphics.setCurrent(null);
+        Renderer.setRenderer(previousRenderer);
+    }
+});
+
 test("render-target scopes restore nested targets and reject underflow", () => {
     const renderer = new WebGLRenderer();
     const outerTarget = { width: 320, height: 240 };
@@ -384,4 +432,5 @@ test("destroying a writable Image disposes its framebuffer and texture resource 
     assert.equal(image.isDestroyed(), true);
     assert.equal(image.__getRenderTarget(), null);
     assert.equal(image.__getTextureResource(), null);
+    assert.throws(() => image.getGraphics(), /destroyed/i);
 });

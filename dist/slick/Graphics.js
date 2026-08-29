@@ -21,8 +21,6 @@ export class Graphics {
     static MODE_SCREEN = 6;
     static current = null;
     static currentStack = [];
-    static renderTargetScopeStack = [];
-    static clipStateScopeStack = [];
     color = Color.white.copy();
     background = Color.black.copy();
     font = new CanvasFont();
@@ -609,33 +607,15 @@ export class Graphics {
     beginRenderTarget() {
         const renderer = Renderer.getBackend();
         const previous = Graphics.current;
-        const targetChanged = renderer.getRenderTarget() !== this.renderTarget;
-        const shouldRestore = targetChanged || previous !== this;
-        const shouldRestoreClipState = shouldRestore && (targetChanged || previous !== null || this.screenClipRecord !== null || this.worldClipRecord !== null);
-        Graphics.renderTargetScopeStack.push(shouldRestore);
-        Graphics.clipStateScopeStack.push(shouldRestoreClipState);
-        if (shouldRestore) {
-            Graphics.currentStack.push(previous);
-            renderer.pushRenderTarget(this.renderTarget);
-            Graphics.current = this;
-            if (shouldRestoreClipState) {
-                this.applyClipState(renderer);
-            }
+        renderer.pushRenderTarget(this.renderTarget);
+        Graphics.currentStack.push(previous);
+        Graphics.current = this;
+        if (previous !== this) {
+            this.applyClipState(renderer);
         }
         return renderer;
     }
     endRenderTarget(renderer) {
-        const shouldRestoreClipState = Graphics.clipStateScopeStack.pop();
-        if (shouldRestoreClipState === undefined) {
-            throw new SlickException("Graphics clip state scope stack underflow");
-        }
-        const shouldRestore = Graphics.renderTargetScopeStack.pop();
-        if (shouldRestore === undefined) {
-            throw new SlickException("Graphics render target scope stack underflow");
-        }
-        if (!shouldRestore) {
-            return;
-        }
         const previous = Graphics.currentStack.pop();
         if (previous === undefined) {
             throw new SlickException("Graphics current stack underflow");
@@ -645,15 +625,16 @@ export class Graphics {
         }
         finally {
             Graphics.current = previous;
-            if (shouldRestoreClipState) {
-                if (previous === null) {
-                    renderer.clearClip();
-                    renderer.clearWorldClip();
-                }
-                else {
-                    previous.applyClipState(renderer);
-                }
-            }
+        }
+        if (previous === this) {
+            return;
+        }
+        if (previous === null) {
+            renderer.clearClip();
+            renderer.clearWorldClip();
+        }
+        else {
+            previous.applyClipState(renderer);
         }
     }
     applyClipState(renderer) {

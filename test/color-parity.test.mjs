@@ -27,11 +27,14 @@ class PixelReadbackGL {
     constructor() {
         this.FRAMEBUFFER = 0x8d40;
         this.RGBA = 0x1908;
+        this.SCISSOR_TEST = 0x0c11;
         this.UNSIGNED_BYTE = 0x1401;
         this.lastRead = null;
     }
 
     bindFramebuffer() {}
+
+    disable() {}
 
     readPixels(x, y, width, height, format, type, target) {
         this.lastRead = [x, y, width, height, format, type];
@@ -45,6 +48,7 @@ class PixelReadbackGL {
 
 afterEach(() => {
     ResourceLoader.clearCache();
+    Graphics.setCurrent(null);
     Renderer.setRenderer(Renderer.IMMEDIATE_RENDERER);
     delete globalThis.createImageBitmap;
     delete globalThis.document;

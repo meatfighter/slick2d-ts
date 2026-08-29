@@ -288,6 +288,7 @@ function installCanvasDocument() {
 
 afterEach(() => {
     delete globalThis.document;
+    Graphics.setCurrent(null);
 });
 
 test("Graphics shape and gradient-line parity methods are implemented", () => {
@@ -903,6 +904,7 @@ test("Graphics draw modes drive Java Slick2D blend and color-mask state", () => 
     renderer.gl = gl;
     try {
         const graphics = new Graphics(32, 16);
+        Graphics.setCurrent(graphics);
 
         graphics.setDrawMode(Graphics.MODE_ALPHA_MAP);
         graphics.setDrawMode(Graphics.MODE_ALPHA_BLEND);
@@ -941,6 +943,7 @@ test("Graphics.clearAlphaMap restores Java draw mode after alpha-only clear", ()
     renderer.gl = new FakeStateGL();
     try {
         const graphics = new Graphics(32, 16);
+        Graphics.setCurrent(graphics);
         graphics.setDrawMode(Graphics.MODE_ADD);
         graphics.clearAlphaMap();
 
