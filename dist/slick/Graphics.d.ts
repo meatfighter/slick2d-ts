@@ -81,6 +81,8 @@ export declare class Graphics {
     getBackground(): Color;
     /** Internal renderer helper: avoids copying the background during the frame loop. */
     __getBackgroundReference(): Color;
+    /** Internal renderer helper: copies background channels without allocating. */
+    __copyBackgroundFrom(source: Graphics): void;
     /** Java Slick2D counterpart: Graphics.clear(). */
     clear(): void;
     /** Java Slick2D counterpart: Graphics.resetTransform(). */

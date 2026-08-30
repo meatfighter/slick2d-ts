@@ -186,6 +186,14 @@ export class Graphics {
         return this.background;
     }
 
+    /** Internal renderer helper: copies background channels without allocating. */
+    public __copyBackgroundFrom(source: Graphics): void {
+        this.background.r = source.background.r;
+        this.background.g = source.background.g;
+        this.background.b = source.background.b;
+        this.background.a = source.background.a;
+    }
+
     /** Java Slick2D counterpart: Graphics.clear(). */
     public clear(): void {
         const renderer = this.beginRenderTarget();

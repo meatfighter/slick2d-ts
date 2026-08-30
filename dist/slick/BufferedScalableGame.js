@@ -94,7 +94,7 @@ export class BufferedScalableGame {
             nativeGraphics.resetTransform();
             nativeGraphics.clearClip();
             nativeGraphics.clearWorldClip();
-            nativeGraphics.setBackground(screenGraphics.getBackground());
+            nativeGraphics.__copyBackgroundFrom(screenGraphics);
             // The native Graphics draw mode is persistent; clear under normal draw state.
             renderer.pushNormalDrawModeState();
             try {
@@ -127,17 +127,26 @@ export class BufferedScalableGame {
         screenGraphics.pushTransform();
         try {
             screenGraphics.resetTransform();
-            screenGraphics.clearWorldClip();
-            screenGraphics.setClip(this.xoffset, this.yoffset, this.targetWidth, this.targetHeight);
+            if (previousScreenClip !== null) {
+                screenGraphics.clearClip();
+            }
+            if (previousWorldClip !== null) {
+                screenGraphics.clearWorldClip();
+            }
             // Held-game draw state and effects are already baked into nativeFrame.
             renderer.pushNormalDrawModeState();
             try {
-                renderer.pushGlobalColorEffectsDisabled();
+                const colorEffectsActive = renderer.isColorInverted() || renderer.isMonochromePaletteEnabled();
+                if (colorEffectsActive) {
+                    renderer.pushGlobalColorEffectsDisabled();
+                }
                 try {
                     nativeFrame.draw(this.xoffset, this.yoffset, this.xoffset + this.targetWidth, this.yoffset + this.targetHeight, this.sourceX, this.sourceY, this.sourceX + this.sourceWidth, this.sourceY + this.sourceHeight);
                 }
                 finally {
-                    renderer.popGlobalColorEffects();
+                    if (colorEffectsActive) {
+                        renderer.popGlobalColorEffects();
+                    }
                 }
             }
             finally {
@@ -145,16 +154,10 @@ export class BufferedScalableGame {
             }
         }
         finally {
-            if (previousScreenClip === null) {
-                screenGraphics.clearClip();
-            }
-            else {
+            if (previousScreenClip !== null) {
                 screenGraphics.setClip(previousScreenClip.x, previousScreenClip.y, previousScreenClip.width, previousScreenClip.height);
             }
-            if (previousWorldClip === null) {
-                screenGraphics.clearWorldClip();
-            }
-            else {
+            if (previousWorldClip !== null) {
                 screenGraphics.setWorldClip(previousWorldClip);
             }
             screenGraphics.popTransform();

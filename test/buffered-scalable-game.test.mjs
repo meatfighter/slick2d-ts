@@ -283,8 +283,14 @@ test("BufferedScalableGame renders into the native target before the presentatio
         assert.equal(drawCalls.length, 1);
         assert.equal(drawCalls[0].target, null);
         assert.deepEqual(drawCalls[0].args.slice(1, 10), [0, 0, 800, 600, 16, 128, 160, -120, 1]);
-        assert.ok(calls.findIndex(([name]) => name === "pushEffects") < calls.findIndex(([name]) => name === "drawImage"));
-        assert.ok(calls.findIndex(([name]) => name === "drawImage") < calls.findIndex(([name]) => name === "popEffects"));
+        assert.equal(
+            calls.some(([name]) => name === "pushEffects" || name === "popEffects"),
+            false
+        );
+        assert.equal(
+            calls.some(([name, target]) => name === "setClip" && target === null),
+            false
+        );
     } finally {
         restoreRendererMethods(renderer, originals);
     }
@@ -292,9 +298,19 @@ test("BufferedScalableGame renders into the native target before the presentatio
 
 test("BufferedScalableGame preserves caller display clip state during presentation", async () => {
     installOffscreenCanvas();
+    const renderer = Renderer.getBackend();
     const screenGraphics = new Graphics(800, 600);
     const container = fakeContainer(800, 600, new FakeInput(), screenGraphics);
-    const game = new BufferedScalableGame(fakeGame(), 320, 240, true);
+    let overlayClipState = null;
+    class TestBufferedScalableGame extends BufferedScalableGame {
+        renderOverlay() {
+            overlayClipState = {
+                screen: renderer.screenClip,
+                world: renderer.worldClip
+            };
+        }
+    }
+    const game = new TestBufferedScalableGame(fakeGame(), 320, 240, true);
 
     await game.init(container);
 
@@ -302,10 +318,112 @@ test("BufferedScalableGame preserves caller display clip state during presentati
     screenGraphics.setClip(7, 8, 500, 300);
     screenGraphics.setWorldClip(11, 12, 200, 100);
 
+    let presentationClipState = null;
+    game.nativeFrame.draw = () => {
+        presentationClipState = {
+            screen: renderer.screenClip,
+            world: renderer.worldClip
+        };
+    };
+
     game.render(container, screenGraphics);
 
+    assert.deepEqual(presentationClipState, { screen: null, world: null });
+    assert.deepEqual(overlayClipState, {
+        screen: { x: 7, y: 8, width: 500, height: 300 },
+        world: { x: 11, y: 12, width: 200, height: 100 }
+    });
     assert.deepEqual(screenGraphics.getClip(), { x: 7, y: 8, width: 500, height: 300 });
     assert.deepEqual(screenGraphics.getWorldClip(), { x: 11, y: 12, width: 200, height: 100 });
+});
+
+test("BufferedScalableGame disables active color effects only around presentation", async () => {
+    installOffscreenCanvas();
+    const renderer = Renderer.getBackend();
+    const screenGraphics = new Graphics(800, 600);
+    const container = fakeContainer(800, 600, new FakeInput(), screenGraphics);
+    let overlayEffectState = null;
+    class TestBufferedScalableGame extends BufferedScalableGame {
+        renderOverlay() {
+            overlayEffectState = {
+                inverted: renderer.isColorInverted(),
+                palette: renderer.isMonochromePaletteEnabled()
+            };
+        }
+    }
+    const game = new TestBufferedScalableGame(fakeGame(), 320, 240, true);
+
+    await game.init(container);
+
+    try {
+        Graphics.setCurrent(screenGraphics);
+        renderer.setColorInverted(true);
+        renderer.setMonochromePalette(Color.red, Color.white);
+
+        let presentationEffectState = null;
+        game.nativeFrame.draw = () => {
+            presentationEffectState = {
+                inverted: renderer.isColorInverted(),
+                palette: renderer.isMonochromePaletteEnabled()
+            };
+        };
+
+        game.render(container, screenGraphics);
+
+        assert.deepEqual(presentationEffectState, { inverted: false, palette: false });
+        assert.deepEqual(overlayEffectState, { inverted: true, palette: true });
+        assert.equal(renderer.isColorInverted(), true);
+        assert.equal(renderer.isMonochromePaletteEnabled(), true);
+    } finally {
+        renderer.setColorInverted(false);
+        renderer.clearMonochromePalette();
+    }
+});
+
+test("BufferedScalableGame refreshes native background every frame without stale held changes", async () => {
+    installOffscreenCanvas();
+    const screenGraphics = new Graphics(800, 600);
+    screenGraphics.setBackground(Color.blue);
+    const container = fakeContainer(800, 600, new FakeInput(), screenGraphics);
+    let renderCount = 0;
+    const game = new BufferedScalableGame(
+        fakeGame({
+            render: (_heldContainer, graphics) => {
+                renderCount++;
+                if (renderCount === 1) {
+                    graphics.setBackground(Color.red);
+                }
+            }
+        }),
+        320,
+        240,
+        true
+    );
+
+    await game.init(container);
+
+    const renderer = Renderer.getBackend();
+    const originalFillRect = renderer.fillRect;
+    const clearColors = [];
+    renderer.fillRect = (x, y, width, height, color, transform) => {
+        if (x === 0 && y === 0 && width === 320 && height === 240) {
+            clearColors.push([color.r, color.g, color.b, color.a]);
+        }
+        originalFillRect.call(renderer, x, y, width, height, color, transform);
+    };
+
+    try {
+        Graphics.setCurrent(screenGraphics);
+        game.render(container, screenGraphics);
+        game.render(container, screenGraphics);
+    } finally {
+        renderer.fillRect = originalFillRect;
+    }
+
+    assert.deepEqual(clearColors, [
+        [0, 0, 1, 1],
+        [0, 0, 1, 1]
+    ]);
 });
 
 test("display Graphics used inside an offscreen scope restores target, current Graphics, and clips", () => {
