@@ -344,7 +344,7 @@ test("Graphics.setCurrent reapplies the selected mode after renderer state track
     assert.deepEqual(rendererDrawModeState(renderer), addState(renderer));
 });
 
-test("BufferedScalableGame clears natively under normal state and avoids redundant setCurrent transitions", async (t) => {
+test("BufferedScalableGame clears native framebuffer with WebGL clear and avoids redundant setCurrent transitions", async (t) => {
     globalThis.OffscreenCanvas = FakeCanvas;
 
     const renderer = new WebGLRenderer();
@@ -403,9 +403,15 @@ test("BufferedScalableGame clears natively under normal state and avoids redunda
     });
 
     const nativeClearStates = [];
-    game.nativeGraphics.clear = () => {
+    const originalGlClear = renderer.glClear;
+    renderer.glClear = (mask) => {
+        assert.equal(mask, renderer.GL_COLOR_BUFFER_BIT);
         nativeClearStates.push(rendererDrawModeState(renderer));
+        return originalGlClear.call(renderer, mask);
     };
+    t.after(() => {
+        renderer.glClear = originalGlClear;
+    });
 
     let presentationState = null;
     const nativeFrame = game.nativeFrame;
@@ -426,7 +432,7 @@ test("BufferedScalableGame clears natively under normal state and avoids redunda
     overlayState = null;
     game.render(container, screenGraphics);
     assert.equal(setCurrentCallsDuringRender, 0);
-    assert.deepEqual(nativeClearStates[1], normalState(renderer));
+    assert.deepEqual(nativeClearStates[1], addState(renderer));
     assert.deepEqual(secondHeldRenderStart, addState(renderer));
     assert.deepEqual(presentationState, normalState(renderer));
     assert.deepEqual(overlayState, screenState(renderer));

@@ -167,6 +167,7 @@ export class WebGLRenderer {
     gl = null;
     contextOptions = {};
     contextLost = false;
+    contextGeneration = 0;
     normalSolidProgram = null;
     normalTextureProgram = null;
     solidProgram = null;
@@ -255,6 +256,7 @@ export class WebGLRenderer {
             throw new SlickException("Unable to create WebGL2 context");
         }
         this.contextLost = false;
+        this.contextGeneration++;
         this.gl = gl;
         this.normalSolidProgram = new WebGLShaderProgram(gl, SOLID_VERTEX, SOLID_FRAGMENT);
         this.normalTextureProgram = new WebGLShaderProgram(gl, TEXTURE_VERTEX, TEXTURE_FRAGMENT);
@@ -313,6 +315,10 @@ export class WebGLRenderer {
     getRenderTarget() {
         return this.currentTarget;
     }
+    /** @internal Returns the generation of the currently owned WebGL context. */
+    __getContextGeneration() {
+        return this.contextGeneration;
+    }
     /** Sets the active framebuffer-backed render target. */
     setRenderTarget(target) {
         const gl = this.gl;
@@ -325,7 +331,7 @@ export class WebGLRenderer {
             return;
         }
         if (target) {
-            target.ensure(gl);
+            target.ensure(gl, this.contextGeneration);
             gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
             this.setActiveDimensions(target.width, target.height, target.width, target.height);
         }
@@ -480,7 +486,7 @@ export class WebGLRenderer {
             return;
         }
         const sourceFramebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING);
-        target.ensure(gl);
+        target.ensure(gl, this.contextGeneration);
         if (!target.texture) {
             gl.bindFramebuffer(gl.FRAMEBUFFER, sourceFramebuffer);
             return;

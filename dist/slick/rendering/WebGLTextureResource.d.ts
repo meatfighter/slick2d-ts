@@ -33,6 +33,8 @@ export declare class WebGLTextureResource {
     ensureTexture(gl: WebGL2RenderingContext): WebGLTexture | null;
     /** Attaches a framebuffer texture so render-target images can be drawn. */
     attachTexture(texture: WebGLTexture, width: number, height: number): void;
+    /** @internal Returns the context-owned texture currently attached to this resource. */
+    __getTextureReference(): WebGLTexture | null;
     /** Drops a context-owned WebGL texture while keeping decoded image data available. */
     invalidateTexture(gl?: WebGL2RenderingContext | null): void;
     /** Detaches a framebuffer-owned texture handle without unregistering this logical resource. */

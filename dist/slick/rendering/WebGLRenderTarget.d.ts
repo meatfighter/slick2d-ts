@@ -8,10 +8,11 @@ export declare class WebGLRenderTarget {
     framebuffer: WebGLFramebuffer | null;
     texture: WebGLTexture | null;
     readonly textureResource: WebGLTextureResource;
+    private contextGeneration;
     /** Creates a framebuffer-backed render target with an associated texture resource. */
     constructor(width: number, height: number, textureResource: WebGLTextureResource);
     /** Ensures framebuffer and texture objects exist for a WebGL context. */
-    ensure(gl: WebGL2RenderingContext): void;
+    ensure(gl: WebGL2RenderingContext, contextGeneration?: number): void;
     /** Drops context-owned framebuffer state while keeping the image resource alive. */
     invalidate(gl?: WebGL2RenderingContext | null): void;
     /** Releases framebuffer and texture objects. */

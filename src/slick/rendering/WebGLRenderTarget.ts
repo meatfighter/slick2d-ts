@@ -9,6 +9,7 @@ export class WebGLRenderTarget {
     public framebuffer: WebGLFramebuffer | null = null;
     public texture: WebGLTexture | null = null;
     public readonly textureResource: WebGLTextureResource;
+    private contextGeneration = -1;
 
     /** Creates a framebuffer-backed render target with an associated texture resource. */
     public constructor(width: number, height: number, textureResource: WebGLTextureResource) {
@@ -18,14 +19,12 @@ export class WebGLRenderTarget {
     }
 
     /** Ensures framebuffer and texture objects exist for a WebGL context. */
-    public ensure(gl: WebGL2RenderingContext): void {
-        if (this.framebuffer && this.texture) {
-            const framebufferValid = typeof gl.isFramebuffer !== "function" || gl.isFramebuffer(this.framebuffer);
-            const textureValid = typeof gl.isTexture !== "function" || gl.isTexture(this.texture);
-            if (framebufferValid && textureValid) {
-                return;
-            }
-            this.invalidate(gl);
+    public ensure(gl: WebGL2RenderingContext, contextGeneration: number = 0): void {
+        if (this.framebuffer && this.texture && this.contextGeneration === contextGeneration && this.textureResource.__getTextureReference() === this.texture) {
+            return;
+        }
+        if (this.framebuffer || this.texture) {
+            this.invalidate(this.contextGeneration === contextGeneration ? gl : null);
         }
         this.texture = gl.createTexture();
         this.framebuffer = gl.createFramebuffer();
@@ -42,21 +41,24 @@ export class WebGLRenderTarget {
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.framebuffer);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.texture, 0);
         this.textureResource.attachTexture(this.texture, this.width, this.height);
+        this.contextGeneration = contextGeneration;
     }
 
     /** Drops context-owned framebuffer state while keeping the image resource alive. */
     public invalidate(gl: WebGL2RenderingContext | null = null): void {
         const texture = this.texture;
+        const textureResourceOwnsTexture = texture !== null && this.textureResource.__getTextureReference() === texture;
         if (gl && !WebGLRenderTarget.isContextLost(gl)) {
             if (this.framebuffer) {
                 gl.deleteFramebuffer(this.framebuffer);
             }
-            if (this.texture) {
-                gl.deleteTexture(this.texture);
+            if (textureResourceOwnsTexture) {
+                gl.deleteTexture(texture);
             }
         }
         this.framebuffer = null;
         this.texture = null;
+        this.contextGeneration = -1;
         this.textureResource.detachTexture(texture);
     }
 

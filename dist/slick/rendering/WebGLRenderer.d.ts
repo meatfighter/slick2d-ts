@@ -62,6 +62,7 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private gl;
     private contextOptions;
     private contextLost;
+    private contextGeneration;
     private normalSolidProgram;
     private normalTextureProgram;
     private solidProgram;
@@ -133,6 +134,8 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     endFrame(): void;
     /** Returns the active framebuffer-backed render target, or null for the display. */
     getRenderTarget(): WebGLRenderTarget | null;
+    /** @internal Returns the generation of the currently owned WebGL context. */
+    __getContextGeneration(): number;
     /** Sets the active framebuffer-backed render target. */
     setRenderTarget(target: WebGLRenderTarget | null): void;
     /** Saves the active render target and switches to another target. */

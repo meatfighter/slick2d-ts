@@ -95,13 +95,16 @@ export class BufferedScalableGame {
             nativeGraphics.clearClip();
             nativeGraphics.clearWorldClip();
             nativeGraphics.__copyBackgroundFrom(screenGraphics);
-            // The native Graphics draw mode is persistent; clear under normal draw state.
-            renderer.pushNormalDrawModeState();
+            // WebGL clear obeys colorMask but ignores blend state, so widen only
+            // the color mask while preserving the native Graphics draw mode.
+            const background = nativeGraphics.__getBackgroundReference();
+            renderer.pushFullColorMask();
             try {
-                nativeGraphics.clear();
+                renderer.glClearColor(background.r, background.g, background.b, background.a);
+                renderer.glClear(renderer.GL_COLOR_BUFFER_BIT);
             }
             finally {
-                renderer.popDrawModeState();
+                renderer.popColorMask();
             }
             this.held.render(container, nativeGraphics);
             nativeGraphics.flush();

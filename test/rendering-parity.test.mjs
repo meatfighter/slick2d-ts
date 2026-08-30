@@ -180,6 +180,7 @@ class FakeTextureGL {
         this.deletedFramebuffers = [];
         this.deletedTextures = [];
         this.framebuffers = new Set();
+        this.isFramebufferCalls = 0;
         this.isTextureCalls = 0;
         this.nextFramebuffer = 1;
         this.nextTexture = 1;
@@ -219,6 +220,7 @@ class FakeTextureGL {
     }
 
     isFramebuffer(framebuffer) {
+        this.isFramebufferCalls += 1;
         return this.framebuffers.has(framebuffer);
     }
 
@@ -834,6 +836,92 @@ test("WebGLRenderTarget invalidation recreates framebuffer-backed texture handle
 
         assert.notEqual(target.framebuffer, firstFramebuffer);
         assert.notEqual(target.texture, firstTexture);
+    } finally {
+        target.dispose(null);
+        resource.dispose(null);
+    }
+});
+
+test("WebGLRenderTarget same-generation reuse avoids WebGL validity checks", () => {
+    const gl = new FakeTextureGL();
+    const source = { height: 8, width: 8 };
+    const resource = new WebGLTextureResource(source, Image.FILTER_NEAREST, null);
+    const target = new WebGLRenderTarget(8, 8, resource);
+
+    try {
+        target.ensure(gl, 7);
+        const firstFramebuffer = target.framebuffer;
+        const firstTexture = target.texture;
+
+        target.ensure(gl, 7);
+        target.ensure(gl, 7);
+
+        assert.equal(target.framebuffer, firstFramebuffer);
+        assert.equal(target.texture, firstTexture);
+        assert.equal(gl.isFramebufferCalls, 0);
+        assert.equal(gl.isTextureCalls, 0);
+        assert.deepEqual(gl.deletedFramebuffers, []);
+        assert.deepEqual(gl.deletedTextures, []);
+    } finally {
+        target.dispose(null);
+        resource.dispose(null);
+    }
+});
+
+test("WebGLRenderTarget same-generation resource invalidation recreates handles without validity checks", () => {
+    const gl = new FakeTextureGL();
+    const source = { height: 8, width: 8 };
+    const resource = new WebGLTextureResource(source, Image.FILTER_NEAREST, null);
+    const target = new WebGLRenderTarget(8, 8, resource);
+
+    try {
+        target.ensure(gl, 7);
+        const firstFramebuffer = target.framebuffer;
+        const firstTexture = target.texture;
+
+        resource.invalidateTexture(gl);
+        target.ensure(gl, 7);
+
+        assert.notEqual(target.framebuffer, firstFramebuffer);
+        assert.notEqual(target.texture, firstTexture);
+        assert.deepEqual(gl.deletedFramebuffers, [firstFramebuffer]);
+        assert.deepEqual(gl.deletedTextures, [firstTexture]);
+        assert.equal(gl.isFramebufferCalls, 0);
+        assert.equal(gl.isTextureCalls, 0);
+    } finally {
+        target.dispose(null);
+        resource.dispose(null);
+    }
+});
+
+test("WebGLRenderTarget generation change recreates handles without deleting stale objects", () => {
+    const gl = new FakeTextureGL();
+    const source = { height: 8, width: 8 };
+    const resource = new WebGLTextureResource(source, Image.FILTER_NEAREST, null);
+    const target = new WebGLRenderTarget(8, 8, resource);
+
+    try {
+        target.ensure(gl, 1);
+        const firstFramebuffer = target.framebuffer;
+        const firstTexture = target.texture;
+
+        target.ensure(gl, 2);
+        const secondFramebuffer = target.framebuffer;
+        const secondTexture = target.texture;
+
+        assert.notEqual(secondFramebuffer, firstFramebuffer);
+        assert.notEqual(secondTexture, firstTexture);
+        assert.deepEqual(gl.deletedFramebuffers, []);
+        assert.deepEqual(gl.deletedTextures, []);
+        assert.equal(gl.isFramebufferCalls, 0);
+        assert.equal(gl.isTextureCalls, 0);
+
+        target.ensure(gl, 2);
+
+        assert.equal(target.framebuffer, secondFramebuffer);
+        assert.equal(target.texture, secondTexture);
+        assert.equal(gl.nextFramebuffer, 3);
+        assert.equal(gl.nextTexture, 3);
     } finally {
         target.dispose(null);
         resource.dispose(null);

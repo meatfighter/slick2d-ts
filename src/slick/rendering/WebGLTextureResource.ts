@@ -149,6 +149,11 @@ export class WebGLTextureResource {
         this.pixelData = null;
     }
 
+    /** @internal Returns the context-owned texture currently attached to this resource. */
+    public __getTextureReference(): WebGLTexture | null {
+        return this.texture;
+    }
+
     /** Drops a context-owned WebGL texture while keeping decoded image data available. */
     public invalidateTexture(gl: WebGL2RenderingContext | null = null): void {
         if (gl && this.texture && !WebGLTextureResource.isContextLost(gl)) {

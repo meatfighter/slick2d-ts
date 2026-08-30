@@ -191,6 +191,7 @@ test("BufferedScalableGame renders into the native target before the presentatio
     const container = fakeContainer(800, 600, input, screenGraphics);
     const renderer = Renderer.getBackend();
     const calls = [];
+    const clearCalls = [];
     const drawCalls = [];
     const fillCalls = [];
     const targetStack = [];
@@ -202,11 +203,15 @@ test("BufferedScalableGame renders into the native target before the presentatio
         "drawImage",
         "fillRect",
         "flush",
+        "glClear",
+        "glClearColor",
         "getRenderTarget",
         "glLoadIdentity",
+        "popColorMask",
         "popGlobalColorEffects",
         "popRenderTarget",
         "popTransform",
+        "pushFullColorMask",
         "pushGlobalColorEffectsDisabled",
         "pushRenderTarget",
         "pushTransform",
@@ -227,14 +232,21 @@ test("BufferedScalableGame renders into the native target before the presentatio
         calls.push(["fillRect", activeTarget]);
     };
     renderer.flush = () => calls.push(["flush", activeTarget]);
+    renderer.glClear = (mask) => {
+        clearCalls.push({ mask, target: activeTarget });
+        calls.push(["clear", activeTarget, mask]);
+    };
+    renderer.glClearColor = (r, g, b, a) => calls.push(["clearColor", activeTarget, r, g, b, a]);
     renderer.getRenderTarget = () => activeTarget;
     renderer.glLoadIdentity = () => calls.push(["loadIdentity", activeTarget]);
+    renderer.popColorMask = () => calls.push(["popColorMask", activeTarget]);
     renderer.popGlobalColorEffects = () => calls.push(["popEffects", activeTarget]);
     renderer.popRenderTarget = () => {
         calls.push(["popTarget", activeTarget]);
         activeTarget = targetStack.pop() ?? null;
     };
     renderer.popTransform = () => calls.push(["popTransform", activeTarget]);
+    renderer.pushFullColorMask = () => calls.push(["pushFullColorMask", activeTarget]);
     renderer.pushGlobalColorEffectsDisabled = () => calls.push(["pushEffects", activeTarget]);
     renderer.pushRenderTarget = (target) => {
         targetStack.push(activeTarget);
@@ -273,16 +285,20 @@ test("BufferedScalableGame renders into the native target before the presentatio
         assert.equal(activeTarget, null);
         assert.equal(Graphics.getCurrent(), screenGraphics);
         assert.equal(targetStack.length, 0);
-        assert.ok(fillCalls.length >= 3);
-        const nativeClearFill = fillCalls[0];
+        assert.equal(clearCalls.length, 1);
+        assert.equal(clearCalls[0].mask, renderer.GL_COLOR_BUFFER_BIT);
+        assert.notEqual(clearCalls[0].target, null);
+        assert.deepEqual(calls.find(([name]) => name === "clearColor")?.slice(2), [0, 0, 1, 1]);
+        assert.ok(fillCalls.length >= 2);
         const screenFill = fillCalls.find(({ args }) => args[0] === 9);
         const nativeHeldFill = fillCalls.find(({ args }) => args[0] === 1);
-        assert.notEqual(nativeClearFill.target, null);
         assert.equal(screenFill?.target, null);
-        assert.equal(nativeHeldFill?.target, nativeClearFill.target);
+        assert.equal(nativeHeldFill?.target, clearCalls[0].target);
         assert.equal(drawCalls.length, 1);
         assert.equal(drawCalls[0].target, null);
         assert.deepEqual(drawCalls[0].args.slice(1, 10), [0, 0, 800, 600, 16, 128, 160, -120, 1]);
+        assert.ok(calls.findIndex(([name]) => name === "pushFullColorMask") < calls.findIndex(([name]) => name === "clear"));
+        assert.ok(calls.findIndex(([name]) => name === "clear") < calls.findIndex(([name]) => name === "popColorMask"));
         assert.equal(
             calls.some(([name]) => name === "pushEffects" || name === "popEffects"),
             false
@@ -403,13 +419,11 @@ test("BufferedScalableGame refreshes native background every frame without stale
     await game.init(container);
 
     const renderer = Renderer.getBackend();
-    const originalFillRect = renderer.fillRect;
+    const originalClearColor = renderer.glClearColor;
     const clearColors = [];
-    renderer.fillRect = (x, y, width, height, color, transform) => {
-        if (x === 0 && y === 0 && width === 320 && height === 240) {
-            clearColors.push([color.r, color.g, color.b, color.a]);
-        }
-        originalFillRect.call(renderer, x, y, width, height, color, transform);
+    renderer.glClearColor = (r, g, b, a) => {
+        clearColors.push([r, g, b, a]);
+        originalClearColor.call(renderer, r, g, b, a);
     };
 
     try {
@@ -417,7 +431,7 @@ test("BufferedScalableGame refreshes native background every frame without stale
         game.render(container, screenGraphics);
         game.render(container, screenGraphics);
     } finally {
-        renderer.fillRect = originalFillRect;
+        renderer.glClearColor = originalClearColor;
     }
 
     assert.deepEqual(clearColors, [

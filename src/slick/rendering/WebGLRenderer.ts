@@ -204,6 +204,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private gl: WebGL2RenderingContext | null = null;
     private contextOptions: WebGLContextAttributes = {};
     private contextLost = false;
+    private contextGeneration = 0;
     private normalSolidProgram: WebGLShaderProgram | null = null;
     private normalTextureProgram: WebGLShaderProgram | null = null;
     private solidProgram: WebGLShaderProgram | null = null;
@@ -300,6 +301,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
             throw new SlickException("Unable to create WebGL2 context");
         }
         this.contextLost = false;
+        this.contextGeneration++;
         this.gl = gl;
         this.normalSolidProgram = new WebGLShaderProgram(gl, SOLID_VERTEX, SOLID_FRAGMENT);
         this.normalTextureProgram = new WebGLShaderProgram(gl, TEXTURE_VERTEX, TEXTURE_FRAGMENT);
@@ -367,6 +369,11 @@ export class WebGLRenderer implements RenderBackend, SGL {
         return this.currentTarget;
     }
 
+    /** @internal Returns the generation of the currently owned WebGL context. */
+    public __getContextGeneration(): number {
+        return this.contextGeneration;
+    }
+
     /** Sets the active framebuffer-backed render target. */
     public setRenderTarget(target: WebGLRenderTarget | null): void {
         const gl = this.gl;
@@ -379,7 +386,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
             return;
         }
         if (target) {
-            target.ensure(gl);
+            target.ensure(gl, this.contextGeneration);
             gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
             this.setActiveDimensions(target.width, target.height, target.width, target.height);
         } else {
@@ -710,7 +717,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
             return;
         }
         const sourceFramebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
-        target.ensure(gl);
+        target.ensure(gl, this.contextGeneration);
         if (!target.texture) {
             gl.bindFramebuffer(gl.FRAMEBUFFER, sourceFramebuffer);
             return;
