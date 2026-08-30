@@ -15,6 +15,29 @@ function validateNativeDimension(name, value) {
         throw new RangeError(`BufferedScalableGame ${name} must be a positive integer`);
     }
 }
+export var BufferedScalingMode;
+(function (BufferedScalingMode) {
+    BufferedScalingMode["Nearest"] = "nearest";
+    BufferedScalingMode["Linear"] = "linear";
+    BufferedScalingMode["Integer"] = "integer";
+})(BufferedScalingMode || (BufferedScalingMode = {}));
+function validateScalingMode(mode) {
+    switch (mode) {
+        case BufferedScalingMode.Nearest:
+        case BufferedScalingMode.Linear:
+        case BufferedScalingMode.Integer:
+            return mode;
+        default:
+            throw new RangeError(`Unsupported BufferedScalableGame scaling mode: ${String(mode)}`);
+    }
+}
+function hasBackingSize(container) {
+    const candidate = container;
+    return typeof candidate.getBackingWidth === "function" && typeof candidate.getBackingHeight === "function";
+}
+function getBackingDimension(value, fallback) {
+    return Number.isFinite(value) && value > 0 ? Math.max(1, Math.trunc(value)) : fallback;
+}
 /**
  * Browser extension: renders a fixed-size game into a native-resolution image,
  * then presents the completed frame to the display.
@@ -33,10 +56,28 @@ export class BufferedScalableGame {
     sourceY;
     sourceWidth;
     sourceHeight;
+    scalingMode;
     nativeFrame = null;
     nativeGraphics = null;
     lastContainerWidth = -1;
     lastContainerHeight = -1;
+    lastBackingWidth = -1;
+    lastBackingHeight = -1;
+    presentationInfo = Object.freeze({
+        filter: Image.FILTER_NEAREST,
+        integerScale: null,
+        logicalHeight: 0,
+        logicalWidth: 0,
+        logicalX: 0,
+        logicalY: 0,
+        physicalHeight: 0,
+        physicalWidth: 0,
+        physicalX: 0,
+        physicalY: 0,
+        scaleX: 1,
+        scaleY: 1,
+        scalingMode: BufferedScalingMode.Nearest
+    });
     constructor(held, normalWidth, normalHeight, maintainAspectOrOptions = false) {
         validateNativeDimension("width", normalWidth);
         validateNativeDimension("height", normalHeight);
@@ -49,14 +90,15 @@ export class BufferedScalableGame {
         this.sourceY = options.sourceY ?? 0;
         this.sourceWidth = options.sourceWidth ?? normalWidth;
         this.sourceHeight = options.sourceHeight ?? normalHeight;
+        this.scalingMode = validateScalingMode(options.scalingMode ?? BufferedScalingMode.Nearest);
         this.validateSourceRectangle(this.sourceX, this.sourceY, this.sourceWidth, this.sourceHeight);
     }
     init(container) {
         this.container = container;
         this.releaseNativeFrame();
-        const nativeFrame = new Image(this.normalWidth, this.normalHeight, Image.FILTER_NEAREST);
+        const nativeFrame = new Image(this.normalWidth, this.normalHeight, this.getConfiguredPresentationFilter());
         try {
-            nativeFrame.setFilter(Image.FILTER_NEAREST);
+            nativeFrame.setFilter(this.getConfiguredPresentationFilter());
             nativeFrame.ensureInverted();
             this.nativeGraphics = nativeFrame.getGraphics();
             this.nativeFrame = nativeFrame;
@@ -169,25 +211,21 @@ export class BufferedScalableGame {
     }
     renderOverlay(_container, _g) { }
     recalculateScale() {
-        const container = this.container;
-        if (container === null) {
+        this.recalculatePresentation();
+    }
+    setScalingMode(mode) {
+        const nextMode = validateScalingMode(mode);
+        if (this.scalingMode === nextMode) {
             return;
         }
-        this.lastContainerWidth = Math.max(1, Math.trunc(container.getWidth()));
-        this.lastContainerHeight = Math.max(1, Math.trunc(container.getHeight()));
-        this.targetWidth = this.lastContainerWidth;
-        this.targetHeight = this.lastContainerHeight;
-        if (this.maintainAspect) {
-            const scale = Math.min(this.targetWidth / this.sourceWidth, this.targetHeight / this.sourceHeight);
-            this.targetWidth = Math.max(1, Math.trunc(this.sourceWidth * scale));
-            this.targetHeight = Math.max(1, Math.trunc(this.sourceHeight * scale));
-        }
-        this.xoffset = Math.trunc((this.lastContainerWidth - this.targetWidth) / 2);
-        this.yoffset = Math.trunc((this.lastContainerHeight - this.targetHeight) / 2);
-        const inputScaleX = this.sourceWidth / this.targetWidth;
-        const inputScaleY = this.sourceHeight / this.targetHeight;
-        container.getInput().setScale(inputScaleX, inputScaleY);
-        container.getInput().setOffset(this.sourceX - this.xoffset * inputScaleX, this.sourceY - this.yoffset * inputScaleY);
+        this.scalingMode = nextMode;
+        this.recalculateScale();
+    }
+    getScalingMode() {
+        return this.scalingMode;
+    }
+    getPresentationInfo() {
+        return this.presentationInfo;
     }
     containerSizeChanged(container) {
         this.container = container;
@@ -213,12 +251,135 @@ export class BufferedScalableGame {
     getNormalHeight() {
         return this.normalHeight;
     }
+    recalculatePresentation() {
+        const container = this.container;
+        if (container === null) {
+            return;
+        }
+        this.lastContainerWidth = Math.max(1, Math.trunc(container.getWidth()));
+        this.lastContainerHeight = Math.max(1, Math.trunc(container.getHeight()));
+        this.lastBackingWidth = this.getBackingWidth(container, this.lastContainerWidth);
+        this.lastBackingHeight = this.getBackingHeight(container, this.lastContainerHeight);
+        const backingScaleX = this.lastBackingWidth / this.lastContainerWidth;
+        const backingScaleY = this.lastBackingHeight / this.lastContainerHeight;
+        const physical = this.calculatePhysicalPresentation(this.lastBackingWidth, this.lastBackingHeight);
+        this.xoffset = physical.x / backingScaleX;
+        this.yoffset = physical.y / backingScaleY;
+        this.targetWidth = physical.width / backingScaleX;
+        this.targetHeight = physical.height / backingScaleY;
+        const inputScaleX = this.sourceWidth / this.targetWidth;
+        const inputScaleY = this.sourceHeight / this.targetHeight;
+        container.getInput().setScale(inputScaleX, inputScaleY);
+        container.getInput().setOffset(this.sourceX - this.xoffset * inputScaleX, this.sourceY - this.yoffset * inputScaleY);
+        this.presentationInfo = Object.freeze({
+            filter: physical.filter,
+            integerScale: physical.integerScale,
+            logicalHeight: this.targetHeight,
+            logicalWidth: this.targetWidth,
+            logicalX: this.xoffset,
+            logicalY: this.yoffset,
+            physicalHeight: physical.height,
+            physicalWidth: physical.width,
+            physicalX: physical.x,
+            physicalY: physical.y,
+            scaleX: physical.width / this.sourceWidth,
+            scaleY: physical.height / this.sourceHeight,
+            scalingMode: this.scalingMode
+        });
+        this.applyPresentationFilter(physical.filter);
+    }
     recalculateScaleIfNeeded(container) {
         const width = Math.max(1, Math.trunc(container.getWidth()));
         const height = Math.max(1, Math.trunc(container.getHeight()));
-        if (width !== this.lastContainerWidth || height !== this.lastContainerHeight) {
+        const backingWidth = this.getBackingWidth(container, width);
+        const backingHeight = this.getBackingHeight(container, height);
+        if (width !== this.lastContainerWidth ||
+            height !== this.lastContainerHeight ||
+            backingWidth !== this.lastBackingWidth ||
+            backingHeight !== this.lastBackingHeight) {
             this.recalculateScale();
         }
+    }
+    calculatePhysicalPresentation(availableWidth, availableHeight) {
+        if (this.scalingMode === BufferedScalingMode.Integer) {
+            const integerScale = Math.floor(Math.min(availableWidth / this.sourceWidth, availableHeight / this.sourceHeight));
+            if (integerScale >= 1) {
+                const width = this.sourceWidth * integerScale;
+                const height = this.sourceHeight * integerScale;
+                return {
+                    filter: Image.FILTER_NEAREST,
+                    height,
+                    integerScale,
+                    width,
+                    x: Math.floor((availableWidth - width) / 2),
+                    y: Math.floor((availableHeight - height) / 2)
+                };
+            }
+            return {
+                ...this.calculateAspectFitPhysicalRect(availableWidth, availableHeight),
+                filter: Image.FILTER_LINEAR,
+                integerScale: null
+            };
+        }
+        const filter = this.getConfiguredPresentationFilter();
+        if (!this.maintainAspect) {
+            return {
+                filter,
+                height: availableHeight,
+                integerScale: null,
+                width: availableWidth,
+                x: 0,
+                y: 0
+            };
+        }
+        return {
+            ...this.calculateAspectFitPhysicalRect(availableWidth, availableHeight),
+            filter,
+            integerScale: null
+        };
+    }
+    calculateAspectFitPhysicalRect(availableWidth, availableHeight) {
+        const scale = Math.min(availableWidth / this.sourceWidth, availableHeight / this.sourceHeight);
+        const width = this.sourceWidth * scale;
+        const height = this.sourceHeight * scale;
+        return this.snapPhysicalRect((availableWidth - width) / 2, (availableHeight - height) / 2, width, height, availableWidth, availableHeight);
+    }
+    snapPhysicalRect(x, y, width, height, availableWidth, availableHeight) {
+        const x1 = Math.max(0, Math.min(availableWidth - 1, Math.round(x)));
+        const y1 = Math.max(0, Math.min(availableHeight - 1, Math.round(y)));
+        const x2 = Math.max(x1 + 1, Math.min(availableWidth, Math.round(x + width)));
+        const y2 = Math.max(y1 + 1, Math.min(availableHeight, Math.round(y + height)));
+        return {
+            height: y2 - y1,
+            width: x2 - x1,
+            x: x1,
+            y: y1
+        };
+    }
+    applyPresentationFilter(filter) {
+        const nativeFrame = this.nativeFrame;
+        if (nativeFrame === null || nativeFrame.getFilter() === filter) {
+            return;
+        }
+        const renderer = Renderer.getBackend();
+        const gl = renderer.getContext();
+        const textureResource = nativeFrame.__getTextureResource();
+        if (gl && textureResource) {
+            renderer.flush();
+        }
+        nativeFrame.setFilter(filter);
+        if (gl && textureResource) {
+            textureResource.__applyFilterToExistingTexture(gl);
+        }
+    }
+    getConfiguredPresentationFilter() {
+        return this.scalingMode === BufferedScalingMode.Linear ? Image.FILTER_LINEAR : Image.FILTER_NEAREST;
+    }
+    getBackingWidth(container, fallback) {
+        return hasBackingSize(container) ? getBackingDimension(container.getBackingWidth(), fallback) : fallback;
+    }
+    getBackingHeight(container, fallback) {
+        return hasBackingSize(container) ? getBackingDimension(container.getBackingHeight(), fallback) : fallback;
     }
     releaseNativeFrame() {
         this.nativeGraphics = null;

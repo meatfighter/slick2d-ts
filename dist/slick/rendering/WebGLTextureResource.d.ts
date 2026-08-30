@@ -41,6 +41,8 @@ export declare class WebGLTextureResource {
     detachTexture(texture?: WebGLTexture | null): void;
     /** Applies the Slick filter mode to the WebGL texture. */
     applyFilter(gl: WebGL2RenderingContext): void;
+    /** @internal Reapplies the current filter to an already-created texture. */
+    __applyFilterToExistingTexture(gl: WebGL2RenderingContext): void;
     /** Releases the underlying WebGL texture object. */
     dispose(gl: WebGL2RenderingContext | null): void;
     private static isContextLost;

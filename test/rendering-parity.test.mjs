@@ -171,12 +171,15 @@ class FakeTextureGL {
         this.NEAREST = 0x2600;
         this.RGBA = 0x1908;
         this.TEXTURE_2D = 0x0de1;
+        this.TEXTURE_BINDING_2D = 0x8069;
         this.TEXTURE_MAG_FILTER = 0x2800;
         this.TEXTURE_MIN_FILTER = 0x2801;
         this.TEXTURE_WRAP_S = 0x2802;
         this.TEXTURE_WRAP_T = 0x2803;
         this.UNPACK_PREMULTIPLY_ALPHA_WEBGL = 0x9241;
         this.UNSIGNED_BYTE = 0x1401;
+        this.bindTextureCalls = [];
+        this.boundTexture = null;
         this.deletedFramebuffers = [];
         this.deletedTextures = [];
         this.framebuffers = new Set();
@@ -184,12 +187,16 @@ class FakeTextureGL {
         this.isTextureCalls = 0;
         this.nextFramebuffer = 1;
         this.nextTexture = 1;
+        this.texParameterCalls = [];
         this.textures = new Set();
     }
 
     bindFramebuffer() {}
 
-    bindTexture() {}
+    bindTexture(target, texture) {
+        this.boundTexture = texture;
+        this.bindTextureCalls.push([target, texture]);
+    }
 
     createFramebuffer() {
         const framebuffer = { id: this.nextFramebuffer++ };
@@ -215,6 +222,10 @@ class FakeTextureGL {
 
     framebufferTexture2D() {}
 
+    getParameter(parameter) {
+        return parameter === this.TEXTURE_BINDING_2D ? this.boundTexture : null;
+    }
+
     isContextLost() {
         return false;
     }
@@ -233,7 +244,14 @@ class FakeTextureGL {
 
     texImage2D() {}
 
-    texParameteri() {}
+    texParameteri(target, pname, param) {
+        this.texParameterCalls.push({
+            param,
+            pname,
+            target,
+            texture: this.boundTexture
+        });
+    }
 }
 
 function fakeProgram() {
@@ -810,6 +828,79 @@ test("WebGLTextureResource cached reuse avoids WebGL validity checks", () => {
         assert.equal(resource.ensureTexture(gl), first);
         assert.equal(gl.isTextureCalls, 0);
     } finally {
+        resource.dispose(null);
+    }
+});
+
+test("WebGLTextureResource reapplies changed filters to existing GPU textures", () => {
+    const gl = new FakeTextureGL();
+    const source = { height: 4, width: 4 };
+    const resource = new WebGLTextureResource(source, Image.FILTER_NEAREST, null);
+
+    try {
+        const texture = resource.ensureTexture(gl);
+        const previousTexture = { id: "previous" };
+
+        assert.ok(texture);
+        gl.bindTexture(gl.TEXTURE_2D, previousTexture);
+        gl.bindTextureCalls.length = 0;
+        gl.texParameterCalls.length = 0;
+
+        resource.filter = Image.FILTER_LINEAR;
+        resource.__applyFilterToExistingTexture(gl);
+
+        assert.equal(resource.__getTextureReference(), texture);
+        assert.deepEqual(gl.bindTextureCalls, [
+            [gl.TEXTURE_2D, texture],
+            [gl.TEXTURE_2D, previousTexture]
+        ]);
+        assert.deepEqual(gl.texParameterCalls, [
+            {
+                param: gl.LINEAR,
+                pname: gl.TEXTURE_MIN_FILTER,
+                target: gl.TEXTURE_2D,
+                texture
+            },
+            {
+                param: gl.LINEAR,
+                pname: gl.TEXTURE_MAG_FILTER,
+                target: gl.TEXTURE_2D,
+                texture
+            }
+        ]);
+    } finally {
+        resource.dispose(null);
+    }
+});
+
+test("WebGLRenderTarget honors the texture resource filter when creating framebuffer textures", () => {
+    const gl = new FakeTextureGL();
+    const source = { height: 8, width: 8 };
+    const resource = new WebGLTextureResource(source, Image.FILTER_LINEAR, null);
+    const target = new WebGLRenderTarget(8, 8, resource);
+
+    try {
+        target.ensure(gl);
+
+        const texture = target.texture;
+        const filterCalls = gl.texParameterCalls.filter((call) => call.pname === gl.TEXTURE_MIN_FILTER || call.pname === gl.TEXTURE_MAG_FILTER);
+        assert.ok(texture);
+        assert.deepEqual(filterCalls, [
+            {
+                param: gl.LINEAR,
+                pname: gl.TEXTURE_MIN_FILTER,
+                target: gl.TEXTURE_2D,
+                texture
+            },
+            {
+                param: gl.LINEAR,
+                pname: gl.TEXTURE_MAG_FILTER,
+                target: gl.TEXTURE_2D,
+                texture
+            }
+        ]);
+    } finally {
+        target.dispose(null);
         resource.dispose(null);
     }
 });

@@ -8,7 +8,7 @@ The goal is API and behavior parity for Java game ports that already depend on S
 
 - Slick-style container lifecycle with browser `requestAnimationFrame` timing.
 - WebGL2 rendering backend with logical CSS-pixel coordinates and high-DPI backing stores.
-- Optional native-resolution buffered scaling for pixel-art ports that need stable tile and sprite sampling.
+- Optional native-resolution buffered scaling with crisp, smooth, and pixel-perfect presentation modes.
 - Web Audio-backed `Sound`, `Music`, and `SoundStore` compatibility.
 - Keyboard, mouse, touch-style pointer, and browser Gamepad API input mapping.
 - Java parity helpers for numeric behavior, random numbers, binary reads, bitmap text, songs, and sprite drawing.
@@ -17,7 +17,7 @@ The goal is API and behavior parity for Java game ports that already depend on S
 ## Install
 
 ```sh
-npm install git+https://github.com/meatfighter/slick2d-ts.git#semver:^1.0.0
+npm install git+https://github.com/meatfighter/slick2d-ts.git#semver:^1.3.0
 ```
 
 ## Example
@@ -45,6 +45,17 @@ await app.start();
 ```
 
 If `Display.setParent(...)` is not used, the container creates a canvas and appends it to `document.body`.
+
+For browser pages that need stable whole-scene scaling, wrap a fixed-resolution game with `BufferedScalableGame`:
+
+```ts
+import { BufferedScalableGame, BufferedScalingMode } from "slick2d-ts";
+
+const game = new BufferedScalableGame(new DemoGame(), 640, 480, {
+    maintainAspect: true,
+    scalingMode: BufferedScalingMode.Integer
+});
+```
 
 ## Browser Boundaries
 

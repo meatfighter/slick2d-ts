@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { BufferedScalableGame, Color, Graphics, Image, Renderer } from "../dist/index.js";
+import { BufferedScalableGame, BufferedScalingMode, Color, Graphics, Image, Renderer } from "../dist/index.js";
 import { WebGLRenderer } from "../dist/slick/rendering/WebGLRenderer.js";
 
 class FakeOffscreenCanvas {
@@ -34,12 +34,20 @@ class FakeInput {
     }
 }
 
-function fakeContainer(width, height, input = new FakeInput(), graphics = null) {
+function fakeContainer(width, height, input = new FakeInput(), graphics = null, backingWidth = null, backingHeight = null) {
     return {
+        backingHeight,
+        backingWidth,
         graphics,
         input,
         height,
         width,
+        getBackingHeight() {
+            return this.backingHeight ?? this.height;
+        },
+        getBackingWidth() {
+            return this.backingWidth ?? this.width;
+        },
         getGraphics() {
             return this.graphics;
         },
@@ -66,6 +74,10 @@ function fakeGame(overrides = {}) {
     };
 }
 
+function assertClose(actual, expected) {
+    assert.ok(Math.abs(actual - expected) < 1e-9, `expected ${actual} to be within tolerance of ${expected}`);
+}
+
 function installOffscreenCanvas() {
     Object.defineProperty(globalThis, "OffscreenCanvas", {
         configurable: true,
@@ -83,6 +95,182 @@ function restoreRendererMethods(renderer, originals) {
 afterEach(() => {
     delete globalThis.OffscreenCanvas;
     Graphics.setCurrent(null);
+});
+
+test("BufferedScalableGame defaults to nearest scaling and reports presentation info", async () => {
+    installOffscreenCanvas();
+    const input = new FakeInput();
+    const container = fakeContainer(800, 600, input);
+    const game = new BufferedScalableGame(fakeGame(), 320, 240, true);
+
+    await game.init(container);
+
+    assert.equal(game.getScalingMode(), BufferedScalingMode.Nearest);
+    assert.equal(game.nativeFrame.getFilter(), Image.FILTER_NEAREST);
+    assert.deepEqual(game.getPresentationInfo(), {
+        filter: Image.FILTER_NEAREST,
+        integerScale: null,
+        logicalHeight: 600,
+        logicalWidth: 800,
+        logicalX: 0,
+        logicalY: 0,
+        physicalHeight: 600,
+        physicalWidth: 800,
+        physicalX: 0,
+        physicalY: 0,
+        scaleX: 2.5,
+        scaleY: 2.5,
+        scalingMode: BufferedScalingMode.Nearest
+    });
+    assert.equal(Object.isFrozen(game.getPresentationInfo()), true);
+    assert.deepEqual(input.scales.at(-1), [0.4, 0.4]);
+    assert.deepEqual(input.offsets.at(-1), [0, 0]);
+});
+
+test("BufferedScalableGame linear mode uses linear presentation filtering and snapped physical geometry", async () => {
+    installOffscreenCanvas();
+    const input = new FakeInput();
+    const container = fakeContainer(501, 400, input, null, 751, 600);
+    const game = new BufferedScalableGame(fakeGame(), 320, 240, {
+        maintainAspect: true,
+        scalingMode: BufferedScalingMode.Linear
+    });
+
+    await game.init(container);
+
+    const info = game.getPresentationInfo();
+    assert.equal(game.nativeFrame.getFilter(), Image.FILTER_LINEAR);
+    assert.equal(info.filter, Image.FILTER_LINEAR);
+    assert.equal(info.physicalX, 0);
+    assert.equal(info.physicalY, 18);
+    assert.equal(info.physicalWidth, 751);
+    assert.equal(info.physicalHeight, 564);
+    assert.equal(info.integerScale, null);
+    assert.equal(info.scalingMode, BufferedScalingMode.Linear);
+    assertClose(info.logicalX, 0);
+    assertClose(info.logicalY, 12);
+    assertClose(info.logicalWidth, 501);
+    assertClose(info.logicalHeight, 376);
+});
+
+test("BufferedScalableGame integer mode uses source rectangle dimensions and matching input mapping", async () => {
+    installOffscreenCanvas();
+    const input = new FakeInput();
+    const container = fakeContainer(700, 500, input, null, 1400, 1000);
+    const game = new BufferedScalableGame(fakeGame(), 320, 240, {
+        maintainAspect: false,
+        scalingMode: BufferedScalingMode.Integer,
+        sourceHeight: 120,
+        sourceWidth: 160,
+        sourceX: 16,
+        sourceY: 8
+    });
+
+    await game.init(container);
+
+    const info = game.getPresentationInfo();
+    assert.equal(game.nativeFrame.getFilter(), Image.FILTER_NEAREST);
+    assert.equal(game.targetWidth, 640);
+    assert.equal(game.targetHeight, 480);
+    assert.equal(game.xoffset, 30);
+    assert.equal(game.yoffset, 10);
+    assert.deepEqual(input.scales.at(-1), [0.25, 0.25]);
+    assert.deepEqual(input.offsets.at(-1), [8.5, 5.5]);
+    assert.deepEqual(info, {
+        filter: Image.FILTER_NEAREST,
+        integerScale: 8,
+        logicalHeight: 480,
+        logicalWidth: 640,
+        logicalX: 30,
+        logicalY: 10,
+        physicalHeight: 960,
+        physicalWidth: 1280,
+        physicalX: 60,
+        physicalY: 20,
+        scaleX: 8,
+        scaleY: 8,
+        scalingMode: BufferedScalingMode.Integer
+    });
+});
+
+test("BufferedScalableGame integer mode falls back to linear downscaling when one-to-one does not fit", async () => {
+    installOffscreenCanvas();
+    const input = new FakeInput();
+    const container = fakeContainer(400, 300, input, null, 800, 600);
+    const game = new BufferedScalableGame(fakeGame(), 1024, 960, {
+        maintainAspect: false,
+        scalingMode: BufferedScalingMode.Integer
+    });
+
+    await game.init(container);
+
+    const info = game.getPresentationInfo();
+    assert.equal(game.nativeFrame.getFilter(), Image.FILTER_LINEAR);
+    assert.equal(info.filter, Image.FILTER_LINEAR);
+    assert.equal(info.integerScale, null);
+    assert.equal(info.physicalX, 80);
+    assert.equal(info.physicalY, 0);
+    assert.equal(info.physicalWidth, 640);
+    assert.equal(info.physicalHeight, 600);
+    assert.deepEqual(input.scales.at(-1), [3.2, 3.2]);
+    assert.deepEqual(input.offsets.at(-1), [-128, 0]);
+});
+
+test("BufferedScalableGame mode changes do not recreate the native framebuffer", async () => {
+    installOffscreenCanvas();
+    const container = fakeContainer(800, 600);
+    const game = new BufferedScalableGame(fakeGame(), 320, 240, true);
+
+    await game.init(container);
+
+    const nativeFrame = game.nativeFrame;
+    const nativeTarget = nativeFrame.__getRenderTarget();
+    let setFilterCalls = 0;
+    const originalSetFilter = nativeFrame.setFilter.bind(nativeFrame);
+    nativeFrame.setFilter = (filter) => {
+        setFilterCalls++;
+        originalSetFilter(filter);
+    };
+
+    game.setScalingMode(BufferedScalingMode.Linear);
+
+    assert.equal(game.nativeFrame, nativeFrame);
+    assert.equal(game.nativeFrame.__getRenderTarget(), nativeTarget);
+    assert.equal(game.nativeFrame.getFilter(), Image.FILTER_LINEAR);
+    assert.equal(setFilterCalls, 1);
+
+    game.setScalingMode(BufferedScalingMode.Linear);
+
+    assert.equal(game.nativeFrame, nativeFrame);
+    assert.equal(game.nativeFrame.__getRenderTarget(), nativeTarget);
+    assert.equal(setFilterCalls, 1);
+
+    game.setScalingMode(BufferedScalingMode.Integer);
+
+    assert.equal(game.nativeFrame, nativeFrame);
+    assert.equal(game.nativeFrame.__getRenderTarget(), nativeTarget);
+    assert.equal(game.nativeFrame.getFilter(), Image.FILTER_NEAREST);
+    assert.equal(game.getPresentationInfo().integerScale, 2);
+    assert.equal(setFilterCalls, 2);
+});
+
+test("BufferedScalableGame refreshes presentation when backing size changes without logical resize", async () => {
+    installOffscreenCanvas();
+    const container = fakeContainer(500, 400, new FakeInput(), null, 1000, 800);
+    const game = new BufferedScalableGame(fakeGame(), 320, 240, {
+        scalingMode: BufferedScalingMode.Integer
+    });
+
+    await game.init(container);
+
+    assert.equal(game.getPresentationInfo().physicalX, 20);
+    assert.equal(game.xoffset, 10);
+
+    container.backingWidth = 1200;
+    game.update(container, 16);
+
+    assert.equal(game.getPresentationInfo().physicalX, 120);
+    assert.equal(game.xoffset, 50);
 });
 
 test("BufferedScalableGame scales source rectangles and maps input into source coordinates", async () => {
@@ -131,6 +319,7 @@ test("BufferedScalableGame validates source rectangles against the native frame"
     assert.throws(() => new BufferedScalableGame(fakeGame(), 320.5, 240), RangeError);
     assert.throws(() => new BufferedScalableGame(fakeGame(), 320, 240, { sourceX: Number.NaN }), RangeError);
     assert.throws(() => new BufferedScalableGame(fakeGame(), 320, 240, { sourceWidth: Number.POSITIVE_INFINITY }), RangeError);
+    assert.throws(() => new BufferedScalableGame(fakeGame(), 320, 240, { scalingMode: "soft-ish" }), RangeError);
 });
 
 test("BufferedScalableGame rejects source rectangle updates before mutating state", async () => {

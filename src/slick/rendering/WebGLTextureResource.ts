@@ -177,6 +177,19 @@ export class WebGLTextureResource {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, value);
     }
 
+    /** @internal Reapplies the current filter to an already-created texture. */
+    public __applyFilterToExistingTexture(gl: WebGL2RenderingContext): void {
+        const texture = this.texture;
+        if (!texture) {
+            return;
+        }
+
+        const previousTexture = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        this.applyFilter(gl);
+        gl.bindTexture(gl.TEXTURE_2D, previousTexture);
+    }
+
     /** Releases the underlying WebGL texture object. */
     public dispose(gl: WebGL2RenderingContext | null): void {
         this.invalidateTexture(gl);

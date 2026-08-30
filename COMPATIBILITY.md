@@ -13,7 +13,7 @@
 
 These APIs are available for browser ports that need whole-scene display treatments. They are not Java Slick2D APIs:
 
-- `BufferedScalableGame`: renders the held game into one fixed-size framebuffer image and then presents that completed frame to the display with nearest-neighbor sampling. This avoids fractional per-sprite rasterization when a host page scales the canvas, but it is a browser-only wrapper rather than a Java Slick2D class.
+- `BufferedScalableGame`: renders the held game into one fixed-size framebuffer image and then presents that completed frame to the display. It defaults to nearest-neighbor presentation for existing behavior, and also supports linear presentation and pixel-perfect integer presentation through `BufferedScalingMode`. Presentation rectangles are calculated in physical backing-store pixels, snapped to physical-pixel boundaries, converted back to logical coordinates for drawing, and reused for input mapping. This avoids fractional per-sprite rasterization when a host page scales the canvas, but it is a browser-only wrapper rather than a Java Slick2D class.
 - `Graphics.setColorInverted(...)` and `Graphics.isColorInverted()`: invert subsequent renderer draw calls until the next safe renderer reset or explicit clear through `setColorInverted(false)`.
 - `Graphics.setMonochromePalette(...)`, `Graphics.clearMonochromePalette()`, and `Graphics.isMonochromePaletteEnabled()`: map rendered RGB luminance between two replacement colors while preserving the rendered alpha. Endpoint alpha values are ignored. Palette shaders are compiled lazily on first use, and callers should clear the palette with `try`/`finally` when applying it to a bounded render section.
 
