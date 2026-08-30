@@ -105,12 +105,18 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private readonly monochromePaletteStack;
     private readonly monochromePaletteEnabledStack;
     private blendEnabled;
+    /** RGB source factor; this legacy name predates separate alpha-factor tracking. */
     private blendSourceFactor;
+    /** RGB destination factor; this legacy name predates separate alpha-factor tracking. */
     private blendDestinationFactor;
+    private blendSourceAlphaFactor;
+    private blendDestinationAlphaFactor;
     private colorMaskBits;
     private readonly drawModeBlendEnabledStack;
     private readonly drawModeBlendSourceFactorStack;
     private readonly drawModeBlendDestinationFactorStack;
+    private readonly drawModeBlendSourceAlphaFactorStack;
+    private readonly drawModeBlendDestinationAlphaFactorStack;
     private readonly drawModeColorMaskBitsStack;
     private readonly colorMaskStateStack;
     private immediateType;
@@ -278,8 +284,14 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     glPushMatrix(): void;
     /** Java Slick2D counterpart: SGL.glPopMatrix(). */
     glPopMatrix(): void;
-    /** Java Slick2D counterpart: SGL.glBlendFunc(int, int). */
-    glBlendFunc(src: number, dest: number): void;
+    /**
+     * Java Slick2D counterpart: SGL.glBlendFunc(int, int).
+     *
+     * Two arguments retain OpenGL compatibility by applying the same factors to
+     * RGB and alpha. Optional alpha factors are an internal extension used by
+     * Graphics.MODE_NORMAL while retaining display-list recording.
+     */
+    glBlendFunc(src: number, dest: number, srcAlpha?: number, destAlpha?: number): void;
     /** Java Slick2D counterpart: SGL.glGenLists(int). */
     glGenLists(count: number): number;
     /** Java Slick2D counterpart: SGL.glNewList(int, int). */
@@ -330,15 +342,17 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private ensureMonochromePalettePrograms;
     private applyMonochromePaletteUniforms;
     private disableMonochromePalette;
+    /** Applies four blend factors to WebGL2, with a fallback for minimal test doubles. */
+    private applyBlendFunction;
     private resetDrawModeStateTracking;
     /**
      * @internal Applies exact Graphics draw-mode state without display-list recording.
      *
-     * A null blend factor preserves the currently tracked factor, matching
-     * MODE_ALPHA_MAP's behavior of changing blend enablement and the write mask
-     * without selecting a new blend function.
+     * A null RGB or alpha factor preserves the corresponding tracked factor,
+     * matching MODE_ALPHA_MAP's behavior of changing blend enablement and the
+     * write mask without selecting a new blend function.
      */
-    __applyDrawModeState(blendEnabled: boolean, sourceFactor: number | null, destinationFactor: number | null, colorMaskBits: number): void;
+    __applyDrawModeState(blendEnabled: boolean, sourceFactor: number | null, destinationFactor: number | null, colorMaskBits: number, sourceAlphaFactor?: number | null, destinationAlphaFactor?: number | null): void;
     private applyColorMaskBits;
     private static encodeColorMask;
     private static normalizeColorChannel;

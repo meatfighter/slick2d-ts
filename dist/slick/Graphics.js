@@ -678,29 +678,29 @@ export class Graphics {
     }
     applyDrawModeForContext(renderer) {
         if (this.drawMode === Graphics.MODE_NORMAL) {
-            renderer.__applyDrawModeState(true, renderer.GL_SRC_ALPHA, renderer.GL_ONE_MINUS_SRC_ALPHA, 0b1111);
+            renderer.__applyDrawModeState(true, renderer.GL_SRC_ALPHA, renderer.GL_ONE_MINUS_SRC_ALPHA, 0b1111, renderer.GL_ONE, renderer.GL_ONE_MINUS_SRC_ALPHA);
         }
         else if (this.drawMode === Graphics.MODE_ALPHA_MAP) {
-            renderer.__applyDrawModeState(false, null, null, 0b1000);
+            renderer.__applyDrawModeState(false, null, null, 0b1000, null, null);
         }
         else if (this.drawMode === Graphics.MODE_ALPHA_BLEND) {
-            renderer.__applyDrawModeState(true, renderer.GL_DST_ALPHA, renderer.GL_ONE_MINUS_DST_ALPHA, 0b0111);
+            renderer.__applyDrawModeState(true, renderer.GL_DST_ALPHA, renderer.GL_ONE_MINUS_DST_ALPHA, 0b0111, renderer.GL_DST_ALPHA, renderer.GL_ONE_MINUS_DST_ALPHA);
         }
         else if (this.drawMode === Graphics.MODE_COLOR_MULTIPLY) {
-            renderer.__applyDrawModeState(true, renderer.GL_ONE_MINUS_SRC_COLOR, renderer.GL_SRC_COLOR, 0b1111);
+            renderer.__applyDrawModeState(true, renderer.GL_ONE_MINUS_SRC_COLOR, renderer.GL_SRC_COLOR, 0b1111, renderer.GL_ONE_MINUS_SRC_COLOR, renderer.GL_SRC_COLOR);
         }
         else if (this.drawMode === Graphics.MODE_ADD) {
-            renderer.__applyDrawModeState(true, renderer.GL_ONE, renderer.GL_ONE, 0b1111);
+            renderer.__applyDrawModeState(true, renderer.GL_ONE, renderer.GL_ONE, 0b1111, renderer.GL_ONE, renderer.GL_ONE);
         }
         else if (this.drawMode === Graphics.MODE_SCREEN) {
-            renderer.__applyDrawModeState(true, renderer.GL_ONE, renderer.GL_ONE_MINUS_SRC_COLOR, 0b1111);
+            renderer.__applyDrawModeState(true, renderer.GL_ONE, renderer.GL_ONE_MINUS_SRC_COLOR, 0b1111, renderer.GL_ONE, renderer.GL_ONE_MINUS_SRC_COLOR);
         }
     }
     applyDrawModeForExplicitSet(renderer) {
         if (this.drawMode === Graphics.MODE_NORMAL) {
             renderer.glEnable(renderer.GL_BLEND);
             renderer.glColorMask(true, true, true, true);
-            renderer.glBlendFunc(renderer.GL_SRC_ALPHA, renderer.GL_ONE_MINUS_SRC_ALPHA);
+            renderer.glBlendFunc(renderer.GL_SRC_ALPHA, renderer.GL_ONE_MINUS_SRC_ALPHA, renderer.GL_ONE, renderer.GL_ONE_MINUS_SRC_ALPHA);
         }
         else if (this.drawMode === Graphics.MODE_ALPHA_MAP) {
             renderer.glDisable(renderer.GL_BLEND);

@@ -247,12 +247,18 @@ export class WebGLRenderer implements RenderBackend, SGL {
     private readonly monochromePaletteStack: Array<MonochromePaletteState | null> = [];
     private readonly monochromePaletteEnabledStack: boolean[] = [];
     private blendEnabled = true;
+    /** RGB source factor; this legacy name predates separate alpha-factor tracking. */
     private blendSourceFactor = this.GL_SRC_ALPHA;
+    /** RGB destination factor; this legacy name predates separate alpha-factor tracking. */
     private blendDestinationFactor = this.GL_ONE_MINUS_SRC_ALPHA;
+    private blendSourceAlphaFactor = this.GL_ONE;
+    private blendDestinationAlphaFactor = this.GL_ONE_MINUS_SRC_ALPHA;
     private colorMaskBits = 0b1111;
     private readonly drawModeBlendEnabledStack: boolean[] = [];
     private readonly drawModeBlendSourceFactorStack: number[] = [];
     private readonly drawModeBlendDestinationFactorStack: number[] = [];
+    private readonly drawModeBlendSourceAlphaFactorStack: number[] = [];
+    private readonly drawModeBlendDestinationAlphaFactorStack: number[] = [];
     private readonly drawModeColorMaskBitsStack: number[] = [];
     private readonly colorMaskStateStack: number[] = [];
     private immediateType = 0;
@@ -315,7 +321,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.monochromePaletteEnabledStack.length = 0;
         gl.enable(gl.BLEND);
         gl.colorMask(true, true, true, true);
-        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        this.applyBlendFunction(gl, gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         this.initDisplay(logicalWidth, logicalHeight, backingWidth, backingHeight);
     }
 
@@ -417,13 +423,15 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.drawModeBlendEnabledStack.push(this.blendEnabled);
         this.drawModeBlendSourceFactorStack.push(this.blendSourceFactor);
         this.drawModeBlendDestinationFactorStack.push(this.blendDestinationFactor);
+        this.drawModeBlendSourceAlphaFactorStack.push(this.blendSourceAlphaFactor);
+        this.drawModeBlendDestinationAlphaFactorStack.push(this.blendDestinationAlphaFactor);
         this.drawModeColorMaskBitsStack.push(this.colorMaskBits);
     }
 
     /** Saves the current draw-mode state and applies Graphics.MODE_NORMAL semantics. */
     public pushNormalDrawModeState(): void {
         this.pushDrawModeState();
-        this.__applyDrawModeState(true, this.GL_SRC_ALPHA, this.GL_ONE_MINUS_SRC_ALPHA, 0b1111);
+        this.__applyDrawModeState(true, this.GL_SRC_ALPHA, this.GL_ONE_MINUS_SRC_ALPHA, 0b1111, this.GL_ONE, this.GL_ONE_MINUS_SRC_ALPHA);
     }
 
     /** Restores the exact state saved by pushDrawModeState() or pushNormalDrawModeState(). */
@@ -433,16 +441,19 @@ export class WebGLRenderer implements RenderBackend, SGL {
             depth === 0 ||
             this.drawModeBlendSourceFactorStack.length !== depth ||
             this.drawModeBlendDestinationFactorStack.length !== depth ||
+            this.drawModeBlendSourceAlphaFactorStack.length !== depth ||
+            this.drawModeBlendDestinationAlphaFactorStack.length !== depth ||
             this.drawModeColorMaskBitsStack.length !== depth
         ) {
             throw new SlickException("Draw-mode state stack underflow or corruption");
         }
-
         const colorMaskBits = this.drawModeColorMaskBitsStack.pop() as number;
+        const destinationAlphaFactor = this.drawModeBlendDestinationAlphaFactorStack.pop() as number;
+        const sourceAlphaFactor = this.drawModeBlendSourceAlphaFactorStack.pop() as number;
         const destinationFactor = this.drawModeBlendDestinationFactorStack.pop() as number;
         const sourceFactor = this.drawModeBlendSourceFactorStack.pop() as number;
         const blendEnabled = this.drawModeBlendEnabledStack.pop() as boolean;
-        this.__applyDrawModeState(blendEnabled, sourceFactor, destinationFactor, colorMaskBits);
+        this.__applyDrawModeState(blendEnabled, sourceFactor, destinationFactor, colorMaskBits, sourceAlphaFactor, destinationAlphaFactor);
     }
 
     /** Saves the current color mask and makes all four channels writable. */
@@ -1266,7 +1277,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
             return;
         }
         if (id === this.GL_BLEND) {
-            this.__applyDrawModeState(true, this.blendSourceFactor, this.blendDestinationFactor, this.colorMaskBits);
+            this.__applyDrawModeState(
+                true,
+                this.blendSourceFactor,
+                this.blendDestinationFactor,
+                this.colorMaskBits,
+                this.blendSourceAlphaFactor,
+                this.blendDestinationAlphaFactor
+            );
             return;
         }
         this.flushTextureBatch();
@@ -1279,7 +1297,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
             return;
         }
         if (id === this.GL_BLEND) {
-            this.__applyDrawModeState(false, this.blendSourceFactor, this.blendDestinationFactor, this.colorMaskBits);
+            this.__applyDrawModeState(
+                false,
+                this.blendSourceFactor,
+                this.blendDestinationFactor,
+                this.colorMaskBits,
+                this.blendSourceAlphaFactor,
+                this.blendDestinationAlphaFactor
+            );
             return;
         }
         this.flushTextureBatch();
@@ -1474,12 +1499,18 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.popTransform();
     }
 
-    /** Java Slick2D counterpart: SGL.glBlendFunc(int, int). */
-    public glBlendFunc(src: number, dest: number): void {
-        if (this.recordListCommand(() => this.glBlendFunc(src, dest))) {
+    /**
+     * Java Slick2D counterpart: SGL.glBlendFunc(int, int).
+     *
+     * Two arguments retain OpenGL compatibility by applying the same factors to
+     * RGB and alpha. Optional alpha factors are an internal extension used by
+     * Graphics.MODE_NORMAL while retaining display-list recording.
+     */
+    public glBlendFunc(src: number, dest: number, srcAlpha: number = src, destAlpha: number = dest): void {
+        if (this.recordListCommand(() => this.glBlendFunc(src, dest, srcAlpha, destAlpha))) {
             return;
         }
-        this.__applyDrawModeState(this.blendEnabled, src, dest, this.colorMaskBits);
+        this.__applyDrawModeState(this.blendEnabled, src, dest, this.colorMaskBits, srcAlpha, destAlpha);
     }
 
     /** Java Slick2D counterpart: SGL.glGenLists(int). */
@@ -1736,14 +1767,33 @@ export class WebGLRenderer implements RenderBackend, SGL {
         }
     }
 
+    /** Applies four blend factors to WebGL2, with a fallback for minimal test doubles. */
+    private applyBlendFunction(
+        gl: WebGL2RenderingContext,
+        sourceFactor: number,
+        destinationFactor: number,
+        sourceAlphaFactor: number,
+        destinationAlphaFactor: number
+    ): void {
+        if (typeof gl.blendFuncSeparate === "function") {
+            gl.blendFuncSeparate(sourceFactor, destinationFactor, sourceAlphaFactor, destinationAlphaFactor);
+            return;
+        }
+        gl.blendFunc(sourceFactor, destinationFactor);
+    }
+
     private resetDrawModeStateTracking(): void {
         this.blendEnabled = true;
         this.blendSourceFactor = this.GL_SRC_ALPHA;
         this.blendDestinationFactor = this.GL_ONE_MINUS_SRC_ALPHA;
+        this.blendSourceAlphaFactor = this.GL_ONE;
+        this.blendDestinationAlphaFactor = this.GL_ONE_MINUS_SRC_ALPHA;
         this.colorMaskBits = 0b1111;
         this.drawModeBlendEnabledStack.length = 0;
         this.drawModeBlendSourceFactorStack.length = 0;
         this.drawModeBlendDestinationFactorStack.length = 0;
+        this.drawModeBlendSourceAlphaFactorStack.length = 0;
+        this.drawModeBlendDestinationAlphaFactorStack.length = 0;
         this.drawModeColorMaskBitsStack.length = 0;
         this.colorMaskStateStack.length = 0;
     }
@@ -1751,17 +1801,29 @@ export class WebGLRenderer implements RenderBackend, SGL {
     /**
      * @internal Applies exact Graphics draw-mode state without display-list recording.
      *
-     * A null blend factor preserves the currently tracked factor, matching
-     * MODE_ALPHA_MAP's behavior of changing blend enablement and the write mask
-     * without selecting a new blend function.
+     * A null RGB or alpha factor preserves the corresponding tracked factor,
+     * matching MODE_ALPHA_MAP's behavior of changing blend enablement and the
+     * write mask without selecting a new blend function.
      */
-    public __applyDrawModeState(blendEnabled: boolean, sourceFactor: number | null, destinationFactor: number | null, colorMaskBits: number): void {
+    public __applyDrawModeState(
+        blendEnabled: boolean,
+        sourceFactor: number | null,
+        destinationFactor: number | null,
+        colorMaskBits: number,
+        sourceAlphaFactor: number | null = sourceFactor,
+        destinationAlphaFactor: number | null = destinationFactor
+    ): void {
         const resolvedSourceFactor = sourceFactor ?? this.blendSourceFactor;
         const resolvedDestinationFactor = destinationFactor ?? this.blendDestinationFactor;
+        const resolvedSourceAlphaFactor = sourceAlphaFactor ?? this.blendSourceAlphaFactor;
+        const resolvedDestinationAlphaFactor = destinationAlphaFactor ?? this.blendDestinationAlphaFactor;
         const blendEnabledChanged = this.blendEnabled !== blendEnabled;
-        const blendFunctionChanged = this.blendSourceFactor !== resolvedSourceFactor || this.blendDestinationFactor !== resolvedDestinationFactor;
+        const blendFunctionChanged =
+            this.blendSourceFactor !== resolvedSourceFactor ||
+            this.blendDestinationFactor !== resolvedDestinationFactor ||
+            this.blendSourceAlphaFactor !== resolvedSourceAlphaFactor ||
+            this.blendDestinationAlphaFactor !== resolvedDestinationAlphaFactor;
         const colorMaskChanged = this.colorMaskBits !== colorMaskBits;
-
         if (!blendEnabledChanged && !blendFunctionChanged && !colorMaskChanged) {
             return;
         }
@@ -1777,11 +1839,14 @@ export class WebGLRenderer implements RenderBackend, SGL {
                 gl?.disable(this.GL_BLEND);
             }
         }
-
         if (blendFunctionChanged) {
             this.blendSourceFactor = resolvedSourceFactor;
             this.blendDestinationFactor = resolvedDestinationFactor;
-            gl?.blendFunc(resolvedSourceFactor, resolvedDestinationFactor);
+            this.blendSourceAlphaFactor = resolvedSourceAlphaFactor;
+            this.blendDestinationAlphaFactor = resolvedDestinationAlphaFactor;
+            if (gl) {
+                this.applyBlendFunction(gl, resolvedSourceFactor, resolvedDestinationFactor, resolvedSourceAlphaFactor, resolvedDestinationAlphaFactor);
+            }
         }
 
         if (colorMaskChanged) {
