@@ -416,7 +416,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
     /** Saves the current draw-mode state and applies Graphics.MODE_NORMAL semantics. */
     public pushNormalDrawModeState(): void {
         this.pushDrawModeState();
-        this.applyDrawModeState(true, this.GL_SRC_ALPHA, this.GL_ONE_MINUS_SRC_ALPHA, 0b1111);
+        this.__applyDrawModeState(true, this.GL_SRC_ALPHA, this.GL_ONE_MINUS_SRC_ALPHA, 0b1111);
     }
 
     /** Restores the exact state saved by pushDrawModeState() or pushNormalDrawModeState(). */
@@ -435,7 +435,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         const destinationFactor = this.drawModeBlendDestinationFactorStack.pop() as number;
         const sourceFactor = this.drawModeBlendSourceFactorStack.pop() as number;
         const blendEnabled = this.drawModeBlendEnabledStack.pop() as boolean;
-        this.applyDrawModeState(blendEnabled, sourceFactor, destinationFactor, colorMaskBits);
+        this.__applyDrawModeState(blendEnabled, sourceFactor, destinationFactor, colorMaskBits);
     }
 
     /** Saves the current color mask and makes all four channels writable. */
@@ -1259,7 +1259,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
             return;
         }
         if (id === this.GL_BLEND) {
-            this.applyDrawModeState(true, this.blendSourceFactor, this.blendDestinationFactor, this.colorMaskBits);
+            this.__applyDrawModeState(true, this.blendSourceFactor, this.blendDestinationFactor, this.colorMaskBits);
             return;
         }
         this.flushTextureBatch();
@@ -1272,7 +1272,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
             return;
         }
         if (id === this.GL_BLEND) {
-            this.applyDrawModeState(false, this.blendSourceFactor, this.blendDestinationFactor, this.colorMaskBits);
+            this.__applyDrawModeState(false, this.blendSourceFactor, this.blendDestinationFactor, this.colorMaskBits);
             return;
         }
         this.flushTextureBatch();
@@ -1472,7 +1472,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (this.recordListCommand(() => this.glBlendFunc(src, dest))) {
             return;
         }
-        this.applyDrawModeState(this.blendEnabled, src, dest, this.colorMaskBits);
+        this.__applyDrawModeState(this.blendEnabled, src, dest, this.colorMaskBits);
     }
 
     /** Java Slick2D counterpart: SGL.glGenLists(int). */
@@ -1741,9 +1741,18 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.colorMaskStateStack.length = 0;
     }
 
-    private applyDrawModeState(blendEnabled: boolean, sourceFactor: number, destinationFactor: number, colorMaskBits: number): void {
+    /**
+     * @internal Applies exact Graphics draw-mode state without display-list recording.
+     *
+     * A null blend factor preserves the currently tracked factor, matching
+     * MODE_ALPHA_MAP's behavior of changing blend enablement and the write mask
+     * without selecting a new blend function.
+     */
+    public __applyDrawModeState(blendEnabled: boolean, sourceFactor: number | null, destinationFactor: number | null, colorMaskBits: number): void {
+        const resolvedSourceFactor = sourceFactor ?? this.blendSourceFactor;
+        const resolvedDestinationFactor = destinationFactor ?? this.blendDestinationFactor;
         const blendEnabledChanged = this.blendEnabled !== blendEnabled;
-        const blendFunctionChanged = this.blendSourceFactor !== sourceFactor || this.blendDestinationFactor !== destinationFactor;
+        const blendFunctionChanged = this.blendSourceFactor !== resolvedSourceFactor || this.blendDestinationFactor !== resolvedDestinationFactor;
         const colorMaskChanged = this.colorMaskBits !== colorMaskBits;
 
         if (!blendEnabledChanged && !blendFunctionChanged && !colorMaskChanged) {
@@ -1763,9 +1772,9 @@ export class WebGLRenderer implements RenderBackend, SGL {
         }
 
         if (blendFunctionChanged) {
-            this.blendSourceFactor = sourceFactor;
-            this.blendDestinationFactor = destinationFactor;
-            gl?.blendFunc(sourceFactor, destinationFactor);
+            this.blendSourceFactor = resolvedSourceFactor;
+            this.blendDestinationFactor = resolvedDestinationFactor;
+            gl?.blendFunc(resolvedSourceFactor, resolvedDestinationFactor);
         }
 
         if (colorMaskChanged) {

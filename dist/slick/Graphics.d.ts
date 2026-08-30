@@ -30,6 +30,7 @@ export declare class Graphics {
     private lineWidth;
     private antiAlias;
     private drawMode;
+    private readonly renderContextFastPathStack;
     private width;
     private height;
     private screenClipRecord;
@@ -193,7 +194,8 @@ export declare class Graphics {
     private withRenderTarget;
     private beginRenderTarget;
     private endRenderTarget;
-    private applyDrawMode;
+    private applyDrawModeForContext;
+    private applyDrawModeForExplicitSet;
     private applyClipState;
 }
 //# sourceMappingURL=Graphics.d.ts.map

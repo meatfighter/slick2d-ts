@@ -28,6 +28,7 @@ export class Graphics {
     lineWidth = 1;
     antiAlias = false;
     drawMode = Graphics.MODE_NORMAL;
+    renderContextFastPathStack = [];
     width = 0;
     height = 0;
     screenClipRecord = null;
@@ -57,7 +58,7 @@ export class Graphics {
     /** Java Slick2D counterpart: Graphics.setCurrent(Graphics). */
     static setCurrent(current) {
         if (current !== null) {
-            current.applyDrawMode(Renderer.getBackend());
+            current.applyDrawModeForContext(Renderer.getBackend());
         }
         Graphics.current = current;
     }
@@ -75,10 +76,10 @@ export class Graphics {
     }
     /** Java Slick2D counterpart: Graphics.setDrawMode(int). */
     setDrawMode(mode) {
-        const renderer = this.beginRenderTarget();
+        const renderer = this.beginRenderTarget(false);
         try {
             this.drawMode = mode;
-            this.applyDrawMode(renderer);
+            this.applyDrawModeForExplicitSet(renderer);
         }
         finally {
             this.endRenderTarget(renderer);
@@ -587,38 +588,61 @@ export class Graphics {
             this.endRenderTarget(renderer);
         }
     }
-    beginRenderTarget() {
+    beginRenderTarget(activateDrawMode = true) {
         const renderer = Renderer.getBackend();
-        const previous = Graphics.current;
-        renderer.pushRenderTarget(this.renderTarget);
-        Graphics.currentStack.push(previous);
-        if (previous === this) {
+        const reuseActiveContext = Graphics.current === this && renderer.getRenderTarget() === this.renderTarget;
+        this.renderContextFastPathStack.push(reuseActiveContext);
+        if (reuseActiveContext) {
             return renderer;
         }
+        const previous = Graphics.current;
+        let renderTargetPushed = false;
+        let currentPushed = false;
         let drawModeStatePushed = false;
         try {
+            renderer.pushRenderTarget(this.renderTarget);
+            renderTargetPushed = true;
+            Graphics.currentStack.push(previous);
+            currentPushed = true;
+            if (previous === this) {
+                return renderer;
+            }
             renderer.pushDrawModeState();
             drawModeStatePushed = true;
             Graphics.current = this;
-            this.applyDrawMode(renderer);
+            if (activateDrawMode) {
+                this.applyDrawModeForContext(renderer);
+            }
             this.applyClipState(renderer);
             return renderer;
         }
         catch (error) {
+            this.renderContextFastPathStack.pop();
             Graphics.current = previous;
-            Graphics.currentStack.pop();
+            if (currentPushed) {
+                Graphics.currentStack.pop();
+            }
             try {
                 if (drawModeStatePushed) {
                     renderer.popDrawModeState();
                 }
             }
             finally {
-                renderer.popRenderTarget();
+                if (renderTargetPushed) {
+                    renderer.popRenderTarget();
+                }
             }
             throw error;
         }
     }
     endRenderTarget(renderer) {
+        const reusedActiveContext = this.renderContextFastPathStack.pop();
+        if (reusedActiveContext === undefined) {
+            throw new SlickException("Graphics render-context stack underflow");
+        }
+        if (reusedActiveContext) {
+            return;
+        }
         const previous = Graphics.currentStack.pop();
         if (previous === undefined) {
             throw new SlickException("Graphics current stack underflow");
@@ -645,7 +669,27 @@ export class Graphics {
             }
         }
     }
-    applyDrawMode(renderer) {
+    applyDrawModeForContext(renderer) {
+        if (this.drawMode === Graphics.MODE_NORMAL) {
+            renderer.__applyDrawModeState(true, renderer.GL_SRC_ALPHA, renderer.GL_ONE_MINUS_SRC_ALPHA, 0b1111);
+        }
+        else if (this.drawMode === Graphics.MODE_ALPHA_MAP) {
+            renderer.__applyDrawModeState(false, null, null, 0b1000);
+        }
+        else if (this.drawMode === Graphics.MODE_ALPHA_BLEND) {
+            renderer.__applyDrawModeState(true, renderer.GL_DST_ALPHA, renderer.GL_ONE_MINUS_DST_ALPHA, 0b0111);
+        }
+        else if (this.drawMode === Graphics.MODE_COLOR_MULTIPLY) {
+            renderer.__applyDrawModeState(true, renderer.GL_ONE_MINUS_SRC_COLOR, renderer.GL_SRC_COLOR, 0b1111);
+        }
+        else if (this.drawMode === Graphics.MODE_ADD) {
+            renderer.__applyDrawModeState(true, renderer.GL_ONE, renderer.GL_ONE, 0b1111);
+        }
+        else if (this.drawMode === Graphics.MODE_SCREEN) {
+            renderer.__applyDrawModeState(true, renderer.GL_ONE, renderer.GL_ONE_MINUS_SRC_COLOR, 0b1111);
+        }
+    }
+    applyDrawModeForExplicitSet(renderer) {
         if (this.drawMode === Graphics.MODE_NORMAL) {
             renderer.glEnable(renderer.GL_BLEND);
             renderer.glColorMask(true, true, true, true);

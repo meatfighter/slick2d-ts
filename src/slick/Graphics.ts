@@ -41,6 +41,7 @@ export class Graphics {
     private lineWidth = 1;
     private antiAlias = false;
     private drawMode = Graphics.MODE_NORMAL;
+    private readonly renderContextFastPathStack: boolean[] = [];
     private width = 0;
     private height = 0;
     private screenClipRecord: ClipRect | null = null;
@@ -73,7 +74,7 @@ export class Graphics {
     /** Java Slick2D counterpart: Graphics.setCurrent(Graphics). */
     public static setCurrent(current: Graphics | null): void {
         if (current !== null) {
-            current.applyDrawMode(Renderer.getBackend());
+            current.applyDrawModeForContext(Renderer.getBackend());
         }
         Graphics.current = current;
     }
@@ -95,10 +96,10 @@ export class Graphics {
 
     /** Java Slick2D counterpart: Graphics.setDrawMode(int). */
     public setDrawMode(mode: number): void {
-        const renderer = this.beginRenderTarget();
+        const renderer = this.beginRenderTarget(false);
         try {
             this.drawMode = mode;
-            this.applyDrawMode(renderer);
+            this.applyDrawModeForExplicitSet(renderer);
         } finally {
             this.endRenderTarget(renderer);
         }
@@ -733,39 +734,65 @@ export class Graphics {
         }
     }
 
-    private beginRenderTarget(): WebGLRenderer {
+    private beginRenderTarget(activateDrawMode: boolean = true): WebGLRenderer {
         const renderer = Renderer.getBackend();
-        const previous = Graphics.current;
-        renderer.pushRenderTarget(this.renderTarget);
-        Graphics.currentStack.push(previous);
-
-        if (previous === this) {
+        const reuseActiveContext = Graphics.current === this && renderer.getRenderTarget() === this.renderTarget;
+        this.renderContextFastPathStack.push(reuseActiveContext);
+        if (reuseActiveContext) {
             return renderer;
         }
 
+        const previous = Graphics.current;
+        let renderTargetPushed = false;
+        let currentPushed = false;
         let drawModeStatePushed = false;
+
         try {
+            renderer.pushRenderTarget(this.renderTarget);
+            renderTargetPushed = true;
+            Graphics.currentStack.push(previous);
+            currentPushed = true;
+
+            if (previous === this) {
+                return renderer;
+            }
+
             renderer.pushDrawModeState();
             drawModeStatePushed = true;
             Graphics.current = this;
-            this.applyDrawMode(renderer);
+            if (activateDrawMode) {
+                this.applyDrawModeForContext(renderer);
+            }
             this.applyClipState(renderer);
             return renderer;
         } catch (error) {
+            this.renderContextFastPathStack.pop();
             Graphics.current = previous;
-            Graphics.currentStack.pop();
+            if (currentPushed) {
+                Graphics.currentStack.pop();
+            }
             try {
                 if (drawModeStatePushed) {
                     renderer.popDrawModeState();
                 }
             } finally {
-                renderer.popRenderTarget();
+                if (renderTargetPushed) {
+                    renderer.popRenderTarget();
+                }
             }
             throw error;
         }
     }
 
     private endRenderTarget(renderer: WebGLRenderer): void {
+        const reusedActiveContext = this.renderContextFastPathStack.pop();
+        if (reusedActiveContext === undefined) {
+            throw new SlickException("Graphics render-context stack underflow");
+        }
+        if (reusedActiveContext) {
+            return;
+        }
+
         const previous = Graphics.currentStack.pop();
         if (previous === undefined) {
             throw new SlickException("Graphics current stack underflow");
@@ -790,7 +817,23 @@ export class Graphics {
         }
     }
 
-    private applyDrawMode(renderer: WebGLRenderer): void {
+    private applyDrawModeForContext(renderer: WebGLRenderer): void {
+        if (this.drawMode === Graphics.MODE_NORMAL) {
+            renderer.__applyDrawModeState(true, renderer.GL_SRC_ALPHA, renderer.GL_ONE_MINUS_SRC_ALPHA, 0b1111);
+        } else if (this.drawMode === Graphics.MODE_ALPHA_MAP) {
+            renderer.__applyDrawModeState(false, null, null, 0b1000);
+        } else if (this.drawMode === Graphics.MODE_ALPHA_BLEND) {
+            renderer.__applyDrawModeState(true, renderer.GL_DST_ALPHA, renderer.GL_ONE_MINUS_DST_ALPHA, 0b0111);
+        } else if (this.drawMode === Graphics.MODE_COLOR_MULTIPLY) {
+            renderer.__applyDrawModeState(true, renderer.GL_ONE_MINUS_SRC_COLOR, renderer.GL_SRC_COLOR, 0b1111);
+        } else if (this.drawMode === Graphics.MODE_ADD) {
+            renderer.__applyDrawModeState(true, renderer.GL_ONE, renderer.GL_ONE, 0b1111);
+        } else if (this.drawMode === Graphics.MODE_SCREEN) {
+            renderer.__applyDrawModeState(true, renderer.GL_ONE, renderer.GL_ONE_MINUS_SRC_COLOR, 0b1111);
+        }
+    }
+
+    private applyDrawModeForExplicitSet(renderer: WebGLRenderer): void {
         if (this.drawMode === Graphics.MODE_NORMAL) {
             renderer.glEnable(renderer.GL_BLEND);
             renderer.glColorMask(true, true, true, true);

@@ -328,7 +328,14 @@ export declare class WebGLRenderer implements RenderBackend, SGL {
     private applyMonochromePaletteUniforms;
     private disableMonochromePalette;
     private resetDrawModeStateTracking;
-    private applyDrawModeState;
+    /**
+     * @internal Applies exact Graphics draw-mode state without display-list recording.
+     *
+     * A null blend factor preserves the currently tracked factor, matching
+     * MODE_ALPHA_MAP's behavior of changing blend enablement and the write mask
+     * without selecting a new blend function.
+     */
+    __applyDrawModeState(blendEnabled: boolean, sourceFactor: number | null, destinationFactor: number | null, colorMaskBits: number): void;
     private applyColorMaskBits;
     private static encodeColorMask;
     private static normalizeColorChannel;
