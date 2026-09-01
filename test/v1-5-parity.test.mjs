@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { Color, GameContainer, Graphics, Image, Input, InternalTextureLoader, Renderer, ResourceLoader, SoundStore } from "../dist/index.js";
+import { Color, GameContainer, Graphics, GraphicsFactory, Image, Input, InternalTextureLoader, Renderer, ResourceLoader, SoundStore } from "../dist/index.js";
 import { WebGLTextureResource } from "../dist/slick/rendering/WebGLTextureResource.js";
 
 class Fake2DContext {
@@ -142,10 +142,12 @@ function installGamepads(snapshot) {
 
 function deferred() {
     let resolve;
-    const promise = new Promise((resolvePromise) => {
+    let reject;
+    const promise = new Promise((resolvePromise, rejectPromise) => {
         resolve = resolvePromise;
+        reject = rejectPromise;
     });
-    return { promise, resolve };
+    return { promise, reject, resolve };
 }
 
 class DeferredTextureResource extends WebGLTextureResource {
@@ -396,6 +398,20 @@ test("GraphicsFactory returns one Graphics and target per shared texture even wh
     image.destroy();
 });
 
+test("InternalTextureLoader.clear releases GraphicsFactory entries for disposed textures", () => {
+    installCanvasDocument();
+    const image = new Image(8, 8);
+    const resource = image.__getTextureResource();
+
+    image.getGraphics();
+    assert.notStrictEqual(GraphicsFactory.getRenderTarget(resource), null);
+
+    InternalTextureLoader.get().clear();
+
+    assert.strictEqual(GraphicsFactory.getRenderTarget(resource), null);
+    image.destroy();
+});
+
 test("setTexture reinitializes dimensions and ignores completion from an obsolete texture", async () => {
     installCanvasDocument();
     const oldCompletion = deferred();
@@ -466,6 +482,33 @@ test("InternalTextureLoader cache identity separates filter, transparency, and f
     for (const texture of created) {
         loader.unregister(texture);
     }
+});
+
+test("InternalTextureLoader evicts failed asynchronous texture loads from the path cache", async () => {
+    installCanvasDocument();
+    const loader = InternalTextureLoader.get();
+    const created = [];
+    const failure = deferred();
+    const failed = loader.getTexture("failed-cache-test", Image.FILTER_LINEAR, null, false, () => {
+        const texture = new DeferredTextureResource(0, 0, failure.promise);
+        created.push(texture);
+        return texture;
+    });
+
+    failure.reject(new Error("decode failed"));
+    await assert.rejects(failed.ready(), /decode failed/);
+    await Promise.resolve();
+
+    const retry = loader.getTexture("failed-cache-test", Image.FILTER_LINEAR, null, false, () => {
+        const completion = deferred();
+        completion.resolve();
+        const texture = new DeferredTextureResource(1, 1, completion.promise);
+        created.push(texture);
+        return texture;
+    });
+
+    assert.notStrictEqual(retry, failed);
+    assert.equal(created.length, 2);
 });
 
 test("Color.decode enforces Java Integer.decode grammar and signed int range", () => {

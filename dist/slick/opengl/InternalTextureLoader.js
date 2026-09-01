@@ -1,3 +1,4 @@
+import { GraphicsFactory } from "./GraphicsFactory.js";
 import { Renderer } from "./renderer/Renderer.js";
 /**
  * Java Slick2D counterpart: org.newdawn.slick.opengl.InternalTextureLoader.
@@ -42,15 +43,24 @@ export class InternalTextureLoader {
         }
         const texture = factory();
         cache.set(key, texture);
+        const pending = texture.ready?.() ?? null;
+        if (pending) {
+            void pending.catch(() => {
+                if (cache.get(key) === texture) {
+                    this.unregister(texture);
+                }
+            });
+        }
         return texture;
     }
     clear(name) {
         const gl = Renderer.getBackend().getContext();
-        for (const texture of this.textures) {
+        for (const texture of Array.from(this.textures)) {
             if (name === undefined || texture.ref === name) {
                 // Remove tracking first so clear() is idempotent even for
                 // compatibility resources whose dispose() does not unregister itself.
                 this.unregister(texture);
+                GraphicsFactory.releaseGraphicsForTexture(texture);
                 texture.dispose(gl);
             }
         }

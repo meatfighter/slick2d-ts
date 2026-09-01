@@ -464,6 +464,7 @@ export class AppGameContainer extends GameContainer {
             document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
             document.removeEventListener("visibilitychange", this.handleVisibilityChange);
         }
+        InternalTextureLoader.get().clear();
         Renderer.getBackend().dispose();
         if (this.preserveAudioCacheOnDestroy) {
             AL.destroyPreservingAudioCache();

@@ -313,14 +313,24 @@ test("additional-axis recalibration can be reset explicitly", () => {
 
 test("disabled controllers do not report stale cached directions", () => {
     const pad = gamepad({ axes: [-1, 0] });
+    pad.buttons[2] = button(true);
     installGamepads([pad]);
     const input = new Input(600);
 
     input.poll(800, 600);
+    assert.equal(input.getControllerCount(), 1);
+    assert.equal(input.getAxisCount(0), 2);
+    assert.equal(input.getAxisValue(0, 0), -1);
+    assert.equal(input.isButtonPressed(2, 0), true);
     assert.equal(input.isControllerLeft(0), true);
 
     Input.disableControllers();
 
+    assert.equal(input.getControllerCount(), 0);
+    assert.equal(input.getAxisCount(0), 0);
+    assert.equal(input.getAxisValue(0, 0), 0);
+    assert.equal(input.isButtonPressed(2, 0), false);
+    assert.equal(input.isControlPressed(6, 0), false);
     assert.equal(input.isControllerLeft(0), false);
     assert.equal(input.isControllerLeft(Input.ANY_CONTROLLER), false);
 });

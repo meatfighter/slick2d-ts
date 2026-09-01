@@ -19,7 +19,7 @@ The goal is API and behavior parity for Java game ports that already depend on S
 ## Install
 
 ```sh
-npm install git+https://github.com/meatfighter/slick2d-ts.git#semver:^1.4.0
+npm install git+https://github.com/meatfighter/slick2d-ts.git#semver:^1.5.0
 ```
 
 ## Example

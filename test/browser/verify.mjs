@@ -1,4 +1,4 @@
-import { Color, Image, Input, Renderer } from "../../dist/index.js";
+import { AppGameContainer, Color, Display, Image, Input, Renderer, ResourceLoader } from "../../dist/index.js";
 import { WebGLTextureResource } from "../../dist/slick/rendering/WebGLTextureResource.js";
 
 const result = document.querySelector("#result");
@@ -24,6 +24,70 @@ function keyListener(events) {
         keyReleased: (key, character) => events.push(["released", key, character]),
         setInput: () => undefined
     };
+}
+
+function noopGame(title) {
+    return {
+        closeRequested: () => true,
+        getTitle: () => title,
+        init: () => undefined,
+        render: () => undefined,
+        update: () => undefined
+    };
+}
+
+async function pngBytes(red, green, blue) {
+    const source = document.createElement("canvas");
+    source.width = 4;
+    source.height = 4;
+    const sourceContext = source.getContext("2d");
+    sourceContext.fillStyle = `rgb(${red}, ${green}, ${blue})`;
+    sourceContext.fillRect(0, 0, 4, 4);
+    const blob = await new Promise((resolve) => source.toBlob(resolve, "image/png"));
+    assert(blob, "Test browser could not encode a PNG fixture");
+    return blob.arrayBuffer();
+}
+
+async function drawPathTextureAndReadPixel(ref) {
+    const image = new Image(ref, false, Image.FILTER_NEAREST);
+    await ResourceLoader.waitForAll();
+    const renderer = Renderer.getBackend();
+    renderer.beginFrame(4, 4, Color.transparent, 4, 4);
+    image.draw(0, 0, 4, 4);
+    renderer.endFrame();
+    const pixel = new Uint8Array(4);
+    renderer.readPixels(1, 1, 1, 1, pixel);
+    return pixel;
+}
+
+async function verifyContainerRestartPathTexture() {
+    const ref = "images/browser-container-restart.png";
+    ResourceLoader.registerResource(ref, await pngBytes(0, 255, 0));
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    let first = null;
+    let second = null;
+    try {
+        Display.setParent(parent);
+        first = new AppGameContainer(noopGame("browser restart A"), 4, 4, false);
+        await first.start();
+        const firstPixel = await drawPathTextureAndReadPixel(ref);
+        assert(closeTo(firstPixel[1], 255) && firstPixel[0] < 3 && firstPixel[2] < 3, "First container did not render the path texture");
+
+        first.destroy();
+        first = null;
+
+        second = new AppGameContainer(noopGame("browser restart B"), 4, 4, false);
+        await second.start();
+        const secondPixel = await drawPathTextureAndReadPixel(ref);
+        assert(closeTo(secondPixel[1], 255) && secondPixel[0] < 3 && secondPixel[2] < 3, "Second container did not render the reused path texture");
+    } finally {
+        first?.destroy();
+        second?.destroy();
+        Display.setParent(null);
+        parent.remove();
+        ResourceLoader.clearCache();
+    }
 }
 
 async function run() {
@@ -91,6 +155,9 @@ async function run() {
     loaded.destroy();
     dynamic.destroy();
     renderer.dispose();
+
+    await verifyContainerRestartPathTexture();
+    passed.push("container restart texture cache boundary");
 }
 
 try {
