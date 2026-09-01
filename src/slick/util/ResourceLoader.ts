@@ -6,15 +6,46 @@ type ResourceRecord = {
     promise?: Promise<ArrayBuffer>;
     error?: unknown;
 };
+
 export type TrackedResourceError = {
     label: string;
     error: unknown;
 };
 
-type FetchFailure = {
-    status?: number;
-    cause?: unknown;
-};
+export type ResourceLoadFailureKind = "resolution" | "network" | "http" | "abort" | "decode";
+export type ResourceLoadPhase = "resolve" | "fetch" | "read" | "decode";
+
+export interface ResourceLoadFailureDetails {
+    readonly ref: string;
+    readonly url?: string | null;
+    readonly status?: number | null;
+    readonly kind: ResourceLoadFailureKind;
+    readonly phase: ResourceLoadPhase;
+    readonly cause?: unknown;
+}
+
+/** Browser resource failure with stable, application-readable semantics. */
+export class ResourceLoadException extends SlickException {
+    public readonly ref: string;
+    public readonly url: string | null;
+    public readonly status: number | null;
+    public readonly kind: ResourceLoadFailureKind;
+    public readonly phase: ResourceLoadPhase;
+
+    public constructor(message: string, details: ResourceLoadFailureDetails) {
+        super(message, details.cause);
+        this.name = "ResourceLoadException";
+        this.ref = details.ref;
+        this.url = details.url ?? null;
+        this.status = details.status ?? null;
+        this.kind = details.kind;
+        this.phase = details.phase;
+    }
+}
+
+export interface ResourceLoadOptions {
+    readonly signal?: AbortSignal;
+}
 
 export type ResourcePreloadProgress = {
     ref: string;
@@ -22,6 +53,10 @@ export type ResourcePreloadProgress = {
     total: number;
     bytesLoaded: number;
 };
+
+export interface ResourcePreloadOptions extends ResourceLoadOptions {
+    readonly onProgress?: (progress: ResourcePreloadProgress) => void;
+}
 
 /**
  * Java Slick2D counterpart: org.newdawn.slick.util.ResourceLoader.
@@ -39,91 +74,53 @@ export class ResourceLoader {
     private static retryCount = 0;
     private static retryDelay = 250;
 
-    /**
-     * Java Slick2D counterpart: ResourceLoader.addResourceLocation(ResourceLocation).
-     *
-     * Adds a base URL/path string used to resolve future resource requests.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.addResourceLocation(ResourceLocation). */
     public static addResourceLocation(location: unknown): void {
         ResourceLoader.locations.push(String(location));
     }
 
-    /**
-     * Java Slick2D counterpart: ResourceLoader.removeResourceLocation(ResourceLocation).
-     *
-     * Removes a previously registered base URL/path string.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.removeResourceLocation(ResourceLocation). */
     public static removeResourceLocation(location: unknown): void {
         const value = String(location);
         ResourceLoader.locations = ResourceLoader.locations.filter((entry) => entry !== value);
     }
 
-    /**
-     * Java Slick2D counterpart: ResourceLoader.removeAllResourceLocations().
-     *
-     * Clears base URL/path strings. No network resources resolve until a
-     * location is added or bytes are registered directly.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.removeAllResourceLocations(). */
     public static removeAllResourceLocations(): void {
         ResourceLoader.locations = [];
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Adds or clears a cache-version query parameter on network fetch URLs
-     * while preserving the original Java ref string as the cache key.
-     */
+    /** Adds or clears a cache-version query parameter while retaining Java refs as cache keys. */
     public static setCacheBust(value: string | number | null): void {
         ResourceLoader.cacheBustValue = value === null ? null : String(value);
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Configures retry attempts for browser resource fetches.
-     */
+    /** Configures transient browser fetch retries. Permanent HTTP failures are not retried. */
     public static setRetryOptions(retries: number, delayMs: number = 250): void {
         ResourceLoader.retryCount = Math.max(0, Math.trunc(retries));
         ResourceLoader.retryDelay = Math.max(0, Math.trunc(delayMs));
     }
 
-    /**
-     * Java Slick2D counterpart: ResourceLoader.getResource(String).
-     *
-     * Returns a URL for a resource path if it can be resolved syntactically.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.getResource(String). */
     public static getResource(ref: string): URL | null {
         return ResourceLoader.getResourceCandidates(ref)[0] ?? null;
     }
 
-    /**
-     * Java Slick2D counterpart: ResourceLoader.getResourceAsStream(String).
-     *
-     * Returns already-loaded bytes or null; it never performs a synchronous fetch.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.getResourceAsStream(String). */
     public static getResourceAsStream(ref: string): ArrayBuffer | null {
         const record = ResourceLoader.records.get(ref);
-        if (!record || !record.data) {
+        if (!record?.data) {
             return null;
         }
         return record.data.slice(0);
     }
 
-    /**
-     * Java Slick2D counterpart: ResourceLoader.resourceExists(String).
-     *
-     * Returns true when bytes are already loaded for the resource.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.resourceExists(String). */
     public static resourceExists(ref: string): boolean {
         return ResourceLoader.records.get(ref)?.data !== undefined;
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Registers already-available bytes under the original Java path string.
-     */
+    /** Registers already-available bytes under the original Java path string. */
     public static registerResource(ref: string, data: ArrayBuffer | Uint8Array): void {
         let bytes: ArrayBuffer;
         if (data instanceof Uint8Array) {
@@ -136,29 +133,46 @@ export class ResourceLoader {
         ResourceLoader.records.set(ref, { ref, data: bytes });
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Queues an async fetch for a resource and caches in-flight requests.
-     */
-    public static async loadResource(ref: string): Promise<ArrayBuffer> {
+    /** Queues an async fetch for a resource and caches in-flight requests. */
+    public static async loadResource(ref: string, options: ResourceLoadOptions = {}): Promise<ArrayBuffer> {
+        ResourceLoader.throwIfAborted(options.signal, ref, null, "fetch");
         const existing = ResourceLoader.records.get(ref);
         if (existing?.data) {
             return existing.data.slice(0);
         }
         if (existing?.promise && existing.error === undefined) {
-            return existing.promise;
+            return ResourceLoader.waitForPromise(existing.promise, options.signal, ref);
         }
 
         const urls = ResourceLoader.getResourceCandidates(ref);
         if (urls.length === 0 || !globalThis.fetch) {
-            throw new SlickException(`Unable to resolve resource: ${ref}`);
+            throw new ResourceLoadException(`Unable to resolve resource: ${ref}`, {
+                ref,
+                kind: "resolution",
+                phase: "resolve"
+            });
         }
 
         const record: ResourceRecord = { ref };
-        record.promise = ResourceLoader.fetchFromCandidates(urls, ref)
+        const promise = ResourceLoader.fetchFromCandidates(urls, ref, options.signal)
             .then(async (response) => {
-                const data = await response.arrayBuffer();
+                ResourceLoader.throwIfAborted(options.signal, ref, response.url || null, "read");
+                let data: ArrayBuffer;
+                try {
+                    data = await response.arrayBuffer();
+                } catch (cause) {
+                    if (ResourceLoader.isAbortError(cause) || options.signal?.aborted) {
+                        throw ResourceLoader.abortException(ref, response.url || null, "read", cause);
+                    }
+                    throw new ResourceLoadException(`Failed to read resource ${ref}`, {
+                        ref,
+                        url: response.url || null,
+                        kind: "network",
+                        phase: "read",
+                        cause
+                    });
+                }
+                ResourceLoader.throwIfAborted(options.signal, ref, response.url || null, "read");
                 record.data = data;
                 return data.slice(0);
             })
@@ -166,18 +180,20 @@ export class ResourceLoader {
                 record.error = error;
                 throw error;
             });
+        record.promise = promise;
         ResourceLoader.records.set(ref, record);
-        return record.promise;
+        return promise;
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Fetches a manifest of original Java resource paths before game init so
-     * later Java-style constructors can read synchronously through
-     * getResourceAsStream(ref).
-     */
-    public static async preloadResources(refs: Iterable<string>, onProgress?: (progress: ResourcePreloadProgress) => void): Promise<Map<string, ArrayBuffer>> {
+    public static preloadResources(refs: Iterable<string>, onProgress?: (progress: ResourcePreloadProgress) => void): Promise<Map<string, ArrayBuffer>>;
+    public static preloadResources(refs: Iterable<string>, options?: ResourcePreloadOptions): Promise<Map<string, ArrayBuffer>>;
+    /** Fetches a manifest before Java-style synchronous consumers initialize. */
+    public static async preloadResources(
+        refs: Iterable<string>,
+        onProgressOrOptions?: ((progress: ResourcePreloadProgress) => void) | ResourcePreloadOptions
+    ): Promise<Map<string, ArrayBuffer>> {
+        const options = ResourceLoader.normalizePreloadOptions(onProgressOrOptions);
+        ResourceLoader.throwIfAborted(options.signal, "resource manifest", null, "fetch");
         const uniqueRefs = Array.from(new Set(refs));
         const results = new Map<string, ArrayBuffer>();
         const total = uniqueRefs.length;
@@ -186,29 +202,24 @@ export class ResourceLoader {
         if (total === 0) {
             return results;
         }
-        await Promise.all(
+
+        const settled = await Promise.allSettled(
             uniqueRefs.map(async (ref) => {
-                try {
-                    const bytes = await ResourceLoader.loadResource(ref);
-                    const copy = bytes.slice(0);
-                    results.set(ref, copy);
-                    loaded++;
-                    bytesLoaded += copy.byteLength;
-                    onProgress?.({ ref, loaded, total, bytesLoaded });
-                } catch (error) {
-                    throw error instanceof SlickException ? error : new SlickException(`Failed to preload resource ${ref}`, error);
-                }
+                const bytes = await ResourceLoader.loadResource(ref, options);
+                results.set(ref, bytes);
+                loaded++;
+                bytesLoaded += bytes.byteLength;
+                options.onProgress?.({ ref, loaded, total, bytesLoaded });
             })
         );
+        const failure = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected");
+        if (failure) {
+            throw failure.reason;
+        }
         return results;
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Adds a non-Java decode/prepare promise to the same preload barrier used
-     * by Java-style synchronous resource consumers.
-     */
+    /** Adds a decode/prepare promise to the shared preload barrier. */
     public static track<T>(promise: Promise<T>, refOrLabel: string = "tracked resource"): Promise<T> {
         const generation = ResourceLoader.trackingGeneration;
         const tracked = promise
@@ -229,11 +240,7 @@ export class ResourceLoader {
         return tracked;
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Returns the number of browser resource or decode operations still queued.
-     */
+    /** Returns the number of browser resource or decode operations still queued. */
     public static getPendingCount(): number {
         let pendingFetches = 0;
         for (const record of ResourceLoader.records.values()) {
@@ -244,47 +251,22 @@ export class ResourceLoader {
         return pendingFetches + ResourceLoader.trackedPromises.size;
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Returns true while any tracked browser resource work is still pending.
-     */
     public static hasPending(): boolean {
         return ResourceLoader.getPendingCount() > 0;
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Returns true when a queued resource failed.
-     */
     public static resourceFailed(ref: string): boolean {
         return ResourceLoader.records.get(ref)?.error !== undefined;
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Returns the original error for a failed resource.
-     */
     public static getResourceError(ref: string): unknown {
         return ResourceLoader.records.get(ref)?.error;
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Returns retained failures from tracked decode/preparation tasks.
-     */
     public static getTrackedErrors(): TrackedResourceError[] {
         return ResourceLoader.trackedErrors.slice();
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Returns true when any fetch or tracked preparation task has failed.
-     */
     public static hasFailed(): boolean {
         if (ResourceLoader.trackedErrors.length > 0) {
             return true;
@@ -298,34 +280,36 @@ export class ResourceLoader {
     }
 
     /**
-     * Browser parity helper.
-     *
-     * Waits for all currently queued resource requests.
+     * Waits until all work belonging to the current barrier has settled. Work
+     * queued by another tracked operation is included before the method returns.
      */
     public static async waitForAll(): Promise<void> {
-        if (ResourceLoader.trackedErrors.length > 0) {
-            throw ResourceLoader.toTrackedFailureException();
-        }
-        const promises: Promise<unknown>[] = [];
-        for (const record of ResourceLoader.records.values()) {
-            if (record.promise !== undefined) {
-                promises.push(record.promise);
+        while (ResourceLoader.hasPending()) {
+            const promises: Promise<unknown>[] = [];
+            for (const record of ResourceLoader.records.values()) {
+                if (record.promise !== undefined && record.data === undefined && record.error === undefined) {
+                    promises.push(record.promise);
+                }
             }
+            for (const promise of ResourceLoader.trackedPromises) {
+                promises.push(promise);
+            }
+            if (promises.length === 0) {
+                break;
+            }
+            await Promise.allSettled(promises);
         }
-        for (const promise of ResourceLoader.trackedPromises) {
-            promises.push(promise);
-        }
-        await Promise.all(promises);
         if (ResourceLoader.trackedErrors.length > 0) {
             throw ResourceLoader.toTrackedFailureException();
+        }
+        for (const record of ResourceLoader.records.values()) {
+            if (record.error !== undefined) {
+                throw record.error;
+            }
         }
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Clears all cached resource bytes and in-flight handles.
-     */
+    /** Clears all cached resource bytes and in-flight handles. */
     public static clearCache(): void {
         ResourceLoader.records.clear();
         ResourceLoader.trackedPromises.clear();
@@ -333,12 +317,7 @@ export class ResourceLoader {
         ResourceLoader.trackingGeneration++;
     }
 
-    /**
-     * Browser parity helper.
-     *
-     * Clears retained failed resource/decode state without removing successful
-     * preloaded resource bytes.
-     */
+    /** Clears retained failures without removing successfully preloaded bytes. */
     public static clearFailures(): void {
         for (const [ref, record] of ResourceLoader.records.entries()) {
             if (record.error !== undefined) {
@@ -350,9 +329,13 @@ export class ResourceLoader {
         ResourceLoader.trackingGeneration++;
     }
 
+    private static normalizePreloadOptions(value?: ((progress: ResourcePreloadProgress) => void) | ResourcePreloadOptions): ResourcePreloadOptions {
+        return typeof value === "function" ? { onProgress: value } : (value ?? {});
+    }
+
     private static toTrackedFailureException(): SlickException {
         const first = ResourceLoader.trackedErrors[0];
-        return new SlickException(`Failed tracked resource: ${first.label}`, first.error);
+        return first.error instanceof SlickException ? first.error : new SlickException(`Failed tracked resource: ${first.label}`, first.error);
     }
 
     private static withCacheBust(url: URL): URL {
@@ -384,42 +367,149 @@ export class ResourceLoader {
         return new URL(normalizedRef, new URL(normalizedLocation, baseHref));
     }
 
-    private static async fetchFromCandidates(urls: URL[], ref: string): Promise<Response> {
+    private static async fetchFromCandidates(urls: URL[], ref: string, signal?: AbortSignal): Promise<Response> {
         let failure: unknown = null;
         for (const url of urls) {
             try {
-                return await ResourceLoader.fetchWithRetry(url, ref);
+                return await ResourceLoader.fetchWithRetry(url, ref, signal);
             } catch (error) {
+                if (error instanceof ResourceLoadException && error.kind === "abort") {
+                    throw error;
+                }
                 failure = error;
             }
         }
         if (failure instanceof SlickException) {
             throw failure;
         }
-        throw new SlickException(`Failed to load resource ${ref}`, failure);
+        throw new ResourceLoadException(`Failed to load resource ${ref}`, {
+            ref,
+            kind: "network",
+            phase: "fetch",
+            cause: failure
+        });
     }
 
-    private static async fetchWithRetry(url: URL, ref: string): Promise<Response> {
-        let failure: FetchFailure | null = null;
+    private static async fetchWithRetry(url: URL, ref: string, signal?: AbortSignal): Promise<Response> {
+        let failure: ResourceLoadException | null = null;
         for (let attempt = 0; attempt <= ResourceLoader.retryCount; attempt++) {
+            ResourceLoader.throwIfAborted(signal, ref, url.href, "fetch");
             try {
-                const response = await fetch(url);
+                const response = await fetch(url, { signal });
                 if (response.ok) {
                     return response;
                 }
-                failure = { status: response.status };
+                failure = new ResourceLoadException(`Failed to load resource ${ref}: HTTP ${response.status}`, {
+                    ref,
+                    url: url.href,
+                    status: response.status,
+                    kind: "http",
+                    phase: "fetch"
+                });
             } catch (cause) {
-                failure = { cause };
-            }
-            if (attempt < ResourceLoader.retryCount && ResourceLoader.retryDelay > 0) {
-                await new Promise<void>((resolve) => {
-                    setTimeout(resolve, ResourceLoader.retryDelay);
+                if (ResourceLoader.isAbortError(cause) || signal?.aborted) {
+                    throw ResourceLoader.abortException(ref, url.href, "fetch", cause);
+                }
+                failure = new ResourceLoadException(`Failed to load resource ${ref}`, {
+                    ref,
+                    url: url.href,
+                    kind: "network",
+                    phase: "fetch",
+                    cause
                 });
             }
+            if (attempt >= ResourceLoader.retryCount || !ResourceLoader.isRetryable(failure)) {
+                break;
+            }
+            await ResourceLoader.waitBeforeRetry(signal, ref, url.href);
         }
-        if (failure?.status !== undefined) {
-            throw new SlickException(`Failed to load resource ${ref}: HTTP ${failure.status}`);
+        throw (
+            failure ??
+            new ResourceLoadException(`Failed to load resource ${ref}`, {
+                ref,
+                url: url.href,
+                kind: "network",
+                phase: "fetch"
+            })
+        );
+    }
+
+    private static isRetryable(error: ResourceLoadException): boolean {
+        if (error.kind === "network") {
+            return true;
         }
-        throw new SlickException(`Failed to load resource ${ref}`, failure?.cause);
+        if (error.kind !== "http" || error.status === null) {
+            return false;
+        }
+        return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
+    }
+
+    private static async waitBeforeRetry(signal: AbortSignal | undefined, ref: string, url: string): Promise<void> {
+        if (ResourceLoader.retryDelay <= 0) {
+            return;
+        }
+        await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                signal?.removeEventListener("abort", abort);
+                resolve();
+            }, ResourceLoader.retryDelay);
+            const abort = (): void => {
+                clearTimeout(timeout);
+                signal?.removeEventListener("abort", abort);
+                reject(ResourceLoader.abortException(ref, url, "fetch", signal?.reason));
+            };
+            if (signal?.aborted) {
+                abort();
+                return;
+            }
+            signal?.addEventListener("abort", abort, { once: true });
+        });
+    }
+
+    private static async waitForPromise(promise: Promise<ArrayBuffer>, signal: AbortSignal | undefined, ref: string): Promise<ArrayBuffer> {
+        if (!signal) {
+            return promise;
+        }
+        ResourceLoader.throwIfAborted(signal, ref, null, "fetch");
+        return new Promise<ArrayBuffer>((resolve, reject) => {
+            const abort = (): void => {
+                signal.removeEventListener("abort", abort);
+                reject(ResourceLoader.abortException(ref, null, "fetch", signal.reason));
+            };
+            signal.addEventListener("abort", abort, { once: true });
+            void promise.then(
+                (value) => {
+                    signal.removeEventListener("abort", abort);
+                    resolve(value);
+                },
+                (error) => {
+                    signal.removeEventListener("abort", abort);
+                    reject(error);
+                }
+            );
+        });
+    }
+
+    private static throwIfAborted(signal: AbortSignal | undefined, ref: string, url: string | null, phase: ResourceLoadPhase): void {
+        if (signal?.aborted) {
+            throw ResourceLoader.abortException(ref, url, phase, signal.reason);
+        }
+    }
+
+    private static abortException(ref: string, url: string | null, phase: ResourceLoadPhase, cause?: unknown): ResourceLoadException {
+        return new ResourceLoadException(`Resource load aborted: ${ref}`, {
+            ref,
+            url,
+            kind: "abort",
+            phase,
+            cause
+        });
+    }
+
+    private static isAbortError(error: unknown): boolean {
+        return (
+            (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError") ||
+            (typeof error === "object" && error !== null && "name" in error && (error as { name?: unknown }).name === "AbortError")
+        );
     }
 }

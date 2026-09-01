@@ -5,9 +5,9 @@
 ## Browser Runtime Boundaries
 
 - Rendering uses WebGL2. If the browser loses and restores the WebGL context, GPU objects are recreated from retained decoded image data where possible. Framebuffer-backed render target contents are not preserved by the browser and must be redrawn by the game.
-- The main loop is owned by `AppGameContainer` and browser `requestAnimationFrame`. `Display.update()` is intentionally a no-op for copied Java loops that still call it.
+- The main loop is owned by `AppGameContainer` and browser `requestAnimationFrame`. Integer Slick `delta` values are derived from absolute high-resolution frame timestamps so fractional milliseconds carry into later frames instead of being discarded on every callback. `Display.update()` is intentionally a no-op for copied Java loops that still call it.
 - Fullscreen, pointer lock, audio unlock, high-DPI backing stores, visibility throttling, and gamepad polling follow browser security and lifecycle rules.
-- Keyboard, pointer, wheel, context-menu, touch-action, and gamepad input are mapped to Slick/LWJGL-style APIs. Browser-reserved keys or gestures may still be intercepted by the user agent.
+- Keyboard, pointer, wheel, context-menu, touch-action, and gamepad input are mapped to Slick/LWJGL-style APIs. Browser-reserved keys or gestures may still be intercepted by the user agent. Ports can opt additional calibrated axis pairs into the four normal controller-direction controls through `Input.setAdditionalControllerDirectionAxes(...)`; those axes are sampled once during the normal input poll.
 
 ## Browser Rendering Extensions
 
@@ -16,6 +16,19 @@ These APIs are available for browser ports that need whole-scene display treatme
 - `BufferedScalableGame`: renders the held game into one fixed-size framebuffer image and then presents that completed frame to the display. It defaults to nearest-neighbor presentation for existing behavior, and also supports linear presentation and pixel-perfect integer presentation through `BufferedScalingMode`. Presentation rectangles are calculated in physical backing-store pixels, snapped to physical-pixel boundaries, converted back to logical coordinates for drawing, and reused for input mapping. This avoids fractional per-sprite rasterization when a host page scales the canvas, but it is a browser-only wrapper rather than a Java Slick2D class.
 - `Graphics.setColorInverted(...)` and `Graphics.isColorInverted()`: invert subsequent renderer draw calls until the next safe renderer reset or explicit clear through `setColorInverted(false)`.
 - `Graphics.setMonochromePalette(...)`, `Graphics.clearMonochromePalette()`, and `Graphics.isMonochromePaletteEnabled()`: map rendered RGB luminance between two replacement colors while preserving the rendered alpha. Endpoint alpha values are ignored. Palette shaders are compiled lazily on first use, and callers should clear the palette with `try`/`finally` when applying it to a bounded render section.
+
+## Browser Resource Extensions
+
+These APIs make asynchronous browser loading explicit while retaining Java resource paths as logical keys:
+
+- `ResourceLoader.preloadResources(...)` and `SoundStore.preloadAudioBuffers(...)` accept an optional `AbortSignal` and progress callback.
+- Batch preload calls wait for every operation started by the batch to settle before reporting a failure. This prevents a host Retry action from accidentally overlapping the previous batch.
+- `ResourceLoadException` reports a stable failure `kind` (`resolution`, `network`, `http`, `abort`, or `decode`), loading `phase`, resource ref, resolved URL, and HTTP status when available.
+- The default retry policy retries transient network conditions, HTTP 408/425/429, and server errors. Permanent client errors such as HTTP 404 fail immediately.
+
+## Java Random State
+
+`JavaRandom` implements the Java 48-bit LCG and exposes exact internal state through `getState()`, `setState(...)`, and `fromState(...)`. These are browser-port extensions intended for persistence, deterministic replays, and parity tests. Restoring an internal state bypasses the external-seed scrambling performed by Java's `setSeed(long)`.
 
 ## Approximate / Configuration-Only Compatibility
 

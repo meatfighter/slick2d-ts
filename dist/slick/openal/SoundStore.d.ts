@@ -1,3 +1,4 @@
+import { type ResourceLoadOptions } from "../util/ResourceLoader.js";
 type AudioPosition = {
     x: number;
     y: number;
@@ -8,6 +9,9 @@ export type AudioPreloadProgress = {
     loaded: number;
     total: number;
 };
+export interface AudioPreloadOptions extends ResourceLoadOptions {
+    readonly onProgress?: (progress: AudioPreloadProgress) => void;
+}
 /**
  * Browser Web Audio playback handle.
  */
@@ -112,11 +116,15 @@ export declare class SoundStore {
     /** Browser parity helper: returns the global music gain bus. */
     getMusicBus(): GainNode | null;
     /** Browser parity helper: loads and decodes an audio buffer through Web Audio. */
-    loadAudioBuffer(ref: string): Promise<AudioBuffer>;
+    loadAudioBuffer(ref: string, options?: ResourceLoadOptions): Promise<AudioBuffer>;
     /** Browser parity helper: queues audio decode work into ResourceLoader.waitForAll(). */
-    preloadAudioBuffer(ref: string): Promise<void>;
-    /** Browser/PWA helper: queues and tracks a deduplicated batch of audio decodes. */
+    preloadAudioBuffer(ref: string, options?: ResourceLoadOptions): Promise<void>;
     preloadAudioBuffers(refs: Iterable<string>, onProgress?: (progress: AudioPreloadProgress) => void): Promise<void>;
+    preloadAudioBuffers(refs: Iterable<string>, options?: AudioPreloadOptions): Promise<void>;
+    private static waitForAudioPromise;
+    private static throwIfAborted;
+    private static abortException;
+    private static isAbortError;
     /** Browser parity helper: plays a decoded sound effect through Web Audio. */
     playSound(ref: string, pitch: number, volume: number, loop: boolean, onEnded?: () => void, position?: AudioPosition): AudioPlaybackHandle | null;
     /** Browser parity helper: tracks an externally-created Web Audio handle. */

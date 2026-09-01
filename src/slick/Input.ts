@@ -5,6 +5,11 @@ import type { MouseListener } from "./MouseListener.js";
 
 type TargetElement = HTMLElement | Window | Document;
 type GamepadSnapshot = readonly (Gamepad | null)[];
+
+export interface ControllerDirectionAxisPair {
+    readonly horizontalAxis: number;
+    readonly verticalAxis: number;
+}
 const ACTIVE_EVENT_OPTIONS: AddEventListenerOptions = { passive: false };
 
 function isAccepting(listener: { isAcceptingInput(): boolean }): boolean {
@@ -155,6 +160,8 @@ export class Input {
     private static readonly POV_HAT_RIGHT = [-5 / 7, -3 / 7, -1 / 7];
     private static readonly POV_HAT_DOWN = [-1 / 7, 1 / 7, 3 / 7];
     private static readonly POV_HAT_LEFT = [3 / 7, 5 / 7, 1];
+    private static readonly BROWSER_CONTROLLER_LIMIT = 16;
+    private static readonly BROWSER_AXIS_LIMIT = 16;
 
     private static controllersDisabled = false;
     private static gamepadCacheGeneration = 0;
@@ -191,6 +198,11 @@ export class Input {
     private cachedGamepads: GamepadSnapshot = [];
     private gamepadsCached = false;
     private gamepadCacheGeneration = -1;
+    private controllerStateSnapshotReady = false;
+    private additionalControllerDirectionAxes: number[] = [];
+    private readonly additionalControllerAxisBaselines = new Float64Array(Input.BROWSER_CONTROLLER_LIMIT * Input.BROWSER_AXIS_LIMIT);
+    private additionalControllerAxisThreshold = 0.5;
+    private additionalControllerAxisRecenterThreshold = 0.05;
 
     /**
      * Java Slick2D counterpart: Input.disableControllers().
@@ -216,7 +228,34 @@ export class Input {
      *
      * Creates an input adapter for a container of the supplied height.
      */
-    public constructor(private height: number) {}
+    public constructor(private height: number) {
+        this.additionalControllerAxisBaselines.fill(Number.NaN);
+    }
+
+    /**
+     * Browser controller helper: adds calibrated axis pairs that contribute to
+     * the four Slick directional controls during the normal input poll.
+     */
+    public setAdditionalControllerDirectionAxes(axes: readonly ControllerDirectionAxisPair[], threshold: number = 0.5, recenterThreshold: number = 0.05): void {
+        const values: number[] = [];
+        for (const pair of axes) {
+            const horizontal = Math.trunc(pair.horizontalAxis);
+            const vertical = Math.trunc(pair.verticalAxis);
+            if (horizontal < 0 || horizontal >= Input.BROWSER_AXIS_LIMIT || vertical < 0 || vertical >= Input.BROWSER_AXIS_LIMIT) {
+                throw new RangeError(`Controller direction axes must be between 0 and ${Input.BROWSER_AXIS_LIMIT - 1}.`);
+            }
+            values.push(horizontal, vertical);
+        }
+        this.additionalControllerDirectionAxes = values;
+        this.additionalControllerAxisThreshold = Math.max(0, Math.abs(threshold));
+        this.additionalControllerAxisRecenterThreshold = Math.max(0, Math.abs(recenterThreshold));
+        this.resetAdditionalControllerDirectionAxisCalibration();
+    }
+
+    /** Browser controller helper: clears learned neutral positions for configured additional axes. */
+    public resetAdditionalControllerDirectionAxisCalibration(): void {
+        this.additionalControllerAxisBaselines.fill(Number.NaN);
+    }
 
     /** Browser parity helper: attaches DOM listeners to an element/window. */
     public bindToElement(target: TargetElement): void {
@@ -519,21 +558,45 @@ export class Input {
 
     /** Java Slick2D counterpart: Input.isControllerLeft(int). */
     public isControllerLeft(controller: number): boolean {
+        if (Input.controllersDisabled) {
+            return false;
+        }
+        if (this.controllerStateSnapshotReady) {
+            return this.isControllerControlDown(0, controller);
+        }
         return this.anyController(controller, Input.isGamepadLeft);
     }
 
     /** Java Slick2D counterpart: Input.isControllerRight(int). */
     public isControllerRight(controller: number): boolean {
+        if (Input.controllersDisabled) {
+            return false;
+        }
+        if (this.controllerStateSnapshotReady) {
+            return this.isControllerControlDown(1, controller);
+        }
         return this.anyController(controller, Input.isGamepadRight);
     }
 
     /** Java Slick2D counterpart: Input.isControllerUp(int). */
     public isControllerUp(controller: number): boolean {
+        if (Input.controllersDisabled) {
+            return false;
+        }
+        if (this.controllerStateSnapshotReady) {
+            return this.isControllerControlDown(2, controller);
+        }
         return this.anyController(controller, Input.isGamepadUp);
     }
 
     /** Java Slick2D counterpart: Input.isControllerDown(int). */
     public isControllerDown(controller: number): boolean {
+        if (Input.controllersDisabled) {
+            return false;
+        }
+        if (this.controllerStateSnapshotReady) {
+            return this.isControllerControlDown(3, controller);
+        }
         return this.anyController(controller, Input.isGamepadDown);
     }
 
@@ -811,10 +874,22 @@ export class Input {
             }
             const controller = gamepad.index;
             seenControllers.add(controller);
-            this.updateControlState(controller, 0, Input.isGamepadLeft(gamepad));
-            this.updateControlState(controller, 1, Input.isGamepadRight(gamepad));
-            this.updateControlState(controller, 2, Input.isGamepadUp(gamepad));
-            this.updateControlState(controller, 3, Input.isGamepadDown(gamepad));
+            let left = Input.isGamepadLeft(gamepad);
+            let right = Input.isGamepadRight(gamepad);
+            let up = Input.isGamepadUp(gamepad);
+            let down = Input.isGamepadDown(gamepad);
+            for (let index = 0; index < this.additionalControllerDirectionAxes.length; index += 2) {
+                const horizontal = this.readCalibratedControllerAxis(gamepad, this.additionalControllerDirectionAxes[index]);
+                const vertical = this.readCalibratedControllerAxis(gamepad, this.additionalControllerDirectionAxes[index + 1]);
+                left = left || horizontal < -this.additionalControllerAxisThreshold;
+                right = right || horizontal > this.additionalControllerAxisThreshold;
+                up = up || vertical < -this.additionalControllerAxisThreshold;
+                down = down || vertical > this.additionalControllerAxisThreshold;
+            }
+            this.updateControlState(controller, 0, left);
+            this.updateControlState(controller, 1, right);
+            this.updateControlState(controller, 2, up);
+            this.updateControlState(controller, 3, down);
             for (let index = 0; index < gamepad.buttons.length; index++) {
                 const button = gamepad.buttons[index];
                 if (Input.isStandardDpadButton(index)) {
@@ -833,6 +908,37 @@ export class Input {
         for (let i = 0; i < this.staleControlKeys.length; i++) {
             this.controlDown.delete(this.staleControlKeys[i]);
         }
+        this.controllerStateSnapshotReady = true;
+    }
+
+    private readCalibratedControllerAxis(gamepad: Gamepad, axis: number): number {
+        if (gamepad.index < 0 || gamepad.index >= Input.BROWSER_CONTROLLER_LIMIT || gamepad.axes.length <= axis) {
+            return 0;
+        }
+        const value = gamepad.axes[axis] ?? 0;
+        const baselineIndex = gamepad.index * Input.BROWSER_AXIS_LIMIT + axis;
+        let baseline = this.additionalControllerAxisBaselines[baselineIndex];
+        if (Number.isNaN(baseline)) {
+            baseline = value;
+            this.additionalControllerAxisBaselines[baselineIndex] = baseline;
+        }
+        if (Math.abs(value) <= this.additionalControllerAxisRecenterThreshold) {
+            this.additionalControllerAxisBaselines[baselineIndex] = 0;
+            return 0;
+        }
+        return value - baseline;
+    }
+
+    private isControllerControlDown(control: number, controller: number): boolean {
+        if (controller === Input.ANY_CONTROLLER) {
+            for (const seenController of this.seenControllers) {
+                if (this.controlDown.has(Input.controlKey(seenController, control))) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        return this.controlDown.has(Input.controlKey(controller, control));
     }
 
     private updateControlState(controller: number, control: number, down: boolean): void {
@@ -885,6 +991,7 @@ export class Input {
         }
         this.gamepadsCached = true;
         this.gamepadCacheGeneration = Input.gamepadCacheGeneration;
+        this.controllerStateSnapshotReady = false;
         return this.cachedGamepads;
     }
 
@@ -899,6 +1006,7 @@ export class Input {
         this.cachedGamepads = [];
         this.gamepadsCached = false;
         this.gamepadCacheGeneration = Input.gamepadCacheGeneration;
+        this.controllerStateSnapshotReady = false;
     }
 
     private removeFrom<T>(array: T[], item: T): void {

@@ -730,3 +730,20 @@ test("AppGameContainer.reinit rebuilds Java container state before game init", a
         store.clear();
     }
 });
+
+for (const refreshRate of [60, 120, 144, 240]) {
+    test(`fractional ${refreshRate} Hz RAF timestamps preserve elapsed milliseconds`, () => {
+        installBrowserGlobals();
+        const { calls, container } = createContainer();
+        const frameCount = refreshRate * 10;
+
+        for (let frame = 1; frame <= frameCount; frame++) {
+            container.loopFrame((frame * 1000) / refreshRate);
+        }
+
+        assert.equal(
+            calls.deltas.reduce((sum, delta) => sum + delta, 0),
+            10000
+        );
+    });
+}

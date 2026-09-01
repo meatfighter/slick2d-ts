@@ -57,15 +57,13 @@ export class HumanInput {
             return;
         }
         const mapping = this.mapping;
-        this.snapshot = {
-            up: this.input.isKeyDown(mapping.keyUp) || (mapping.controller && this.input.isControllerUp(mapping.controllerIndex)),
-            down: this.input.isKeyDown(mapping.keyDown) || (mapping.controller && this.input.isControllerDown(mapping.controllerIndex)),
-            left: this.input.isKeyDown(mapping.keyLeft) || (mapping.controller && this.input.isControllerLeft(mapping.controllerIndex)),
-            right: this.input.isKeyDown(mapping.keyRight) || (mapping.controller && this.input.isControllerRight(mapping.controllerIndex)),
-            fire: this.input.isKeyDown(mapping.keyGrenade) ||
-                (mapping.controller && this.input.isButtonPressed(mapping.controllerGrenade, mapping.controllerIndex)),
-            shoot: this.isMappedShootPressed(mapping)
-        };
+        this.snapshot.up = this.input.isKeyDown(mapping.keyUp) || (mapping.controller && this.input.isControllerUp(mapping.controllerIndex));
+        this.snapshot.down = this.input.isKeyDown(mapping.keyDown) || (mapping.controller && this.input.isControllerDown(mapping.controllerIndex));
+        this.snapshot.left = this.input.isKeyDown(mapping.keyLeft) || (mapping.controller && this.input.isControllerLeft(mapping.controllerIndex));
+        this.snapshot.right = this.input.isKeyDown(mapping.keyRight) || (mapping.controller && this.input.isControllerRight(mapping.controllerIndex));
+        this.snapshot.fire =
+            this.input.isKeyDown(mapping.keyGrenade) || (mapping.controller && this.input.isButtonPressed(mapping.controllerGrenade, mapping.controllerIndex));
+        this.snapshot.shoot = this.isMappedShootPressed(mapping);
     }
     /** Java counterpart: HumanInput.reset(). */
     reset() { }

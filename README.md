@@ -12,12 +12,14 @@ The goal is API and behavior parity for Java game ports that already depend on S
 - Web Audio-backed `Sound`, `Music`, and `SoundStore` compatibility.
 - Keyboard, mouse, touch-style pointer, and browser Gamepad API input mapping.
 - Java parity helpers for numeric behavior, random numbers, binary reads, bitmap text, songs, and sprite drawing.
-- Browser resource preload/cache helpers that preserve Java resource reference strings.
+- Browser resource preload/cache helpers with abortable batches, structured failures, and Java resource reference strings.
+- Exact Java `Random` state capture/restoration for save states, replays, and deterministic tests.
+- Optional calibrated secondary gamepad axes that feed Slick controller-direction queries once per input poll.
 
 ## Install
 
 ```sh
-npm install git+https://github.com/meatfighter/slick2d-ts.git#semver:^1.3.0
+npm install git+https://github.com/meatfighter/slick2d-ts.git#semver:^1.4.0
 ```
 
 ## Example
@@ -56,6 +58,31 @@ const game = new BufferedScalableGame(new DemoGame(), 640, 480, {
     scalingMode: BufferedScalingMode.Integer
 });
 ```
+
+## Browser Preloading
+
+Resource and audio batches accept an optional `AbortSignal`. Batch promises settle all work started by that batch before rejecting, so a host application can present a Retry action without leaving an earlier loading attempt running underneath it.
+
+```ts
+import { ResourceLoader, SoundStore } from "slick2d-ts";
+
+const controller = new AbortController();
+await Promise.all([
+    ResourceLoader.preloadResources(imageAndDataRefs, {
+        signal: controller.signal,
+        onProgress: ({ loaded, total }) => updateProgress(loaded, total)
+    }),
+    SoundStore.get().preloadAudioBuffers(audioRefs, {
+        signal: controller.signal
+    })
+]);
+```
+
+Failures from resource fetches and browser decoding use `ResourceLoadException`, whose `kind`, `phase`, `status`, `ref`, and `url` fields let the host distinguish network, HTTP, abort, and decode failures without parsing error messages.
+
+## Deterministic Java Random State
+
+`JavaRandom.getState()`, `setState(...)`, and `JavaRandom.fromState(...)` preserve the internal 48-bit Java LCG state exactly. The state is intentionally distinct from the public Java constructor seed: restoring it does not apply Java's seed scrambling a second time.
 
 ## Browser Boundaries
 

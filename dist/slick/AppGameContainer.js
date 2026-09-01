@@ -452,7 +452,7 @@ export class AppGameContainer extends GameContainer {
             this.scheduleNextFrame();
             return;
         }
-        const rawDelta = Math.max(0, Math.trunc(time - this.lastFrameTime));
+        const rawDelta = Math.max(0, Math.trunc(time) - Math.trunc(this.lastFrameTime));
         const delta = this.smoothDeltas && this.getFPS() !== 0 ? Math.trunc(1000 / this.getFPS()) : rawDelta;
         this.lastFrameTime = time;
         this.input.poll(this.width, this.height);

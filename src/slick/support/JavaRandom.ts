@@ -7,6 +7,15 @@ const ADDEND = 0x000b;
 const LIMB = 0x10000;
 const LIMB_MASK = 0xffff;
 const FLOAT_DIVISOR = 0x1000000;
+const SEED_UNIQUIFIER_MULTIPLIER = 181783497276652981n;
+let seedUniquifier = 8682522807148012n;
+
+/** Exact internal 48-bit state of java.util.Random, stored as three unsigned 16-bit limbs. */
+export interface JavaRandomState {
+    readonly seed0: number;
+    readonly seed1: number;
+    readonly seed2: number;
+}
 
 /**
  * Java counterpart: java.util.Random subset.
@@ -31,6 +40,29 @@ export class JavaRandom {
         this.seed0 = Number(scrambled & 0xffffn);
         this.seed1 = Number((scrambled >> 16n) & 0xffffn);
         this.seed2 = Number((scrambled >> 32n) & 0xffffn);
+    }
+
+    /** Captures the internal state without applying Java's external-seed scrambling. */
+    public getState(): JavaRandomState {
+        return {
+            seed0: this.seed0,
+            seed1: this.seed1,
+            seed2: this.seed2
+        };
+    }
+
+    /** Restores the internal state without applying Java's external-seed scrambling. */
+    public setState(state: JavaRandomState): void {
+        this.seed0 = JavaRandom.validateStateLimb(state.seed0, "seed0");
+        this.seed1 = JavaRandom.validateStateLimb(state.seed1, "seed1");
+        this.seed2 = JavaRandom.validateStateLimb(state.seed2, "seed2");
+    }
+
+    /** Creates a generator at an exact previously captured internal state. */
+    public static fromState(state: JavaRandomState): JavaRandom {
+        const random = new JavaRandom(0);
+        random.setState(state);
+        return random;
     }
 
     public nextInt(): number;
@@ -94,8 +126,16 @@ export class JavaRandom {
     }
 
     private static defaultSeed(): bigint {
-        const clock = BigInt(Date.now());
-        const perf = typeof performance !== "undefined" ? BigInt(Math.floor(performance.now() * 1000)) : 0n;
-        return (clock << 16n) ^ perf;
+        seedUniquifier = BigInt.asUintN(64, seedUniquifier * SEED_UNIQUIFIER_MULTIPLIER);
+        const wallClock = BigInt(Date.now()) << 20n;
+        const monotonic = typeof performance !== "undefined" ? BigInt(Math.trunc(performance.now() * 1_000_000)) : 0n;
+        return BigInt.asIntN(64, seedUniquifier ^ wallClock ^ monotonic);
+    }
+
+    private static validateStateLimb(value: unknown, name: keyof JavaRandomState): number {
+        if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > LIMB_MASK) {
+            throw new RangeError(`Invalid JavaRandom ${name}: ${String(value)}`);
+        }
+        return value;
     }
 }

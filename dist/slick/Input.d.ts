@@ -3,6 +3,10 @@ import type { InputListener } from "./InputListener.js";
 import type { KeyListener } from "./KeyListener.js";
 import type { MouseListener } from "./MouseListener.js";
 type TargetElement = HTMLElement | Window | Document;
+export interface ControllerDirectionAxisPair {
+    readonly horizontalAxis: number;
+    readonly verticalAxis: number;
+}
 /**
  * Java Slick2D counterpart: org.newdawn.slick.Input.
  *
@@ -146,6 +150,8 @@ export declare class Input {
     private static readonly POV_HAT_RIGHT;
     private static readonly POV_HAT_DOWN;
     private static readonly POV_HAT_LEFT;
+    private static readonly BROWSER_CONTROLLER_LIMIT;
+    private static readonly BROWSER_AXIS_LIMIT;
     private static controllersDisabled;
     private static gamepadCacheGeneration;
     private readonly downKeys;
@@ -181,6 +187,11 @@ export declare class Input {
     private cachedGamepads;
     private gamepadsCached;
     private gamepadCacheGeneration;
+    private controllerStateSnapshotReady;
+    private additionalControllerDirectionAxes;
+    private readonly additionalControllerAxisBaselines;
+    private additionalControllerAxisThreshold;
+    private additionalControllerAxisRecenterThreshold;
     /**
      * Java Slick2D counterpart: Input.disableControllers().
      *
@@ -199,6 +210,13 @@ export declare class Input {
      * Creates an input adapter for a container of the supplied height.
      */
     constructor(height: number);
+    /**
+     * Browser controller helper: adds calibrated axis pairs that contribute to
+     * the four Slick directional controls during the normal input poll.
+     */
+    setAdditionalControllerDirectionAxes(axes: readonly ControllerDirectionAxisPair[], threshold?: number, recenterThreshold?: number): void;
+    /** Browser controller helper: clears learned neutral positions for configured additional axes. */
+    resetAdditionalControllerDirectionAxisCalibration(): void;
     /** Browser parity helper: attaches DOM listeners to an element/window. */
     bindToElement(target: TargetElement): void;
     /** Browser parity helper: element whose focused game keys should suppress browser defaults. */
@@ -339,6 +357,8 @@ export declare class Input {
     private clearAllInputState;
     private updateMouse;
     private pollControllers;
+    private readCalibratedControllerAxis;
+    private isControllerControlDown;
     private updateControlState;
     private anyController;
     private refreshGamepads;

@@ -1,13 +1,39 @@
+import { SlickException } from "../SlickException.js";
 export type TrackedResourceError = {
     label: string;
     error: unknown;
 };
+export type ResourceLoadFailureKind = "resolution" | "network" | "http" | "abort" | "decode";
+export type ResourceLoadPhase = "resolve" | "fetch" | "read" | "decode";
+export interface ResourceLoadFailureDetails {
+    readonly ref: string;
+    readonly url?: string | null;
+    readonly status?: number | null;
+    readonly kind: ResourceLoadFailureKind;
+    readonly phase: ResourceLoadPhase;
+    readonly cause?: unknown;
+}
+/** Browser resource failure with stable, application-readable semantics. */
+export declare class ResourceLoadException extends SlickException {
+    readonly ref: string;
+    readonly url: string | null;
+    readonly status: number | null;
+    readonly kind: ResourceLoadFailureKind;
+    readonly phase: ResourceLoadPhase;
+    constructor(message: string, details: ResourceLoadFailureDetails);
+}
+export interface ResourceLoadOptions {
+    readonly signal?: AbortSignal;
+}
 export type ResourcePreloadProgress = {
     ref: string;
     loaded: number;
     total: number;
     bytesLoaded: number;
 };
+export interface ResourcePreloadOptions extends ResourceLoadOptions {
+    readonly onProgress?: (progress: ResourcePreloadProgress) => void;
+}
 /**
  * Java Slick2D counterpart: org.newdawn.slick.util.ResourceLoader.
  *
@@ -23,143 +49,58 @@ export declare class ResourceLoader {
     private static cacheBustValue;
     private static retryCount;
     private static retryDelay;
-    /**
-     * Java Slick2D counterpart: ResourceLoader.addResourceLocation(ResourceLocation).
-     *
-     * Adds a base URL/path string used to resolve future resource requests.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.addResourceLocation(ResourceLocation). */
     static addResourceLocation(location: unknown): void;
-    /**
-     * Java Slick2D counterpart: ResourceLoader.removeResourceLocation(ResourceLocation).
-     *
-     * Removes a previously registered base URL/path string.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.removeResourceLocation(ResourceLocation). */
     static removeResourceLocation(location: unknown): void;
-    /**
-     * Java Slick2D counterpart: ResourceLoader.removeAllResourceLocations().
-     *
-     * Clears base URL/path strings. No network resources resolve until a
-     * location is added or bytes are registered directly.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.removeAllResourceLocations(). */
     static removeAllResourceLocations(): void;
-    /**
-     * Browser parity helper.
-     *
-     * Adds or clears a cache-version query parameter on network fetch URLs
-     * while preserving the original Java ref string as the cache key.
-     */
+    /** Adds or clears a cache-version query parameter while retaining Java refs as cache keys. */
     static setCacheBust(value: string | number | null): void;
-    /**
-     * Browser parity helper.
-     *
-     * Configures retry attempts for browser resource fetches.
-     */
+    /** Configures transient browser fetch retries. Permanent HTTP failures are not retried. */
     static setRetryOptions(retries: number, delayMs?: number): void;
-    /**
-     * Java Slick2D counterpart: ResourceLoader.getResource(String).
-     *
-     * Returns a URL for a resource path if it can be resolved syntactically.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.getResource(String). */
     static getResource(ref: string): URL | null;
-    /**
-     * Java Slick2D counterpart: ResourceLoader.getResourceAsStream(String).
-     *
-     * Returns already-loaded bytes or null; it never performs a synchronous fetch.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.getResourceAsStream(String). */
     static getResourceAsStream(ref: string): ArrayBuffer | null;
-    /**
-     * Java Slick2D counterpart: ResourceLoader.resourceExists(String).
-     *
-     * Returns true when bytes are already loaded for the resource.
-     */
+    /** Java Slick2D counterpart: ResourceLoader.resourceExists(String). */
     static resourceExists(ref: string): boolean;
-    /**
-     * Browser parity helper.
-     *
-     * Registers already-available bytes under the original Java path string.
-     */
+    /** Registers already-available bytes under the original Java path string. */
     static registerResource(ref: string, data: ArrayBuffer | Uint8Array): void;
-    /**
-     * Browser parity helper.
-     *
-     * Queues an async fetch for a resource and caches in-flight requests.
-     */
-    static loadResource(ref: string): Promise<ArrayBuffer>;
-    /**
-     * Browser parity helper.
-     *
-     * Fetches a manifest of original Java resource paths before game init so
-     * later Java-style constructors can read synchronously through
-     * getResourceAsStream(ref).
-     */
+    /** Queues an async fetch for a resource and caches in-flight requests. */
+    static loadResource(ref: string, options?: ResourceLoadOptions): Promise<ArrayBuffer>;
     static preloadResources(refs: Iterable<string>, onProgress?: (progress: ResourcePreloadProgress) => void): Promise<Map<string, ArrayBuffer>>;
-    /**
-     * Browser parity helper.
-     *
-     * Adds a non-Java decode/prepare promise to the same preload barrier used
-     * by Java-style synchronous resource consumers.
-     */
+    static preloadResources(refs: Iterable<string>, options?: ResourcePreloadOptions): Promise<Map<string, ArrayBuffer>>;
+    /** Adds a decode/prepare promise to the shared preload barrier. */
     static track<T>(promise: Promise<T>, refOrLabel?: string): Promise<T>;
-    /**
-     * Browser parity helper.
-     *
-     * Returns the number of browser resource or decode operations still queued.
-     */
+    /** Returns the number of browser resource or decode operations still queued. */
     static getPendingCount(): number;
-    /**
-     * Browser parity helper.
-     *
-     * Returns true while any tracked browser resource work is still pending.
-     */
     static hasPending(): boolean;
-    /**
-     * Browser parity helper.
-     *
-     * Returns true when a queued resource failed.
-     */
     static resourceFailed(ref: string): boolean;
-    /**
-     * Browser parity helper.
-     *
-     * Returns the original error for a failed resource.
-     */
     static getResourceError(ref: string): unknown;
-    /**
-     * Browser parity helper.
-     *
-     * Returns retained failures from tracked decode/preparation tasks.
-     */
     static getTrackedErrors(): TrackedResourceError[];
-    /**
-     * Browser parity helper.
-     *
-     * Returns true when any fetch or tracked preparation task has failed.
-     */
     static hasFailed(): boolean;
     /**
-     * Browser parity helper.
-     *
-     * Waits for all currently queued resource requests.
+     * Waits until all work belonging to the current barrier has settled. Work
+     * queued by another tracked operation is included before the method returns.
      */
     static waitForAll(): Promise<void>;
-    /**
-     * Browser parity helper.
-     *
-     * Clears all cached resource bytes and in-flight handles.
-     */
+    /** Clears all cached resource bytes and in-flight handles. */
     static clearCache(): void;
-    /**
-     * Browser parity helper.
-     *
-     * Clears retained failed resource/decode state without removing successful
-     * preloaded resource bytes.
-     */
+    /** Clears retained failures without removing successfully preloaded bytes. */
     static clearFailures(): void;
+    private static normalizePreloadOptions;
     private static toTrackedFailureException;
     private static withCacheBust;
     private static getResourceCandidates;
     private static resolveLocation;
     private static fetchFromCandidates;
     private static fetchWithRetry;
+    private static isRetryable;
+    private static waitBeforeRetry;
+    private static waitForPromise;
+    private static throwIfAborted;
+    private static abortException;
+    private static isAbortError;
 }
 //# sourceMappingURL=ResourceLoader.d.ts.map

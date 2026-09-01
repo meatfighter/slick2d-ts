@@ -277,3 +277,50 @@ test("controller disconnect clears stale down state before reconnect", () => {
     ]);
     assert.equal(input.isControlPressed(4, 0), true);
 });
+
+test("additional calibrated controller axes feed the normal directional state once per poll", () => {
+    const pad = gamepad({ axes: [0, 0, 0.75, -0.4] });
+    installGamepads([pad]);
+    const input = new Input(600);
+    input.setAdditionalControllerDirectionAxes([{ horizontalAxis: 2, verticalAxis: 3 }]);
+
+    input.poll(800, 600); // learns the unusual neutral position
+    assert.equal(input.isControllerLeft(0), false);
+    assert.equal(input.isControllerUp(0), false);
+
+    pad.axes[2] = -0.1;
+    pad.axes[3] = -1;
+    input.poll(800, 600);
+
+    assert.equal(input.isControllerLeft(0), true);
+    assert.equal(input.isControllerUp(0), true);
+});
+
+test("additional-axis recalibration can be reset explicitly", () => {
+    const pad = gamepad({ axes: [0, 0, 0.8, 0] });
+    installGamepads([pad]);
+    const input = new Input(600);
+    input.setAdditionalControllerDirectionAxes([{ horizontalAxis: 2, verticalAxis: 3 }]);
+    input.poll(800, 600);
+
+    pad.axes[2] = 0;
+    input.resetAdditionalControllerDirectionAxisCalibration();
+    input.poll(800, 600);
+
+    assert.equal(input.isControllerLeft(0), false);
+    assert.equal(input.isControllerRight(0), false);
+});
+
+test("disabled controllers do not report stale cached directions", () => {
+    const pad = gamepad({ axes: [-1, 0] });
+    installGamepads([pad]);
+    const input = new Input(600);
+
+    input.poll(800, 600);
+    assert.equal(input.isControllerLeft(0), true);
+
+    Input.disableControllers();
+
+    assert.equal(input.isControllerLeft(0), false);
+    assert.equal(input.isControllerLeft(Input.ANY_CONTROLLER), false);
+});

@@ -1,3 +1,9 @@
+/** Exact internal 48-bit state of java.util.Random, stored as three unsigned 16-bit limbs. */
+export interface JavaRandomState {
+    readonly seed0: number;
+    readonly seed1: number;
+    readonly seed2: number;
+}
 /**
  * Java counterpart: java.util.Random subset.
  *
@@ -11,6 +17,12 @@ export declare class JavaRandom {
     constructor(seed: number | bigint);
     /** Java counterpart: Random.setSeed(long). */
     setSeed(seed: number | bigint): void;
+    /** Captures the internal state without applying Java's external-seed scrambling. */
+    getState(): JavaRandomState;
+    /** Restores the internal state without applying Java's external-seed scrambling. */
+    setState(state: JavaRandomState): void;
+    /** Creates a generator at an exact previously captured internal state. */
+    static fromState(state: JavaRandomState): JavaRandom;
     nextInt(): number;
     nextInt(bound: number): number;
     /** Java counterpart: Random.nextFloat(). */
@@ -19,5 +31,6 @@ export declare class JavaRandom {
     nextBoolean(): boolean;
     private next;
     private static defaultSeed;
+    private static validateStateLimb;
 }
 //# sourceMappingURL=JavaRandom.d.ts.map

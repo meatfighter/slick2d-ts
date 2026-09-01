@@ -101,3 +101,27 @@ test("JavaRandom.nextInt(bound) rejects nonpositive bounds", () => {
     assert.throws(() => random.nextInt(0), /bound must be positive/);
     assert.throws(() => random.nextInt(-1), /bound must be positive/);
 });
+
+test("JavaRandom state capture and restore resumes the exact Java sequence", () => {
+    const source = new JavaRandom(123456789);
+    source.nextInt();
+    source.nextFloat();
+    const state = source.getState();
+    const restored = JavaRandom.fromState(state);
+
+    assert.deepEqual(
+        Array.from({ length: 12 }, () => restored.nextInt()),
+        Array.from({ length: 12 }, () => source.nextInt())
+    );
+});
+
+test("JavaRandom state validation rejects invalid limbs", () => {
+    const random = new JavaRandom(0);
+    assert.throws(() => random.setState({ seed0: -1, seed1: 0, seed2: 0 }), /seed0/);
+    assert.throws(() => random.setState({ seed0: 0, seed1: 65536, seed2: 0 }), /seed1/);
+    assert.throws(() => random.setState({ seed0: 0, seed1: 0, seed2: 1.5 }), /seed2/);
+});
+
+test("default JavaRandom construction uses a changing Java-style seed uniquifier", () => {
+    assert.notDeepEqual(new JavaRandom().getState(), new JavaRandom().getState());
+});

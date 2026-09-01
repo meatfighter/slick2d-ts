@@ -723,3 +723,16 @@ test("AL.destroyPreservingAudioCache resets playback but preserves decoded buffe
 
     assert.equal(FakeAudioContext.decodeCalls, 1);
 });
+
+test("audio preload batches honor an already-aborted signal with structured failure", async () => {
+    installAudioGlobals();
+    registerTone();
+    AL.create();
+    const controller = new AbortController();
+    controller.abort();
+
+    await assert.rejects(
+        SoundStore.get().preloadAudioBuffers(["tone.ogg"], { signal: controller.signal }),
+        (error) => error.kind === "abort" && error.phase === "decode" && error.ref === "audio manifest"
+    );
+});

@@ -1,4 +1,4 @@
-import { ResourceLoader } from "../util/ResourceLoader.js";
+import { ResourceLoadException, ResourceLoader } from "../util/ResourceLoader.js";
 import { SlickException } from "../SlickException.js";
 import { InternalTextureLoader } from "../opengl/InternalTextureLoader.js";
 function createCanvasSource(width, height) {
@@ -166,36 +166,50 @@ export class WebGLTextureResource {
         await this.loadBytes(bytes, ref, options);
     }
     async loadBytes(input, ref, options) {
-        let blob;
-        if (input instanceof ArrayBuffer) {
-            ResourceLoader.registerResource(ref, input);
-            blob = new Blob([input]);
-        }
-        else {
-            const bytes = await input.arrayBuffer();
-            ResourceLoader.registerResource(ref, bytes);
-            blob = new Blob([bytes], { type: input.type });
-        }
-        if (typeof createImageBitmap !== "undefined") {
-            const bitmap = await createImageBitmap(blob);
-            this.prepareLoadedSource(bitmap, options);
-            return;
-        }
-        if (typeof globalThis.Image === "undefined") {
-            throw new SlickException(`Unable to decode image without ImageBitmap or HTMLImageElement: ${ref}`);
-        }
-        const element = new globalThis.Image();
-        const url = URL.createObjectURL(blob);
         try {
-            await new Promise((resolve, reject) => {
-                element.onload = () => resolve();
-                element.onerror = () => reject(new Error(`Unable to decode image: ${ref}`));
-                element.src = url;
-            });
-            this.prepareLoadedSource(element, options);
+            let blob;
+            if (input instanceof ArrayBuffer) {
+                ResourceLoader.registerResource(ref, input);
+                blob = new Blob([input]);
+            }
+            else {
+                const bytes = await input.arrayBuffer();
+                ResourceLoader.registerResource(ref, bytes);
+                blob = new Blob([bytes], { type: input.type });
+            }
+            if (typeof createImageBitmap !== "undefined") {
+                const bitmap = await createImageBitmap(blob);
+                this.prepareLoadedSource(bitmap, options);
+                return;
+            }
+            if (typeof globalThis.Image === "undefined") {
+                throw new Error("ImageBitmap and HTMLImageElement are unavailable.");
+            }
+            const element = new globalThis.Image();
+            const url = URL.createObjectURL(blob);
+            try {
+                await new Promise((resolve, reject) => {
+                    element.onload = () => resolve();
+                    element.onerror = () => reject(new Error(`Unable to decode image: ${ref}`));
+                    element.src = url;
+                });
+                this.prepareLoadedSource(element, options);
+            }
+            finally {
+                URL.revokeObjectURL(url);
+            }
         }
-        finally {
-            URL.revokeObjectURL(url);
+        catch (cause) {
+            if (cause instanceof ResourceLoadException) {
+                throw cause;
+            }
+            throw new ResourceLoadException(`Failed to decode image: ${ref}`, {
+                ref,
+                url: ResourceLoader.getResource(ref)?.href ?? null,
+                kind: "decode",
+                phase: "decode",
+                cause
+            });
         }
     }
     prepareLoadedSource(source, options) {

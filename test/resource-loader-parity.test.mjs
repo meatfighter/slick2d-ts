@@ -115,3 +115,65 @@ test("image decode failures remain visible to the shared loading barrier", async
     assert.equal(ResourceLoader.getTrackedErrors()[0].label, "images/bad.png");
     await assert.rejects(ResourceLoader.waitForAll(), /images\/bad\.png/);
 });
+
+test("permanent HTTP failures are not retried while transient server failures are", async () => {
+    installLocation();
+    ResourceLoader.setRetryOptions(3, 0);
+    let missingAttempts = 0;
+    globalThis.fetch = async () => {
+        missingAttempts++;
+        return response([], 404);
+    };
+    await assert.rejects(ResourceLoader.loadResource("missing.dat"), (error) => error.kind === "http" && error.status === 404);
+    assert.equal(missingAttempts, 1);
+
+    ResourceLoader.clearFailures();
+    let transientAttempts = 0;
+    globalThis.fetch = async () => {
+        transientAttempts++;
+        return response([1], transientAttempts < 3 ? 503 : 200);
+    };
+    assert.equal((await ResourceLoader.loadResource("eventual.dat")).byteLength, 1);
+    assert.equal(transientAttempts, 3);
+});
+
+test("preload aborts with a structured abort failure", async () => {
+    installLocation();
+    const controller = new AbortController();
+    globalThis.fetch = async (_url, options) =>
+        new Promise((_resolve, reject) => {
+            options.signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+        });
+
+    const pending = ResourceLoader.preloadResources(["slow.dat"], { signal: controller.signal });
+    controller.abort();
+    await assert.rejects(pending, (error) => error.kind === "abort" && error.ref === "slow.dat");
+});
+
+test("waitForAll does not reject until every tracked operation has settled", async () => {
+    let secondSettled = false;
+    ResourceLoader.track(Promise.reject(new Error("first failed")), "first");
+    ResourceLoader.track(
+        new Promise((resolve) => {
+            setTimeout(() => {
+                secondSettled = true;
+                resolve();
+            }, 10);
+        }),
+        "second"
+    );
+
+    await assert.rejects(ResourceLoader.waitForAll(), /first/);
+    assert.equal(secondSettled, true);
+});
+
+test("image decode failures surface as structured resource failures", async () => {
+    installLocation();
+    ResourceLoader.registerResource("bad.png", new Uint8Array([1, 2, 3]));
+    globalThis.createImageBitmap = async () => {
+        throw new Error("decode failed");
+    };
+
+    new SlickImage("bad.png");
+    await assert.rejects(ResourceLoader.waitForAll(), (error) => error.kind === "decode" && error.phase === "decode" && error.ref === "bad.png");
+});

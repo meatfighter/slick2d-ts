@@ -1,5 +1,4 @@
-import { ResourceLoader } from "../util/ResourceLoader.js";
-import { SlickException } from "../SlickException.js";
+import { ResourceLoadException, ResourceLoader } from "../util/ResourceLoader.js";
 import { Log } from "../util/Log.js";
 /**
  * Java Slick2D counterpart: org.newdawn.slick.openal.SoundStore.
@@ -282,49 +281,114 @@ export class SoundStore {
         return this.musicBus;
     }
     /** Browser parity helper: loads and decodes an audio buffer through Web Audio. */
-    loadAudioBuffer(ref) {
+    loadAudioBuffer(ref, options = {}) {
         const existing = this.buffers.get(ref);
         if (existing) {
-            return existing;
+            return SoundStore.waitForAudioPromise(existing, options.signal, ref);
         }
         this.init();
         const context = this.getAudioContext();
         if (!context || !this.soundWorksFlag) {
-            return Promise.reject(new Error("Web Audio API is not available"));
+            return Promise.reject(new ResourceLoadException(`Failed to decode audio ${ref}: Web Audio API is not available`, {
+                ref,
+                url: ResourceLoader.getResource(ref)?.href ?? null,
+                kind: "decode",
+                phase: "decode"
+            }));
         }
-        const promise = ResourceLoader.loadResource(ref)
-            .then((bytes) => context.decodeAudioData(bytes.slice(0)))
-            .catch((error) => {
+        const promise = (async () => {
+            const bytes = await ResourceLoader.loadResource(ref, options);
+            SoundStore.throwIfAborted(options.signal, ref);
+            try {
+                const buffer = await context.decodeAudioData(bytes);
+                SoundStore.throwIfAborted(options.signal, ref);
+                return buffer;
+            }
+            catch (error) {
+                if (error instanceof ResourceLoadException) {
+                    throw error;
+                }
+                if (SoundStore.isAbortError(error) || options.signal?.aborted) {
+                    throw SoundStore.abortException(ref, options.signal?.reason ?? error);
+                }
+                throw new ResourceLoadException(`Failed to load audio: ${ref}`, {
+                    ref,
+                    url: ResourceLoader.getResource(ref)?.href ?? null,
+                    kind: "decode",
+                    phase: "decode",
+                    cause: error
+                });
+            }
+        })().catch((error) => {
             this.buffers.delete(ref);
-            throw new SlickException(`Failed to load audio: ${ref}`, error);
+            throw error;
         });
         this.buffers.set(ref, promise);
         return promise;
     }
     /** Browser parity helper: queues audio decode work into ResourceLoader.waitForAll(). */
-    preloadAudioBuffer(ref) {
-        const tracked = ResourceLoader.track(this.loadAudioBuffer(ref).then(() => undefined), ref);
+    preloadAudioBuffer(ref, options = {}) {
+        const tracked = ResourceLoader.track(this.loadAudioBuffer(ref, options).then(() => undefined), ref);
         void tracked.catch(() => undefined);
         return tracked;
     }
     /** Browser/PWA helper: queues and tracks a deduplicated batch of audio decodes. */
-    async preloadAudioBuffers(refs, onProgress) {
+    async preloadAudioBuffers(refs, onProgressOrOptions) {
+        const options = typeof onProgressOrOptions === "function" ? { onProgress: onProgressOrOptions } : (onProgressOrOptions ?? {});
+        SoundStore.throwIfAborted(options.signal, "audio manifest");
         const uniqueRefs = Array.from(new Set(refs));
         const total = uniqueRefs.length;
         let loaded = 0;
         if (total === 0) {
             return;
         }
-        await Promise.all(uniqueRefs.map(async (ref) => {
-            try {
-                await this.preloadAudioBuffer(ref);
-                loaded++;
-                onProgress?.({ ref, loaded, total });
-            }
-            catch (error) {
-                throw error instanceof SlickException ? error : new SlickException(`Failed to preload audio: ${ref}`, error);
-            }
+        const settled = await Promise.allSettled(uniqueRefs.map(async (ref) => {
+            await this.preloadAudioBuffer(ref, options);
+            loaded++;
+            options.onProgress?.({ ref, loaded, total });
         }));
+        const failure = settled.find((entry) => entry.status === "rejected");
+        if (failure) {
+            throw failure.reason;
+        }
+    }
+    static async waitForAudioPromise(promise, signal, ref) {
+        if (!signal) {
+            return promise;
+        }
+        SoundStore.throwIfAborted(signal, ref);
+        return new Promise((resolve, reject) => {
+            const abort = () => {
+                signal.removeEventListener("abort", abort);
+                reject(SoundStore.abortException(ref, signal.reason));
+            };
+            signal.addEventListener("abort", abort, { once: true });
+            void promise.then((value) => {
+                signal.removeEventListener("abort", abort);
+                resolve(value);
+            }, (error) => {
+                signal.removeEventListener("abort", abort);
+                reject(error);
+            });
+        });
+    }
+    static throwIfAborted(signal, ref) {
+        if (signal?.aborted) {
+            throw SoundStore.abortException(ref, signal.reason);
+        }
+    }
+    static abortException(ref, cause) {
+        return new ResourceLoadException(`Resource load aborted: ${ref}`, {
+            ref,
+            url: ResourceLoader.getResource(ref)?.href ?? null,
+            kind: "abort",
+            phase: "decode",
+            cause
+        });
+    }
+    static isAbortError(error) {
+        return ((typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError") ||
+            (typeof error === "object" && error !== null && "name" in error && error.name === "AbortError"));
     }
     /** Browser parity helper: plays a decoded sound effect through Web Audio. */
     playSound(ref, pitch, volume, loop, onEnded, position) {

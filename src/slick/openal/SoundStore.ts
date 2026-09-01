@@ -1,5 +1,4 @@
-import { ResourceLoader } from "../util/ResourceLoader.js";
-import { SlickException } from "../SlickException.js";
+import { ResourceLoadException, ResourceLoader, type ResourceLoadOptions } from "../util/ResourceLoader.js";
 import { Log } from "../util/Log.js";
 
 type WebAudioGlobal = typeof globalThis & {
@@ -17,6 +16,10 @@ export type AudioPreloadProgress = {
     loaded: number;
     total: number;
 };
+
+export interface AudioPreloadOptions extends ResourceLoadOptions {
+    readonly onProgress?: (progress: AudioPreloadProgress) => void;
+}
 
 /**
  * Browser Web Audio playback handle.
@@ -346,54 +349,135 @@ export class SoundStore {
     }
 
     /** Browser parity helper: loads and decodes an audio buffer through Web Audio. */
-    public loadAudioBuffer(ref: string): Promise<AudioBuffer> {
+    public loadAudioBuffer(ref: string, options: ResourceLoadOptions = {}): Promise<AudioBuffer> {
         const existing = this.buffers.get(ref);
         if (existing) {
-            return existing;
+            return SoundStore.waitForAudioPromise(existing, options.signal, ref);
         }
         this.init();
         const context = this.getAudioContext();
         if (!context || !this.soundWorksFlag) {
-            return Promise.reject(new Error("Web Audio API is not available"));
+            return Promise.reject(
+                new ResourceLoadException(`Failed to decode audio ${ref}: Web Audio API is not available`, {
+                    ref,
+                    url: ResourceLoader.getResource(ref)?.href ?? null,
+                    kind: "decode",
+                    phase: "decode"
+                })
+            );
         }
-        const promise = ResourceLoader.loadResource(ref)
-            .then((bytes) => context.decodeAudioData(bytes.slice(0)))
-            .catch((error) => {
-                this.buffers.delete(ref);
-                throw new SlickException(`Failed to load audio: ${ref}`, error);
-            });
+        const promise = (async (): Promise<AudioBuffer> => {
+            const bytes = await ResourceLoader.loadResource(ref, options);
+            SoundStore.throwIfAborted(options.signal, ref);
+            try {
+                const buffer = await context.decodeAudioData(bytes);
+                SoundStore.throwIfAborted(options.signal, ref);
+                return buffer;
+            } catch (error) {
+                if (error instanceof ResourceLoadException) {
+                    throw error;
+                }
+                if (SoundStore.isAbortError(error) || options.signal?.aborted) {
+                    throw SoundStore.abortException(ref, options.signal?.reason ?? error);
+                }
+                throw new ResourceLoadException(`Failed to load audio: ${ref}`, {
+                    ref,
+                    url: ResourceLoader.getResource(ref)?.href ?? null,
+                    kind: "decode",
+                    phase: "decode",
+                    cause: error
+                });
+            }
+        })().catch((error) => {
+            this.buffers.delete(ref);
+            throw error;
+        });
         this.buffers.set(ref, promise);
         return promise;
     }
 
     /** Browser parity helper: queues audio decode work into ResourceLoader.waitForAll(). */
-    public preloadAudioBuffer(ref: string): Promise<void> {
+    public preloadAudioBuffer(ref: string, options: ResourceLoadOptions = {}): Promise<void> {
         const tracked = ResourceLoader.track(
-            this.loadAudioBuffer(ref).then(() => undefined),
+            this.loadAudioBuffer(ref, options).then(() => undefined),
             ref
         );
         void tracked.catch(() => undefined);
         return tracked;
     }
 
+    public preloadAudioBuffers(refs: Iterable<string>, onProgress?: (progress: AudioPreloadProgress) => void): Promise<void>;
+    public preloadAudioBuffers(refs: Iterable<string>, options?: AudioPreloadOptions): Promise<void>;
     /** Browser/PWA helper: queues and tracks a deduplicated batch of audio decodes. */
-    public async preloadAudioBuffers(refs: Iterable<string>, onProgress?: (progress: AudioPreloadProgress) => void): Promise<void> {
+    public async preloadAudioBuffers(
+        refs: Iterable<string>,
+        onProgressOrOptions?: ((progress: AudioPreloadProgress) => void) | AudioPreloadOptions
+    ): Promise<void> {
+        const options = typeof onProgressOrOptions === "function" ? { onProgress: onProgressOrOptions } : (onProgressOrOptions ?? {});
+        SoundStore.throwIfAborted(options.signal, "audio manifest");
         const uniqueRefs = Array.from(new Set(refs));
         const total = uniqueRefs.length;
         let loaded = 0;
         if (total === 0) {
             return;
         }
-        await Promise.all(
+        const settled = await Promise.allSettled(
             uniqueRefs.map(async (ref) => {
-                try {
-                    await this.preloadAudioBuffer(ref);
-                    loaded++;
-                    onProgress?.({ ref, loaded, total });
-                } catch (error) {
-                    throw error instanceof SlickException ? error : new SlickException(`Failed to preload audio: ${ref}`, error);
-                }
+                await this.preloadAudioBuffer(ref, options);
+                loaded++;
+                options.onProgress?.({ ref, loaded, total });
             })
+        );
+        const failure = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected");
+        if (failure) {
+            throw failure.reason;
+        }
+    }
+
+    private static async waitForAudioPromise(promise: Promise<AudioBuffer>, signal: AbortSignal | undefined, ref: string): Promise<AudioBuffer> {
+        if (!signal) {
+            return promise;
+        }
+        SoundStore.throwIfAborted(signal, ref);
+        return new Promise<AudioBuffer>((resolve, reject) => {
+            const abort = (): void => {
+                signal.removeEventListener("abort", abort);
+                reject(SoundStore.abortException(ref, signal.reason));
+            };
+            signal.addEventListener("abort", abort, { once: true });
+            void promise.then(
+                (value) => {
+                    signal.removeEventListener("abort", abort);
+                    resolve(value);
+                },
+                (error) => {
+                    signal.removeEventListener("abort", abort);
+                    reject(error);
+                }
+            );
+        });
+    }
+
+    private static throwIfAborted(signal: AbortSignal | undefined, ref: string): void {
+        if (signal?.aborted) {
+            throw SoundStore.abortException(ref, signal.reason);
+        }
+    }
+
+    private static abortException(ref: string, cause?: unknown): ResourceLoadException {
+        return new ResourceLoadException(`Resource load aborted: ${ref}`, {
+            ref,
+            url: ResourceLoader.getResource(ref)?.href ?? null,
+            kind: "abort",
+            phase: "decode",
+            cause
+        });
+    }
+
+    private static isAbortError(error: unknown): boolean {
+        return (
+            (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError") ||
+            (typeof error === "object" && error !== null && "name" in error && (error as { name?: unknown }).name === "AbortError")
         );
     }
 
