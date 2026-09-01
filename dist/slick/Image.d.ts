@@ -36,7 +36,9 @@ export declare class Image implements Renderable {
     private imageName;
     private destroyed;
     private cornerColors;
-    private cornerColorScratch;
+    private pixelScratch;
+    private sourceRectScratch;
+    private textureGeneration;
     constructor(ref: string);
     constructor(ref: string, trans: Color);
     constructor(ref: string, flipped: boolean);
@@ -175,12 +177,19 @@ export declare class Image implements Renderable {
     __getTextureResource(): WebGLTextureResource | null;
     /** Internal renderer hook returning the render target if this image is writable. */
     __getRenderTarget(): WebGLRenderTarget | null;
+    /** @internal Returns only the target originally owned by this Image instance. */
+    __getOwnedRenderTarget(): WebGLRenderTarget | null;
     /** Internal renderer hook returning Slick per-corner tint colors. */
     __getCornerColors(): [Color, Color, Color, Color] | null;
     private drawInternal;
     private drawEmbeddedInternal;
     private drawWarpedInternal;
     private drawFlashInternal;
+    private ensureCornerColors;
+    private static setColorChannels;
+    private mapLogicalSourceRect;
+    private reinit;
+    private watchTextureReady;
     private throwIfDestroyed;
     private getSourceWidth;
     private getSourceHeight;

@@ -591,17 +591,24 @@ export class AppGameContainer extends GameContainer {
     }
     handleWindowResize = () => {
         try {
-            if (this.isFullscreen()) {
-                this.applyBrowserDisplaySize();
-            }
-            else {
-                this.refreshCurrentCanvasBacking();
-            }
+            this.handleBrowserResize();
         }
         catch (error) {
             this.reportError(error);
         }
     };
+    /**
+     * Browser resize policy hook shared by window and VisualViewport events.
+     * ApplicationGameContainer overrides this for resizable-window semantics.
+     */
+    handleBrowserResize() {
+        if (this.isFullscreen()) {
+            this.applyBrowserDisplaySize();
+        }
+        else {
+            this.refreshCurrentCanvasBacking();
+        }
+    }
     handleFullscreenChange = () => {
         try {
             if (!this.canvas || typeof document === "undefined") {

@@ -274,6 +274,9 @@ export class ResourceLoader {
     }
     static toTrackedFailureException() {
         const first = ResourceLoader.trackedErrors[0];
+        if (!first) {
+            return new SlickException("A tracked resource failed without a retained error");
+        }
         return first.error instanceof SlickException ? first.error : new SlickException(`Failed tracked resource: ${first.label}`, first.error);
     }
     static withCacheBust(url) {
@@ -331,7 +334,7 @@ export class ResourceLoader {
         for (let attempt = 0; attempt <= ResourceLoader.retryCount; attempt++) {
             ResourceLoader.throwIfAborted(signal, ref, url.href, "fetch");
             try {
-                const response = await fetch(url, { signal });
+                const response = await fetch(url, signal ? { signal } : {});
                 if (response.ok) {
                     return response;
                 }

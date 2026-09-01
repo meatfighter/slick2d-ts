@@ -154,6 +154,14 @@ export declare class Input {
     private static readonly BROWSER_AXIS_LIMIT;
     private static controllersDisabled;
     private static gamepadCacheGeneration;
+    private static readonly INITIAL_EVENT_CAPACITY;
+    private static readonly EVENT_KEY_PRESSED;
+    private static readonly EVENT_KEY_RELEASED;
+    private static readonly EVENT_MOUSE_PRESSED;
+    private static readonly EVENT_MOUSE_RELEASED;
+    private static readonly EVENT_MOUSE_MOVED;
+    private static readonly EVENT_MOUSE_DRAGGED;
+    private static readonly EVENT_MOUSE_WHEEL;
     private readonly downKeys;
     private readonly pressedKeys;
     private readonly downMouse;
@@ -165,6 +173,11 @@ export declare class Input {
     private readonly keyListeners;
     private readonly mouseListeners;
     private readonly controllerListeners;
+    private readonly dispatchKeyListeners;
+    private readonly dispatchMouseListeners;
+    private readonly dispatchControllerListeners;
+    private readonly lifecycleListeners;
+    private readonly startedListeners;
     private target;
     private paused;
     private scaleX;
@@ -176,40 +189,50 @@ export declare class Input {
     private absoluteMouseX;
     private absoluteMouseY;
     private keyRepeat;
-    private keyRepeatInitial;
-    private keyRepeatInterval;
     private doubleClickDelay;
     private mouseClickTolerance;
+    private lastClickButton;
+    private lastClickX;
+    private lastClickY;
+    private lastClickTime;
+    private readonly mousePressX;
+    private readonly mousePressY;
     private preventDefaultElement;
     private preventDefaultTouchAction;
     private browserInputCapture;
     private browserInputCaptureConfigured;
-    private cachedGamepads;
+    private readonly cachedGamepads;
     private gamepadsCached;
     private gamepadCacheGeneration;
     private controllerStateSnapshotReady;
+    private readonly controllerPhysicalIndices;
+    private readonly controllerPhysicalIds;
     private additionalControllerDirectionAxes;
     private readonly additionalControllerAxisBaselines;
     private readonly additionalControllerAxisOwners;
     private additionalControllerAxisThreshold;
     private additionalControllerAxisRecenterThreshold;
+    private eventTypes;
+    private eventA;
+    private eventB;
+    private eventC;
+    private eventD;
+    private eventCharacters;
+    private eventTimes;
+    private eventHead;
+    private eventCount;
+    private dispatchingEvent;
+    private eventConsumed;
+    private dispatchedEventTime;
     /**
      * Java Slick2D counterpart: Input.disableControllers().
      *
      * Disables controller polling for this page session.
      */
     static disableControllers(): void;
-    /**
-     * Java Slick2D counterpart: Input.getKeyName(int).
-     *
-     * Returns a stable diagnostic key name for LWJGL key codes.
-     */
+    /** Java Slick2D counterpart: Input.getKeyName(int). */
     static getKeyName(code: number): string;
-    /**
-     * Java Slick2D counterpart: Input(int height).
-     *
-     * Creates an input adapter for a container of the supplied height.
-     */
+    /** Java Slick2D counterpart: Input(int height). */
     constructor(height: number);
     /**
      * Browser controller helper: adds calibrated axis pairs that contribute to
@@ -330,11 +353,11 @@ export declare class Input {
     /** Java Slick2D counterpart: Input.consumeEvent(). */
     consumeEvent(): void;
     /** Java Slick2D counterpart: Input.considerDoubleClick(int, int, int). */
-    considerDoubleClick(_button: number, _x: number, _y: number): void;
+    considerDoubleClick(button: number, x: number, y: number): void;
     /** Java Slick2D counterpart: Input.poll(int, int). */
     poll(_width: number, height: number): void;
     /** Java Slick2D counterpart: Input.enableKeyRepeat(int, int). */
-    enableKeyRepeat(initial: number, interval: number): void;
+    enableKeyRepeat(_initial: number, _interval: number): void;
     /** Java Slick2D counterpart: Input.enableKeyRepeat(). */
     enableKeyRepeat(): void;
     /** Java Slick2D counterpart: Input.disableKeyRepeat(). */
@@ -354,10 +377,31 @@ export declare class Input {
     private readonly handleContextMenu;
     private readonly handleFocusLost;
     private readonly handleVisibilityChange;
+    private snapshotListeners;
+    private appendUniqueLifecycleListeners;
+    private dispatchQueuedEvents;
+    private considerDoubleClickAt;
+    private dispatchKeyPressed;
+    private dispatchKeyReleased;
+    private dispatchMousePressed;
+    private dispatchMouseReleased;
+    private dispatchMouseClicked;
+    private dispatchMouseMoved;
+    private dispatchMouseWheel;
+    private beginEventDispatch;
+    private endEventDispatch;
+    private enqueueEvent;
+    private growEventQueue;
+    private clearQueuedEvents;
     private clearPressedRecords;
     private clearAllInputState;
+    private clearAllControllerState;
     private updateMouse;
     private pollControllers;
+    private prepareLogicalControllerOwner;
+    private clearControllerState;
+    private deleteControllerKeys;
+    private clearDisconnectedAxisCalibration;
     private readCalibratedControllerAxis;
     private prepareAdditionalControllerAxisCalibration;
     private resetAdditionalControllerAxisCalibration;
@@ -368,6 +412,7 @@ export declare class Input {
     private getFrameGamepads;
     private invalidateGamepads;
     private removeFrom;
+    private static copyArray;
     private static keyCodeFromEvent;
     private static mouseButtonFromEvent;
     private static isUsableGamepad;
@@ -383,6 +428,8 @@ export declare class Input {
     private static controlKey;
     private static controllerFromControlKey;
     private static browserHasInputFocus;
+    private static eventTimestamp;
+    private static now;
     private shouldPreventDefault;
     private shouldAcceptGameKey;
     private shouldAcceptPointerEvent;

@@ -19,32 +19,51 @@ function usesIntegerComponentOverload(r: number, g: number, b: number, a?: numbe
 }
 
 function decodeInteger(value: string): number {
-    let text = value.trim();
-    let sign = 1;
-    if (text.startsWith("-")) {
-        sign = -1;
-        text = text.substring(1);
-    } else if (text.startsWith("+")) {
-        text = text.substring(1);
+    if (value.length === 0) {
+        throw new Error("Zero length string");
+    }
+
+    let index = 0;
+    let negative = false;
+    const first = value.charCodeAt(0);
+    if (first === 0x2d || first === 0x2b) {
+        negative = first === 0x2d;
+        index++;
     }
 
     let radix = 10;
-    if (text.startsWith("0x") || text.startsWith("0X")) {
+    if (value.startsWith("0x", index) || value.startsWith("0X", index)) {
         radix = 16;
-        text = text.substring(2);
-    } else if (text.startsWith("#")) {
+        index += 2;
+    } else if (value.startsWith("#", index)) {
         radix = 16;
-        text = text.substring(1);
-    } else if (text.startsWith("0") && text.length > 1) {
+        index++;
+    } else if (value.startsWith("0", index) && value.length > index + 1) {
         radix = 8;
-        text = text.substring(1);
+        index++;
     }
 
-    const parsed = Number.parseInt(text, radix);
-    if (Number.isNaN(parsed)) {
+    if (index >= value.length || value[index] === "+" || value[index] === "-") {
         throw new Error(`For input string: "${value}"`);
     }
-    return sign * parsed;
+
+    const digits = value.substring(index);
+    const grammar = radix === 16 ? /^[0-9a-fA-F]+$/ : radix === 8 ? /^[0-7]+$/ : /^[0-9]+$/;
+    if (!grammar.test(digits)) {
+        throw new Error(`For input string: "${value}"`);
+    }
+
+    let parsed = BigInt(parseInt(digits[0]!, radix));
+    for (let i = 1; i < digits.length; i++) {
+        parsed = parsed * BigInt(radix) + BigInt(parseInt(digits[i]!, radix));
+    }
+    if (negative) {
+        parsed = -parsed;
+    }
+    if (parsed < -2147483648n || parsed > 2147483647n) {
+        throw new Error(`For input string: "${value}"`);
+    }
+    return Number(parsed);
 }
 
 /**

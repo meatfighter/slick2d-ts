@@ -390,7 +390,7 @@ export class AppGameContainer extends GameContainer {
     public override setIcons(refs: string[]): void {
         super.setIcons(refs);
         if (refs.length > 0) {
-            this.applyFavicon(refs[0]);
+            this.applyFavicon(refs[0]!);
         }
     }
 
@@ -687,15 +687,23 @@ export class AppGameContainer extends GameContainer {
 
     private readonly handleWindowResize = (): void => {
         try {
-            if (this.isFullscreen()) {
-                this.applyBrowserDisplaySize();
-            } else {
-                this.refreshCurrentCanvasBacking();
-            }
+            this.handleBrowserResize();
         } catch (error) {
             this.reportError(error);
         }
     };
+
+    /**
+     * Browser resize policy hook shared by window and VisualViewport events.
+     * ApplicationGameContainer overrides this for resizable-window semantics.
+     */
+    protected handleBrowserResize(): void {
+        if (this.isFullscreen()) {
+            this.applyBrowserDisplaySize();
+        } else {
+            this.refreshCurrentCanvasBacking();
+        }
+    }
 
     private readonly handleFullscreenChange = (): void => {
         try {

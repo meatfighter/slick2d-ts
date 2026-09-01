@@ -1,5 +1,7 @@
 import { Color } from "./Color.js";
 import { Graphics } from "./Graphics.js";
+import { GraphicsFactory } from "./opengl/GraphicsFactory.js";
+import { InternalTextureLoader } from "./opengl/InternalTextureLoader.js";
 import type { Renderable } from "./Renderable.js";
 import { SlickException } from "./SlickException.js";
 import { identityMatrix3 } from "./rendering/RenderBackend.js";
@@ -83,8 +85,10 @@ export class Image implements Renderable {
     private centerSet = false;
     private imageName: string | null = null;
     private destroyed = false;
-    private cornerColors = new Map<number, Color>();
-    private cornerColorScratch: [Color, Color, Color, Color] = [Color.white, Color.white, Color.white, Color.white];
+    private cornerColors: [Color, Color, Color, Color] | null = null;
+    private pixelScratch = new Uint8Array(4);
+    private sourceRectScratch = new Float64Array(4);
+    private textureGeneration = 0;
 
     public constructor(ref: string);
     public constructor(ref: string, trans: Color);
@@ -138,7 +142,13 @@ export class Image implements Renderable {
             this.flipVertical = flipped;
             this.inverted = flipped;
             filter = typeof c === "number" ? c : Image.FILTER_LINEAR;
-            this.textureResource = new WebGLTextureResource(a, filter, { transparent });
+            this.textureResource = InternalTextureLoader.get().getTexture(
+                a,
+                filter,
+                transparent,
+                flipped,
+                () => new WebGLTextureResource(a, filter, { transparent })
+            );
         } else if (typeof a === "number") {
             width = a;
             height = typeof b === "number" ? b : 0;
@@ -165,12 +175,8 @@ export class Image implements Renderable {
             height = a.getHeight();
         }
 
-        this.sourceWidth = width || this.textureResource.width;
-        this.sourceHeight = height || this.textureResource.height;
-        this.displayWidth = this.sourceWidth;
-        this.displayHeight = this.sourceHeight;
-        this.centerX = this.getWidth() / 2;
-        this.centerY = this.getHeight() / 2;
+        this.reinit(width || this.textureResource.width, height || this.textureResource.height);
+        this.watchTextureReady(this.textureResource);
     }
 
     private static fromShared(
@@ -204,8 +210,10 @@ export class Image implements Renderable {
         image.centerSet = false;
         image.imageName = null;
         image.destroyed = false;
-        image.cornerColors = new Map<number, Color>();
-        image.cornerColorScratch = [Color.white, Color.white, Color.white, Color.white];
+        image.cornerColors = null;
+        image.pixelScratch = new Uint8Array(4);
+        image.sourceRectScratch = new Float64Array(4);
+        image.textureGeneration = 0;
         return image;
     }
 
@@ -228,19 +236,23 @@ export class Image implements Renderable {
     public setImageColor(r: number, g: number, b: number): void;
     /** Java Slick2D counterpart: Image.setImageColor(float, float, float, float). */
     public setImageColor(r: number, g: number, b: number, a: number): void;
-    public setImageColor(r: number, g: number, b: number, a: number = 1): void {
-        this.cornerColors.set(Image.TOP_LEFT, new Color(r, g, b, a));
-        this.cornerColors.set(Image.TOP_RIGHT, new Color(r, g, b, a));
-        this.cornerColors.set(Image.BOTTOM_RIGHT, new Color(r, g, b, a));
-        this.cornerColors.set(Image.BOTTOM_LEFT, new Color(r, g, b, a));
+    public setImageColor(r: number, g: number, b: number, a?: number): void {
+        const colors = this.ensureCornerColors();
+        for (const color of colors) {
+            Image.setColorChannels(color, r, g, b, a);
+        }
     }
 
     /** Java Slick2D counterpart: Image.setColor(int, float, float, float). */
     public setColor(corner: number, r: number, g: number, b: number): void;
     /** Java Slick2D counterpart: Image.setColor(int, float, float, float, float). */
     public setColor(corner: number, r: number, g: number, b: number, a: number): void;
-    public setColor(corner: number, r: number, g: number, b: number, a: number = 1): void {
-        this.cornerColors.set(corner, new Color(r, g, b, a));
+    public setColor(corner: number, r: number, g: number, b: number, a?: number): void {
+        if (!Number.isInteger(corner) || corner < Image.TOP_LEFT || corner > Image.BOTTOM_LEFT) {
+            throw new RangeError(`Invalid image corner: ${corner}`);
+        }
+        const color = this.ensureCornerColors()[corner]!;
+        Image.setColorChannels(color, r, g, b, a);
     }
 
     /** Java Slick2D counterpart: Image.clampTexture(). */
@@ -259,10 +271,7 @@ export class Image implements Renderable {
     /** Java Slick2D counterpart: Image.getGraphics(). */
     public getGraphics(): Graphics {
         this.throwIfDestroyed();
-        if (!this.renderTarget) {
-            throw new SlickException("Image is not a writable render target");
-        }
-        return new Graphics(this.renderTarget);
+        return GraphicsFactory.getGraphicsForImage(this);
     }
 
     /** Java Slick2D counterpart: Image.bind(). */
@@ -319,10 +328,11 @@ export class Image implements Renderable {
             drawW = a;
             drawH = b;
         } else if (typeof a === "number" && typeof b === "number" && typeof c === "number" && typeof d === "number" && e === undefined) {
-            srcX = this.sourceX + a;
-            srcY = this.sourceY + b;
-            srcW = c - a;
-            srcH = d - b;
+            const source = this.mapLogicalSourceRect(a, b, c, d);
+            srcX = source[0]!;
+            srcY = source[1]!;
+            srcW = source[2]!;
+            srcH = source[3]!;
             this.drawInternal(drawX, drawY, drawW, drawH, srcX, srcY, srcW, srcH, tint, false);
             return;
         } else if (
@@ -335,10 +345,11 @@ export class Image implements Renderable {
         ) {
             drawW = a - drawX;
             drawH = b - drawY;
-            srcX = this.sourceX + c;
-            srcY = this.sourceY + d;
-            srcW = e - c;
-            srcH = f - d;
+            const source = this.mapLogicalSourceRect(c, d, e, f);
+            srcX = source[0]!;
+            srcY = source[1]!;
+            srcW = source[2]!;
+            srcH = source[3]!;
             tint = g ?? null;
             this.drawInternal(drawX, drawY, drawW, drawH, srcX, srcY, srcW, srcH, tint, false);
             return;
@@ -429,7 +440,19 @@ export class Image implements Renderable {
 
     /** Java Slick2D counterpart: Image.getSubImage(int, int, int, int). */
     public getSubImage(x: number, y: number, width: number, height: number): Image {
-        return Image.fromShared(this.textureResource, this.sourceX + x, this.sourceY + y, width, height, this.flipHorizontal, this.flipVertical);
+        const source = this.mapLogicalSourceRect(x, y, x + width, y + height);
+        return Image.fromShared(
+            this.textureResource,
+            source[0]!,
+            source[1]!,
+            source[2]!,
+            source[3]!,
+            this.flipHorizontal,
+            this.flipVertical,
+            width,
+            height,
+            this.inverted
+        );
     }
 
     /** Java Slick2D counterpart: Image.drawWarped(...). */
@@ -560,22 +583,43 @@ export class Image implements Renderable {
 
     /** Java Slick2D counterpart: Image.setTexture(Texture). */
     public setTexture(texture: WebGLTextureResource): void {
+        this.throwIfDestroyed();
+        const ownedTarget = this.renderTarget;
+        if (ownedTarget) {
+            GraphicsFactory.releaseGraphicsForTexture(this.textureResource);
+            ownedTarget.dispose(Renderer.getBackend().getContext());
+        }
+        this.textureGeneration++;
+        this.renderTarget = null;
         this.textureResource = texture;
+        this.reinit(texture.width, texture.height);
+        this.watchTextureReady(texture);
     }
 
     /** Java Slick2D counterpart: Image.getColor(int, int). */
     public getColor(x: number, y: number): Color {
+        this.throwIfDestroyed();
         const sx = Math.trunc(x);
         const sy = Math.trunc(y);
-        const sourceWidth = this.getSourceWidth();
-        const sourceHeight = this.getSourceHeight();
-        const pixelX = this.flipHorizontal ? this.sourceX + sourceWidth - 1 - sx : this.sourceX + sx;
-        const pixelY = this.flipVertical ? this.sourceY + sourceHeight - 1 - sy : this.sourceY + sy;
-        const pixel = this.textureResource.getPixel(pixelX, pixelY);
-        if (!pixel) {
+        if (sx < 0 || sy < 0 || sx >= this.getWidth() || sy >= this.getHeight()) {
+            throw new RangeError(`Image pixel coordinate is outside the image: ${sx}, ${sy}`);
+        }
+        const source = this.mapLogicalSourceRect(sx, sy, sx + 1, sy + 1);
+        const pixelX = Math.trunc(source[0]!);
+        const pixelY = Math.trunc(source[1]!);
+        const target = this.__getRenderTarget();
+        const renderer = Renderer.getBackend();
+        if (target && renderer.getContext()) {
+            renderer.pushRenderTarget(target);
+            try {
+                renderer.readPixels(pixelX, pixelY, 1, 1, this.pixelScratch);
+            } finally {
+                renderer.popRenderTarget();
+            }
+        } else if (!this.textureResource.getPixelInto(pixelX, pixelY, this.pixelScratch, renderer.getContext())) {
             throw new SlickException("Image pixel data is not available; wait for resources to finish loading before calling getColor");
         }
-        return Color.fromInts(pixel[0], pixel[1], pixel[2], pixel[3]);
+        return Color.fromInts(this.pixelScratch[0]!, this.pixelScratch[1]!, this.pixelScratch[2]!, this.pixelScratch[3]!);
     }
 
     /** Java Slick2D counterpart: Image.isDestroyed(). */
@@ -588,20 +632,20 @@ export class Image implements Renderable {
         if (this.destroyed) {
             return;
         }
-
-        this.destroyed = true;
+        const resource = this.textureResource;
         const gl = Renderer.getBackend().getContext();
-        const renderTarget = this.renderTarget;
+        const ownedTarget = this.renderTarget;
+        GraphicsFactory.releaseGraphicsForImage(this);
+        ownedTarget?.dispose(gl);
         this.renderTarget = null;
-        try {
-            renderTarget?.dispose(gl);
-        } finally {
-            this.textureResource.dispose(gl);
-        }
+        resource.dispose(gl);
+        this.destroyed = true;
     }
 
     /** Java Slick2D counterpart: Image.flushPixelData(). */
-    public flushPixelData(): void {}
+    public flushPixelData(): void {
+        this.textureResource.flushPixelData();
+    }
 
     /** Internal renderer hook returning the texture resource. */
     public __getTextureResource(): WebGLTextureResource | null {
@@ -610,19 +654,17 @@ export class Image implements Renderable {
 
     /** Internal renderer hook returning the render target if this image is writable. */
     public __getRenderTarget(): WebGLRenderTarget | null {
-        return this.destroyed ? null : this.renderTarget;
+        return this.destroyed ? null : (this.textureResource.__getRenderTarget() ?? GraphicsFactory.getRenderTarget(this.textureResource));
+    }
+
+    /** @internal Returns only the target originally owned by this Image instance. */
+    public __getOwnedRenderTarget(): WebGLRenderTarget | null {
+        return this.destroyed || this.textureResource.__getRenderTarget() !== this.renderTarget ? null : this.renderTarget;
     }
 
     /** Internal renderer hook returning Slick per-corner tint colors. */
     public __getCornerColors(): [Color, Color, Color, Color] | null {
-        if (this.cornerColors.size === 0) {
-            return null;
-        }
-        this.cornerColorScratch[0] = this.cornerColors.get(Image.TOP_LEFT) ?? Color.white;
-        this.cornerColorScratch[1] = this.cornerColors.get(Image.TOP_RIGHT) ?? Color.white;
-        this.cornerColorScratch[2] = this.cornerColors.get(Image.BOTTOM_RIGHT) ?? Color.white;
-        this.cornerColorScratch[3] = this.cornerColors.get(Image.BOTTOM_LEFT) ?? Color.white;
-        return this.cornerColorScratch;
+        return this.cornerColors;
     }
 
     private drawInternal(
@@ -700,18 +742,15 @@ export class Image implements Renderable {
         useCornerColors: boolean
     ): void {
         this.throwIfDestroyed();
-        const imageWidth = this.getWidth() || 1;
-        const imageHeight = this.getHeight() || 1;
-        const srcWidth = this.getSourceWidth();
-        const srcHeight = this.getSourceHeight();
-        const effectiveSrcX = this.flipHorizontal ? this.sourceX + srcWidth : this.sourceX;
-        const effectiveSrcY = this.flipVertical ? this.sourceY + srcHeight : this.sourceY;
-        const effectiveSrcW = this.flipHorizontal ? -srcWidth : srcWidth;
-        const effectiveSrcH = this.flipVertical ? -srcHeight : srcHeight;
-        const embeddedSrcX = effectiveSrcX + (srcx / imageWidth) * effectiveSrcW;
-        const embeddedSrcY = effectiveSrcY + (srcy / imageHeight) * effectiveSrcH;
-        const embeddedSrcW = ((srcx2 - srcx) / imageWidth) * effectiveSrcW;
-        const embeddedSrcH = ((srcy2 - srcy) / imageHeight) * effectiveSrcH;
+        const source = this.mapLogicalSourceRect(srcx, srcy, srcx2, srcy2);
+        const sourceX = source[0]!;
+        const sourceY = source[1]!;
+        const sourceWidth = source[2]!;
+        const sourceHeight = source[3]!;
+        const embeddedSrcX = this.flipHorizontal ? sourceX + sourceWidth : sourceX;
+        const embeddedSrcY = this.flipVertical ? sourceY + sourceHeight : sourceY;
+        const embeddedSrcW = this.flipHorizontal ? -sourceWidth : sourceWidth;
+        const embeddedSrcH = this.flipVertical ? -sourceHeight : sourceHeight;
         Renderer.getBackend().drawImage(
             this,
             x,
@@ -810,6 +849,66 @@ export class Image implements Renderable {
         } finally {
             renderer.popTransform();
         }
+    }
+
+    private ensureCornerColors(): [Color, Color, Color, Color] {
+        if (!this.cornerColors) {
+            this.cornerColors = [Color.white.copy(), Color.white.copy(), Color.white.copy(), Color.white.copy()];
+        }
+        return this.cornerColors;
+    }
+
+    private static setColorChannels(color: Color, r: number, g: number, b: number, a?: number): void {
+        color.r = r;
+        color.g = g;
+        color.b = b;
+        if (a !== undefined) {
+            color.a = a;
+        }
+    }
+
+    private mapLogicalSourceRect(x1: number, y1: number, x2: number, y2: number): Float64Array {
+        const displayWidth = this.getWidth() || 1;
+        const displayHeight = this.getHeight() || 1;
+        const sourceWidth = this.getSourceWidth();
+        const sourceHeight = this.getSourceHeight();
+        const offsetX = (x1 / displayWidth) * sourceWidth;
+        const offsetY = (y1 / displayHeight) * sourceHeight;
+        const width = ((x2 - x1) / displayWidth) * sourceWidth;
+        const height = ((y2 - y1) / displayHeight) * sourceHeight;
+        this.sourceRectScratch[0] = this.flipHorizontal ? this.sourceX + sourceWidth - offsetX - width : this.sourceX + offsetX;
+        this.sourceRectScratch[1] = this.flipVertical ? this.sourceY + sourceHeight - offsetY - height : this.sourceY + offsetY;
+        this.sourceRectScratch[2] = width;
+        this.sourceRectScratch[3] = height;
+        return this.sourceRectScratch;
+    }
+
+    private reinit(width: number = this.textureResource.width, height: number = this.textureResource.height): void {
+        this.sourceX = 0;
+        this.sourceY = 0;
+        this.sourceWidth = width;
+        this.sourceHeight = height;
+        this.displayWidth = width;
+        this.displayHeight = height;
+        this.centerX = width / 2;
+        this.centerY = height / 2;
+        this.centerSet = false;
+    }
+
+    private watchTextureReady(resource: WebGLTextureResource): void {
+        const generation = ++this.textureGeneration;
+        const pending = resource.ready();
+        if (!pending) {
+            return;
+        }
+        void pending.then(
+            () => {
+                if (!this.destroyed && generation === this.textureGeneration && resource === this.textureResource) {
+                    this.reinit(resource.width, resource.height);
+                }
+            },
+            () => undefined
+        );
     }
 
     private throwIfDestroyed(): void {

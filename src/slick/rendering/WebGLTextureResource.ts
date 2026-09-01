@@ -1,7 +1,8 @@
-import { ResourceLoadException, ResourceLoader } from "../util/ResourceLoader.js";
-import { SlickException } from "../SlickException.js";
 import type { Color } from "../Color.js";
+import { SlickException } from "../SlickException.js";
 import { InternalTextureLoader } from "../opengl/InternalTextureLoader.js";
+import { ResourceLoadException, ResourceLoader } from "../util/ResourceLoader.js";
+import type { WebGLRenderTarget } from "./WebGLRenderTarget.js";
 
 type TextureSource = ImageBitmap | HTMLImageElement | HTMLCanvasElement | OffscreenCanvas;
 type TextureInputSource = TextureSource | ArrayBuffer | Blob;
@@ -47,7 +48,8 @@ function colorByte(value: number): number {
 /**
  * Internal WebGL texture resource.
  *
- * Owns decoded image data plus the lazily-created WebGL texture.
+ * Owns a decoded source, lazily-created CPU pixel data, and a context-owned
+ * WebGL texture. Render-target pixels are transient across context restoration.
  */
 export class WebGLTextureResource {
     public readonly ref: string | null;
@@ -56,8 +58,10 @@ export class WebGLTextureResource {
     public filter: number;
     public source: TextureSource | null;
     private texture: WebGLTexture | null = null;
+    private renderTarget: WebGLRenderTarget | null = null;
     private readonly pending: Promise<void> | null;
     private pixelData: Uint8ClampedArray | null = null;
+    private gpuPixelsAuthoritative = false;
 
     /** Creates a texture resource from an existing image-like source. */
     public constructor(source: TextureSource, filter: number, ref?: string | null, options?: WebGLTextureLoadOptions);
@@ -88,9 +92,8 @@ export class WebGLTextureResource {
             const bytesOptions = typeof refOrOptions === "object" && refOrOptions !== null ? refOrOptions : options;
             this.pending = ResourceLoader.track(this.loadBytes(sourceOrRef, ref, bytesOptions), ref);
         } else {
-            const ref = typeof refOrOptions === "string" ? refOrOptions : refOrOptions;
             const sourceOptions = typeof refOrOptions === "object" && refOrOptions !== null ? refOrOptions : options;
-            this.ref = typeof ref === "string" ? ref : null;
+            this.ref = typeof refOrOptions === "string" ? refOrOptions : null;
             this.source = null;
             this.width = 0;
             this.height = 0;
@@ -110,13 +113,40 @@ export class WebGLTextureResource {
         return this.pending;
     }
 
-    /** Returns the cached RGBA pixel at a texture-space coordinate. */
-    public getPixel(x: number, y: number): [number, number, number, number] | null {
-        if (!this.pixelData || x < 0 || y < 0 || x >= this.width || y >= this.height) {
-            return null;
+    /** Copies the cached or lazily materialized RGBA pixel into a caller-owned buffer. */
+    public getPixelInto(x: number, y: number, target: Uint8Array, gl: WebGL2RenderingContext | null = null): boolean {
+        const px = Math.trunc(x);
+        const py = Math.trunc(y);
+        if (target.byteLength < 4 || px < 0 || py < 0 || px >= this.width || py >= this.height) {
+            return false;
         }
-        const offset = (Math.trunc(y) * this.width + Math.trunc(x)) * 4;
-        return [this.pixelData[offset], this.pixelData[offset + 1], this.pixelData[offset + 2], this.pixelData[offset + 3]];
+        if (!this.pixelData) {
+            const materialized = this.gpuPixelsAuthoritative ? gl !== null && this.materializeGpuPixelData(gl) : this.materializePixelData();
+            if (!materialized) {
+                return false;
+            }
+        }
+        const pixels = this.pixelData;
+        if (!pixels) {
+            return false;
+        }
+        const offset = (py * this.width + px) * 4;
+        target[0] = pixels[offset]!;
+        target[1] = pixels[offset + 1]!;
+        target[2] = pixels[offset + 2]!;
+        target[3] = pixels[offset + 3]!;
+        return true;
+    }
+
+    /** Java-style pixel-cache invalidation used by Image.flushPixelData(). */
+    public flushPixelData(): void {
+        this.pixelData = null;
+    }
+
+    /** Marks the GPU texture as newer than the retained decoded source. */
+    public markGpuModified(): void {
+        this.gpuPixelsAuthoritative = true;
+        this.pixelData = null;
     }
 
     /** Returns or creates the WebGL texture for a context. */
@@ -138,6 +168,7 @@ export class WebGLTextureResource {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         this.applyFilter(gl);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+        this.gpuPixelsAuthoritative = false;
         return this.texture;
     }
 
@@ -147,11 +178,32 @@ export class WebGLTextureResource {
         this.width = width;
         this.height = height;
         this.pixelData = null;
+        this.gpuPixelsAuthoritative = false;
     }
 
     /** @internal Returns the context-owned texture currently attached to this resource. */
     public __getTextureReference(): WebGLTexture | null {
         return this.texture;
+    }
+
+    /** @internal Associates the one framebuffer wrapper belonging to this texture identity. */
+    public attachRenderTarget(target: WebGLRenderTarget): void {
+        if (this.renderTarget && this.renderTarget !== target) {
+            throw new SlickException("Texture already has an associated render target");
+        }
+        this.renderTarget = target;
+    }
+
+    /** @internal Returns the framebuffer wrapper associated with this texture identity. */
+    public __getRenderTarget(): WebGLRenderTarget | null {
+        return this.renderTarget;
+    }
+
+    /** @internal Removes an associated framebuffer wrapper after disposal. */
+    public detachRenderTarget(target: WebGLRenderTarget): void {
+        if (this.renderTarget === target) {
+            this.renderTarget = null;
+        }
     }
 
     /** Drops a context-owned WebGL texture while keeping decoded image data available. */
@@ -160,19 +212,22 @@ export class WebGLTextureResource {
             gl.deleteTexture(this.texture);
         }
         this.texture = null;
+        this.pixelData = null;
+        this.gpuPixelsAuthoritative = false;
     }
 
     /** Detaches a framebuffer-owned texture handle without unregistering this logical resource. */
     public detachTexture(texture: WebGLTexture | null = this.texture): void {
         if (!texture || this.texture === texture) {
             this.texture = null;
+            this.pixelData = null;
+            this.gpuPixelsAuthoritative = false;
         }
     }
 
     /** Applies the Slick filter mode to the WebGL texture. */
     public applyFilter(gl: WebGL2RenderingContext): void {
-        const nearest = this.filter === 2;
-        const value = nearest ? gl.NEAREST : gl.LINEAR;
+        const value = this.filter === 2 ? gl.NEAREST : gl.LINEAR;
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, value);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, value);
     }
@@ -183,7 +238,6 @@ export class WebGLTextureResource {
         if (!texture) {
             return;
         }
-
         const previousTexture = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
         gl.bindTexture(gl.TEXTURE_2D, texture);
         this.applyFilter(gl);
@@ -192,8 +246,55 @@ export class WebGLTextureResource {
 
     /** Releases the underlying WebGL texture object. */
     public dispose(gl: WebGL2RenderingContext | null): void {
+        this.renderTarget?.dispose(gl);
         this.invalidateTexture(gl);
         InternalTextureLoader.get().unregister(this);
+    }
+
+    private materializeGpuPixelData(gl: WebGL2RenderingContext): boolean {
+        const texture = this.texture;
+        if (!texture || this.width <= 0 || this.height <= 0 || WebGLTextureResource.isContextLost(gl)) {
+            return false;
+        }
+        const framebuffer = gl.createFramebuffer();
+        if (!framebuffer) {
+            return false;
+        }
+        const previousFramebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+        try {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+            if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+                return false;
+            }
+            const pixels = new Uint8Array(this.width * this.height * 4);
+            gl.readPixels(0, 0, this.width, this.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+            this.pixelData = new Uint8ClampedArray(pixels.buffer);
+            return true;
+        } catch {
+            this.pixelData = null;
+            return false;
+        } finally {
+            gl.bindFramebuffer(gl.FRAMEBUFFER, previousFramebuffer);
+            gl.deleteFramebuffer(framebuffer);
+        }
+    }
+
+    private materializePixelData(): boolean {
+        const source = this.source;
+        if (!source || this.width <= 0 || this.height <= 0) {
+            return false;
+        }
+        try {
+            const canvas = createCanvasSource(this.width, this.height);
+            const context = get2dContext(canvas);
+            context.drawImage(source, 0, 0);
+            this.pixelData = new Uint8ClampedArray(context.getImageData(0, 0, this.width, this.height).data);
+            return true;
+        } catch {
+            this.pixelData = null;
+            return false;
+        }
     }
 
     private static isContextLost(gl: WebGL2RenderingContext): boolean {
@@ -253,7 +354,8 @@ export class WebGLTextureResource {
     private prepareLoadedSource(source: TextureSource, options: WebGLTextureLoadOptions): void {
         this.width = sourceWidth(source);
         this.height = sourceHeight(source);
-        if (this.width <= 0 || this.height <= 0) {
+        this.pixelData = null;
+        if (this.width <= 0 || this.height <= 0 || !options.transparent) {
             this.source = source;
             return;
         }
@@ -263,24 +365,18 @@ export class WebGLTextureResource {
             const context = get2dContext(canvas);
             context.drawImage(source, 0, 0);
             const imageData = context.getImageData(0, 0, this.width, this.height);
-            if (options.transparent) {
-                const tr = colorByte(options.transparent.r);
-                const tg = colorByte(options.transparent.g);
-                const tb = colorByte(options.transparent.b);
-                for (let i = 0; i < imageData.data.length; i += 4) {
-                    if (imageData.data[i] === tr && imageData.data[i + 1] === tg && imageData.data[i + 2] === tb) {
-                        imageData.data[i + 3] = 0;
-                    }
+            const tr = colorByte(options.transparent.r);
+            const tg = colorByte(options.transparent.g);
+            const tb = colorByte(options.transparent.b);
+            for (let i = 0; i < imageData.data.length; i += 4) {
+                if (imageData.data[i] === tr && imageData.data[i + 1] === tg && imageData.data[i + 2] === tb) {
+                    imageData.data[i + 3] = 0;
                 }
-                context.putImageData(imageData, 0, 0);
-                this.source = canvas;
-            } else {
-                this.source = source;
             }
-            this.pixelData = new Uint8ClampedArray(imageData.data);
+            context.putImageData(imageData, 0, 0);
+            this.source = canvas;
         } catch {
             this.source = source;
-            this.pixelData = null;
         }
     }
 }

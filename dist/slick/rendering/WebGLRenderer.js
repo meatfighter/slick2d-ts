@@ -338,6 +338,7 @@ export class WebGLRenderer {
         }
         if (target) {
             target.ensure(gl, this.contextGeneration);
+            target.markModified?.();
             gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
             this.setActiveDimensions(target.width, target.height, target.width, target.height);
         }

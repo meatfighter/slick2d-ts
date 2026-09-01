@@ -11,7 +11,6 @@ import { SoundStore } from "./openal/SoundStore.js";
 import type { ImageData as SlickImageData } from "./opengl/ImageData.js";
 import { Renderer } from "./opengl/renderer/Renderer.js";
 import { SlickException } from "./SlickException.js";
-import { CanvasFont } from "./support/CanvasFont.js";
 import { Log } from "./util/Log.js";
 import { ResourceLoader } from "./util/ResourceLoader.js";
 
@@ -60,7 +59,7 @@ export abstract class GameContainer {
     protected paused = false;
     protected forceExit = true;
     protected multiSample = 0;
-    protected defaultFont: Font = new CanvasFont();
+    protected defaultFont: Font;
     protected iconRefs: string[] = [];
     protected animatedCursorDelays: number[] = [];
 
@@ -73,6 +72,7 @@ export abstract class GameContainer {
         this.game = game;
         this.input = new Input(this.height);
         this.graphics = new Graphics(this.width, this.height);
+        this.defaultFont = this.graphics.getFont();
     }
 
     /** Java Slick2D counterpart: GameContainer.enableStencil(). */
@@ -355,8 +355,10 @@ export abstract class GameContainer {
 
     /** Java Slick2D counterpart: GameContainer.setDefaultFont(Font). */
     public setDefaultFont(font: Font): void {
+        if (font === null || font === undefined) {
+            throw new TypeError("Default font cannot be null");
+        }
         this.defaultFont = font;
-        this.graphics.setFont(font);
     }
 
     /** Java Slick2D counterpart: GameContainer.getDefaultFont(). */

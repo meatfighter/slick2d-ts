@@ -21,7 +21,7 @@ export class BinaryReader {
         if (this.offset >= this.bytes.length) {
             return -1;
         }
-        return this.bytes[this.offset++];
+        return this.bytes[this.offset++]!;
     }
 
     /** Java counterpart: DataInputStream.readFully(byte[]). */

@@ -202,7 +202,7 @@ export class HumanInput implements IInput {
 
     private anyDown(keys: number[]): boolean {
         for (let i = 0; i < keys.length; i++) {
-            if (this.input.isKeyDown(keys[i])) {
+            if (this.input.isKeyDown(keys[i]!)) {
                 return true;
             }
         }
@@ -211,7 +211,7 @@ export class HumanInput implements IInput {
 
     private anyPressed(keys: number[]): boolean {
         for (let i = 0; i < keys.length; i++) {
-            if (this.input.isKeyPressed(keys[i])) {
+            if (this.input.isKeyPressed(keys[i]!)) {
                 return true;
             }
         }
@@ -220,7 +220,7 @@ export class HumanInput implements IInput {
 
     private anyControllerPressed(buttons: number[]): boolean {
         for (let i = 0; i < buttons.length; i++) {
-            if (this.input.isButtonPressed(buttons[i], this.bindings.controllerIndex)) {
+            if (this.input.isButtonPressed(buttons[i]!, this.bindings.controllerIndex)) {
                 return true;
             }
         }
@@ -229,7 +229,7 @@ export class HumanInput implements IInput {
 
     private anyDefaultShootKeyDown(): boolean {
         for (let i = 0; i < DEFAULT_SHOOT_KEYS.length; i++) {
-            if (this.input.isKeyDown(DEFAULT_SHOOT_KEYS[i])) {
+            if (this.input.isKeyDown(DEFAULT_SHOOT_KEYS[i]!)) {
                 return true;
             }
         }

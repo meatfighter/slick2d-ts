@@ -166,8 +166,7 @@ export class SoundStore {
     }
     /** Browser/PWA helper: stops active sound effects without clearing music or decoded buffers. */
     stopSoundEffects() {
-        const handles = Array.from(this.activeHandles);
-        for (const handle of handles) {
+        for (const handle of this.activeHandles) {
             if (!this.musicHandles.has(handle)) {
                 handle.stop();
             }
@@ -175,8 +174,7 @@ export class SoundStore {
     }
     /** Browser/PWA helper: stops active music and sound effects without clearing decoded buffers. */
     stopAllPlayback() {
-        const handles = Array.from(this.activeHandles);
-        for (const handle of handles) {
+        for (const handle of this.activeHandles) {
             handle.stop();
         }
         this.resetPlaybackState();
@@ -197,7 +195,10 @@ export class SoundStore {
     }
     /** Java Slick2D counterpart: SoundStore.setMaxSources(int). */
     setMaxSources(max) {
-        const normalized = Math.max(1, Math.trunc(max));
+        if (!Number.isSafeInteger(max) || max <= 0) {
+            throw new RangeError("Maximum source count must be a positive safe integer");
+        }
+        const normalized = max;
         if (normalized === this.maxSources) {
             return;
         }

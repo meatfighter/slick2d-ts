@@ -15,18 +15,19 @@ function eventTarget() {
     };
 }
 
-function keyEvent(code, key = "") {
+function keyEvent(code, key = "", timeStamp = 0) {
     return {
         code,
         defaultPrevented: false,
         key,
+        timeStamp,
         preventDefault() {
             this.defaultPrevented = true;
         }
     };
 }
 
-function pointerEvent(button) {
+function pointerEvent(button, timeStamp = 0) {
     return {
         button,
         clientX: 12,
@@ -34,16 +35,18 @@ function pointerEvent(button) {
         currentTarget: null,
         defaultPrevented: false,
         target: null,
+        timeStamp,
         preventDefault() {
             this.defaultPrevented = true;
         }
     };
 }
 
-function browserEvent() {
+function browserEvent(timeStamp = 0) {
     return {
         defaultPrevented: false,
         target: null,
+        timeStamp,
         preventDefault() {
             this.defaultPrevented = true;
         }
@@ -217,6 +220,7 @@ test("browser numpad codes stay distinct from top-row digit codes", () => {
     input.bindToElement(target);
 
     target.dispatch("keydown", keyEvent("Numpad8", "8"));
+    input.poll(800, 600);
 
     assert.equal(input.isKeyDown(Input.KEY_NUMPAD8), true);
     assert.equal(input.isKeyDown(Input.KEY_8), false);
@@ -226,6 +230,7 @@ test("browser numpad codes stay distinct from top-row digit codes", () => {
 
     target.dispatch("keyup", keyEvent("Numpad8", "8"));
     target.dispatch("keydown", keyEvent("Digit8", "8"));
+    input.poll(800, 600);
 
     assert.equal(input.isKeyDown(Input.KEY_8), true);
     assert.equal(input.isKeyDown(Input.KEY_NUMPAD8), false);
@@ -246,6 +251,7 @@ test("browser pointer buttons are translated to Slick mouse constants", () => {
     input.addMouseListener(mouseListener(events));
 
     target.dispatch("pointerdown", pointerEvent(2));
+    input.poll(800, 600);
 
     assert.equal(input.isMouseButtonDown(Input.MOUSE_RIGHT_BUTTON), true);
     assert.equal(input.isMouseButtonDown(Input.MOUSE_MIDDLE_BUTTON), false);
@@ -253,6 +259,7 @@ test("browser pointer buttons are translated to Slick mouse constants", () => {
 
     target.dispatch("pointerup", pointerEvent(2));
     target.dispatch("pointerdown", pointerEvent(1));
+    input.poll(800, 600);
 
     assert.equal(input.isMouseButtonDown(Input.MOUSE_RIGHT_BUTTON), false);
     assert.equal(input.isMouseButtonDown(Input.MOUSE_MIDDLE_BUTTON), true);
@@ -306,6 +313,7 @@ test("accepted wheel and context menu events suppress browser defaults", () => {
     const contextMenu = browserEvent();
     target.dispatch("wheel", wheel);
     target.dispatch("contextmenu", contextMenu);
+    input.poll(800, 600);
 
     assert.equal(wheel.defaultPrevented, true);
     assert.equal(contextMenu.defaultPrevented, true);

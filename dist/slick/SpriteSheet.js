@@ -34,10 +34,12 @@ export class SpriteSheet extends Image {
         }
         this.initTiles();
         const subImages = this.requireTiles();
-        if (x < 0 || x >= subImages.length || y < 0 || y >= subImages[0].length) {
+        const column = subImages[x];
+        const image = column?.[y];
+        if (!image) {
             throw new Error(`SubImage out of sheet bounds: ${x},${y}`);
         }
-        return subImages[x][y];
+        return image;
     }
     createSprite(x, y) {
         const px = this.margin + x * (this.tileWidth + this.spacing);
@@ -48,7 +50,8 @@ export class SpriteSheet extends Image {
     getSprite(x, y) {
         this.initTiles();
         const subImages = this.requireTiles();
-        if (x < 0 || x >= subImages.length || y < 0 || y >= subImages[0].length) {
+        const column = subImages[x];
+        if (!column || y < 0 || y >= column.length) {
             throw new Error(`SubImage out of sheet bounds: ${x},${y}`);
         }
         return this.createSprite(x, y);
@@ -118,10 +121,11 @@ export class SpriteSheet extends Image {
         this.subImages = Array.from({ length: tilesAcross }, (_unused, x) => Array.from({ length: tilesDown }, (_unused2, y) => this.createSprite(x, y)));
     }
     requireTiles() {
-        if (!this.subImages || this.subImages.length === 0 || this.subImages[0].length === 0) {
+        const tiles = this.subImages;
+        if (!tiles || tiles.length === 0 || !tiles[0] || tiles[0].length === 0) {
             throw new SlickException("SpriteSheet image is not loaded or does not contain any tiles");
         }
-        return this.subImages;
+        return tiles;
     }
 }
 //# sourceMappingURL=SpriteSheet.js.map

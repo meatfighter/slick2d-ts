@@ -74,7 +74,7 @@ export class PackedSpriteSheet {
 
     private parse(lines: string[]): void {
         for (let i = 0; i < lines.length;) {
-            while (i < lines.length && lines[i].trim() === "") {
+            while (i < lines.length && lines[i]!.trim() === "") {
                 i++;
             }
             if (i >= lines.length) {
@@ -85,13 +85,13 @@ export class PackedSpriteSheet {
                 throw new SlickException("Failed to process definitions file - invalid format?");
             }
             const section: PackedSection = {
-                name: lines[i++].trim(),
-                x: Number.parseInt(lines[i++].trim(), 10),
-                y: Number.parseInt(lines[i++].trim(), 10),
-                width: Number.parseInt(lines[i++].trim(), 10),
-                height: Number.parseInt(lines[i++].trim(), 10),
-                tilesx: Math.max(1, Number.parseInt(lines[i++].trim(), 10)),
-                tilesy: Math.max(1, Number.parseInt(lines[i++].trim(), 10))
+                name: lines[i++]!.trim(),
+                x: Number.parseInt(lines[i++]!.trim(), 10),
+                y: Number.parseInt(lines[i++]!.trim(), 10),
+                width: Number.parseInt(lines[i++]!.trim(), 10),
+                height: Number.parseInt(lines[i++]!.trim(), 10),
+                tilesx: Math.max(1, Number.parseInt(lines[i++]!.trim(), 10)),
+                tilesy: Math.max(1, Number.parseInt(lines[i++]!.trim(), 10))
             };
             i += 2;
             i++;

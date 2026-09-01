@@ -91,6 +91,6 @@ export class RecordedInput implements IInput {
     }
 
     private hasBit(bit: number): boolean {
-        return this.index < this.data.length && (this.data[this.index] & bit) !== 0;
+        return this.index < this.data.length && (this.data[this.index]! & bit) !== 0;
     }
 }

@@ -485,7 +485,7 @@ test("BufferedScalableGame renders into the native target before the presentatio
         assert.equal(nativeHeldFill?.target, clearCalls[0].target);
         assert.equal(drawCalls.length, 1);
         assert.equal(drawCalls[0].target, null);
-        assert.deepEqual(drawCalls[0].args.slice(1, 10), [0, 0, 800, 600, 16, 128, 160, -120, 1]);
+        assert.deepEqual(drawCalls[0].args.slice(1, 10), [0, 0, 800, 600, 16, 232, 160, -120, 1]);
         assert.ok(calls.findIndex(([name]) => name === "pushFullColorMask") < calls.findIndex(([name]) => name === "clear"));
         assert.ok(calls.findIndex(([name]) => name === "clear") < calls.findIndex(([name]) => name === "popColorMask"));
         assert.equal(

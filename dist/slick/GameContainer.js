@@ -7,7 +7,6 @@ import { Input } from "./Input.js";
 import { SoundStore } from "./openal/SoundStore.js";
 import { Renderer } from "./opengl/renderer/Renderer.js";
 import { SlickException } from "./SlickException.js";
-import { CanvasFont } from "./support/CanvasFont.js";
 import { Log } from "./util/Log.js";
 import { ResourceLoader } from "./util/ResourceLoader.js";
 function isSlickImageData(value) {
@@ -49,7 +48,7 @@ export class GameContainer {
     paused = false;
     forceExit = true;
     multiSample = 0;
-    defaultFont = new CanvasFont();
+    defaultFont;
     iconRefs = [];
     animatedCursorDelays = [];
     /**
@@ -61,6 +60,7 @@ export class GameContainer {
         this.game = game;
         this.input = new Input(this.height);
         this.graphics = new Graphics(this.width, this.height);
+        this.defaultFont = this.graphics.getFont();
     }
     /** Java Slick2D counterpart: GameContainer.enableStencil(). */
     static enableStencil() {
@@ -290,8 +290,10 @@ export class GameContainer {
     }
     /** Java Slick2D counterpart: GameContainer.setDefaultFont(Font). */
     setDefaultFont(font) {
+        if (font === null || font === undefined) {
+            throw new TypeError("Default font cannot be null");
+        }
         this.defaultFont = font;
-        this.graphics.setFont(font);
     }
     /** Java Slick2D counterpart: GameContainer.getDefaultFont(). */
     getDefaultFont() {

@@ -52,10 +52,12 @@ export class SpriteSheet extends Image {
         }
         this.initTiles();
         const subImages = this.requireTiles();
-        if (x < 0 || x >= subImages.length || y < 0 || y >= subImages[0].length) {
+        const column = subImages[x];
+        const image = column?.[y];
+        if (!image) {
             throw new Error(`SubImage out of sheet bounds: ${x},${y}`);
         }
-        return subImages[x][y];
+        return image;
     }
 
     private createSprite(x: number, y: number): Image {
@@ -68,7 +70,8 @@ export class SpriteSheet extends Image {
     public getSprite(x: number, y: number): Image {
         this.initTiles();
         const subImages = this.requireTiles();
-        if (x < 0 || x >= subImages.length || y < 0 || y >= subImages[0].length) {
+        const column = subImages[x];
+        if (!column || y < 0 || y >= column.length) {
             throw new Error(`SubImage out of sheet bounds: ${x},${y}`);
         }
         return this.createSprite(x, y);
@@ -144,9 +147,10 @@ export class SpriteSheet extends Image {
     }
 
     private requireTiles(): Image[][] {
-        if (!this.subImages || this.subImages.length === 0 || this.subImages[0].length === 0) {
+        const tiles = this.subImages;
+        if (!tiles || tiles.length === 0 || !tiles[0] || tiles[0].length === 0) {
             throw new SlickException("SpriteSheet image is not loaded or does not contain any tiles");
         }
-        return this.subImages;
+        return tiles;
     }
 }

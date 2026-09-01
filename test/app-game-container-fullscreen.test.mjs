@@ -10,6 +10,8 @@ class FakeCanvas {
         this.tabIndex = -1;
         this.width = 800;
         this.height = 600;
+        this.clientWidth = 800;
+        this.clientHeight = 600;
         this.style = {
             cursor: "",
             height: "600px",
@@ -33,6 +35,10 @@ class FakeCanvas {
 
     focus() {
         globalThis.document.activeElement = this;
+    }
+
+    getBoundingClientRect() {
+        return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight };
     }
 
     requestFullscreen() {
@@ -61,6 +67,8 @@ function createGame() {
 
 function installBrowserGlobals() {
     const listeners = new Map();
+    const windowListeners = new Map();
+    const viewportListeners = new Map();
     const body = {
         children: [],
         appendChild(child) {
@@ -125,11 +133,43 @@ function installBrowserGlobals() {
             listeners.get(type)?.delete(listener);
         }
     };
+    const visualViewport = {
+        height: 1080,
+        width: 1920,
+        addEventListener: (type, listener) => {
+            const registered = viewportListeners.get(type) ?? new Set();
+            registered.add(listener);
+            viewportListeners.set(type, registered);
+        },
+        dispatch(type) {
+            for (const listener of viewportListeners.get(type) ?? []) {
+                listener();
+            }
+        },
+        removeEventListener: (type, listener) => {
+            viewportListeners.get(type)?.delete(listener);
+        }
+    };
     const window = {
         innerHeight: 1080,
         innerWidth: 1920,
-        addEventListener: () => undefined,
-        removeEventListener: () => undefined
+        visualViewport,
+        addEventListener: (type, listener) => {
+            const registered = windowListeners.get(type) ?? new Set();
+            registered.add(listener);
+            windowListeners.set(type, registered);
+        },
+        dispatch(type, event = {}) {
+            for (const listener of windowListeners.get(type) ?? []) {
+                listener(event);
+            }
+        },
+        listenerCount(type) {
+            return windowListeners.get(type)?.size ?? 0;
+        },
+        removeEventListener: (type, listener) => {
+            windowListeners.get(type)?.delete(listener);
+        }
     };
 
     Object.defineProperty(globalThis, "document", {
@@ -378,6 +418,31 @@ test("ApplicationGameContainer destroy resets resizable state", () => {
 
     assert.equal(container.isResizable(), false);
     assert.equal(Display.isResizable(), false);
+});
+
+test("ApplicationGameContainer uses the shared window and VisualViewport resize path", async () => {
+    const { document, window } = installBrowserGlobals();
+    const game = createGame();
+    const container = new ApplicationGameContainer(game, 800, 600, false);
+    container.setResizable(true);
+
+    await withMockedRenderer(async () => {
+        await container.start();
+        try {
+            const canvas = document.body.children[0];
+            canvas.clientWidth = 960;
+            canvas.clientHeight = 540;
+
+            assert.equal(window.listenerCount("resize"), 1);
+            window.visualViewport.dispatch("resize");
+
+            assert.equal(container.getWidth(), 960);
+            assert.equal(container.getHeight(), 540);
+            assert.deepEqual(game.resizeCalls.at(-1), [960, 540]);
+        } finally {
+            container.destroy();
+        }
+    });
 });
 
 test("Mouse grabbed state follows browser pointer lock success and release", async () => {

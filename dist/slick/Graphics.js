@@ -21,9 +21,10 @@ export class Graphics {
     static MODE_SCREEN = 6;
     static current = null;
     static currentStack = [];
+    static sharedDefaultFont = null;
     color = Color.white.copy();
     background = Color.black.copy();
-    font = new CanvasFont();
+    font = Graphics.getSharedDefaultFont();
     defaultFont = this.font;
     lineWidth = 1;
     antiAlias = false;
@@ -34,6 +35,10 @@ export class Graphics {
     screenClipRecord = null;
     worldClipRecord = null;
     pixelScratch = new Uint8Array(4);
+    gradientColor1 = Color.white.copy();
+    gradientColor2 = Color.white.copy();
+    arcPointScratch = [];
+    trianglePointScratch = [];
     renderTarget;
     /**
      * Java Slick2D counterpart: Graphics constructors.
@@ -305,7 +310,7 @@ export class Graphics {
         const segments = c === undefined ? Graphics.DEFAULT_SEGMENTS : a;
         const start = c === undefined ? a : b;
         const end = c === undefined ? b : c;
-        const points = Graphics.arcPoints(x, y, width, height, segments, start, end);
+        const points = this.buildArcPoints(x, y, width, height, segments, start, end);
         const renderer = this.beginRenderTarget();
         try {
             renderer.drawLineStrip(points, this.color, this.lineWidth, IDENTITY_TRANSFORM);
@@ -321,13 +326,10 @@ export class Graphics {
         const segments = c === undefined ? Graphics.DEFAULT_SEGMENTS : a;
         const start = c === undefined ? a : b;
         const end = c === undefined ? b : c;
-        const boundary = Graphics.arcPoints(x, y, width, height, segments, start, end);
+        const boundary = this.buildArcPoints(x, y, width, height, segments, start, end);
         const cx = x + width / 2;
         const cy = y + height / 2;
-        const triangles = [];
-        for (let i = 0; i + 1 < boundary.length; i++) {
-            triangles.push([cx, cy], boundary[i], boundary[i + 1]);
-        }
+        const triangles = this.buildArcTriangles(boundary, cx, cy);
         const renderer = this.beginRenderTarget();
         try {
             renderer.fillTriangles(triangles, this.color, IDENTITY_TRANSFORM);
@@ -500,10 +502,18 @@ export class Graphics {
             h !== undefined &&
             i !== undefined &&
             j !== undefined) {
-            color1 = Color.fromFloats(a, b, c, Number(d));
+            color1 = this.gradientColor1;
+            color1.r = Math.min(a, 1);
+            color1.g = Math.min(b, 1);
+            color1.b = Math.min(c, 1);
+            color1.a = Math.min(Number(d), 1);
             x2 = e;
             y2 = f;
-            color2 = Color.fromFloats(g, h, i, j);
+            color2 = this.gradientColor2;
+            color2.r = Math.min(g, 1);
+            color2.g = Math.min(h, 1);
+            color2.b = Math.min(i, 1);
+            color2.a = Math.min(j, 1);
         }
         else {
             throw new SlickException("Invalid Graphics.drawGradientLine overload");
@@ -535,7 +545,11 @@ export class Graphics {
     getDrawMode() {
         return this.drawMode;
     }
-    static arcPoints(x, y, width, height, segments, start, end) {
+    static getSharedDefaultFont() {
+        Graphics.sharedDefaultFont ??= new CanvasFont();
+        return Graphics.sharedDefaultFont;
+    }
+    buildArcPoints(x, y, width, height, segments, start, end) {
         const normalizedSegments = Math.trunc(segments);
         if (normalizedSegments <= 0) {
             throw new RangeError("segments must be > 0");
@@ -547,13 +561,42 @@ export class Graphics {
         const step = Math.max(1, Math.trunc(360 / normalizedSegments));
         const cx = x + width / 2;
         const cy = y + height / 2;
-        const points = [];
-        for (let a = Math.trunc(start); a < Math.trunc(normalizedEnd + step); a += step) {
-            const angle = a > normalizedEnd ? normalizedEnd : a;
+        let count = 0;
+        for (let angleStep = Math.trunc(start); angleStep < Math.trunc(normalizedEnd + step); angleStep += step) {
+            const angle = angleStep > normalizedEnd ? normalizedEnd : angleStep;
             const radians = (angle * Math.PI) / 180;
-            points.push([cx + (FastTrig.cos(radians) * width) / 2, cy + (FastTrig.sin(radians) * height) / 2]);
+            const point = this.getScratchPoint(this.arcPointScratch, count++);
+            point[0] = cx + (FastTrig.cos(radians) * width) / 2;
+            point[1] = cy + (FastTrig.sin(radians) * height) / 2;
         }
-        return points;
+        this.arcPointScratch.length = count;
+        return this.arcPointScratch;
+    }
+    buildArcTriangles(boundary, cx, cy) {
+        let count = 0;
+        for (let i = 0; i + 1 < boundary.length; i++) {
+            const start = boundary[i];
+            const end = boundary[i + 1];
+            let point = this.getScratchPoint(this.trianglePointScratch, count++);
+            point[0] = cx;
+            point[1] = cy;
+            point = this.getScratchPoint(this.trianglePointScratch, count++);
+            point[0] = start[0];
+            point[1] = start[1];
+            point = this.getScratchPoint(this.trianglePointScratch, count++);
+            point[0] = end[0];
+            point[1] = end[1];
+        }
+        this.trianglePointScratch.length = count;
+        return this.trianglePointScratch;
+    }
+    getScratchPoint(points, index) {
+        let point = points[index];
+        if (!point) {
+            point = [0, 0];
+            points[index] = point;
+        }
+        return point;
     }
     static normalizeCornerRadius(width, height, radius) {
         if (radius < 0) {
@@ -569,9 +612,13 @@ export class Graphics {
             return;
         }
         const renderer = this.beginRenderTarget();
-        const previousWorldClip = this.worldClipRecord === null ? null : { ...this.worldClipRecord };
+        const hadWorldClip = this.worldClipRecord !== null;
+        const previousX = this.worldClipRecord?.x ?? 0;
+        const previousY = this.worldClipRecord?.y ?? 0;
+        const previousWidth = this.worldClipRecord?.width ?? 0;
+        const previousHeight = this.worldClipRecord?.height ?? 0;
         try {
-            this.applyWorldClip(renderer, { x, y, width, height });
+            this.applyWorldClipValues(renderer, x, y, width, height);
             const cols = Math.trunc(Math.ceil(width / patternWidth)) + 2;
             const rows = Math.trunc(Math.ceil(height / patternHeight)) + 2;
             for (let c = 0; c < cols; c++) {
@@ -582,9 +629,26 @@ export class Graphics {
             }
         }
         finally {
-            this.applyWorldClip(renderer, previousWorldClip);
+            if (hadWorldClip) {
+                this.applyWorldClipValues(renderer, previousX, previousY, previousWidth, previousHeight);
+            }
+            else {
+                this.applyWorldClip(renderer, null);
+            }
             this.endRenderTarget(renderer);
         }
+    }
+    applyWorldClipValues(renderer, x, y, width, height) {
+        if (this.worldClipRecord) {
+            this.worldClipRecord.x = x;
+            this.worldClipRecord.y = y;
+            this.worldClipRecord.width = width;
+            this.worldClipRecord.height = height;
+        }
+        else {
+            this.worldClipRecord = { x, y, width, height };
+        }
+        renderer.setWorldClip(x, y, width, height, IDENTITY_TRANSFORM);
     }
     applyWorldClip(renderer, clip) {
         if (clip === null) {
@@ -592,8 +656,7 @@ export class Graphics {
             renderer.clearWorldClip();
             return;
         }
-        this.worldClipRecord = { x: clip.x, y: clip.y, width: clip.width, height: clip.height };
-        renderer.setWorldClip(clip.x, clip.y, clip.width, clip.height, IDENTITY_TRANSFORM);
+        this.applyWorldClipValues(renderer, clip.x, clip.y, clip.width, clip.height);
     }
     withRenderTarget(callback) {
         const renderer = this.beginRenderTarget();
@@ -606,6 +669,7 @@ export class Graphics {
     }
     beginRenderTarget(activateDrawMode = true) {
         const renderer = Renderer.getBackend();
+        this.renderTarget?.markModified?.();
         const reuseActiveContext = Graphics.current === this && renderer.getRenderTarget() === this.renderTarget;
         this.renderContextFastPathStack.push(reuseActiveContext);
         if (reuseActiveContext) {

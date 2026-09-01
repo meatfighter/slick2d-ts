@@ -75,15 +75,15 @@ export class TGAImageData implements LoadableImageData {
         if (bytes.length < 18) {
             throw new SlickException("Invalid TGA file: header too short");
         }
-        const idLength = bytes[0];
-        const colorMapType = bytes[1];
-        const imageType = bytes[2];
+        const idLength = bytes[0]!;
+        const colorMapType = bytes[1]!;
+        const imageType = bytes[2]!;
         if (colorMapType !== 0 || imageType !== 2) {
             throw new SlickException("Unsupported TGA file: only uncompressed true-color images are supported");
         }
-        this.width = bytes[12] | (bytes[13] << 8);
-        this.height = bytes[14] | (bytes[15] << 8);
-        const bits = bytes[16];
+        this.width = bytes[12]! | (bytes[13]! << 8);
+        this.height = bytes[14]! | (bytes[15]! << 8);
+        const bits = bytes[16]!;
         if (bits !== 24 && bits !== 32) {
             throw new SlickException(`Unsupported TGA depth: ${bits}`);
         }
@@ -96,7 +96,7 @@ export class TGAImageData implements LoadableImageData {
         if (sourceStart + this.width * this.height * sourceComponents > bytes.length) {
             throw new SlickException("Invalid TGA file: pixel data truncated");
         }
-        const descriptor = bytes[17];
+        const descriptor = bytes[17]!;
         const topOrigin = (descriptor & 0x20) !== 0;
         this.buffer = new Uint8Array(this.texWidth * this.texHeight * components);
         for (let y = 0; y < this.height; y++) {
@@ -105,11 +105,11 @@ export class TGAImageData implements LoadableImageData {
             for (let x = 0; x < this.width; x++) {
                 const src = sourceStart + (sourceY * this.width + x) * sourceComponents;
                 const dst = (destY * this.texWidth + x) * components;
-                const b = bytes[src];
-                const g = bytes[src + 1];
-                const r = bytes[src + 2];
-                const sourceA = sourceComponents === 4 ? bytes[src + 3] : 255;
-                const transparentMatch = transparent ? r === transparent[0] && g === transparent[1] && b === transparent[2] : false;
+                const b = bytes[src]!;
+                const g = bytes[src + 1]!;
+                const r = bytes[src + 2]!;
+                const sourceA = sourceComponents === 4 ? bytes[src + 3]! : 255;
+                const transparentMatch = transparent ? r === transparent[0]! && g === transparent[1]! && b === transparent[2]! : false;
                 this.buffer[dst] = r;
                 this.buffer[dst + 1] = g;
                 this.buffer[dst + 2] = b;

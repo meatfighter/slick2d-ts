@@ -9,7 +9,6 @@ import { AppGameContainer } from "./AppGameContainer.js";
  */
 export class ApplicationGameContainer extends AppGameContainer {
     private resizable = false;
-    private resizeHandler: (() => void) | null = null;
 
     public constructor(game: Game);
     public constructor(game: Game, width: number, height: number, fullscreen: boolean);
@@ -22,24 +21,6 @@ export class ApplicationGameContainer extends AppGameContainer {
     public setResizable(resizable: boolean): void {
         this.resizable = resizable;
         Display.setResizable(resizable);
-        if (typeof window === "undefined") {
-            return;
-        }
-        if (resizable && !this.resizeHandler) {
-            this.resizeHandler = () => {
-                if (!this.resizable || !this.canvas) {
-                    return;
-                }
-                const rect = this.canvas.getBoundingClientRect();
-                const width = Math.max(1, Math.trunc(rect.width || this.canvas.clientWidth || this.getWidth()));
-                const height = Math.max(1, Math.trunc(rect.height || this.canvas.clientHeight || this.getHeight()));
-                this.setDisplayMode(width, height, this.isFullscreen());
-            };
-            window.addEventListener("resize", this.resizeHandler);
-        } else if (!resizable && this.resizeHandler) {
-            window.removeEventListener("resize", this.resizeHandler);
-            this.resizeHandler = null;
-        }
     }
 
     /** Java desktop wrapper counterpart: ApplicationGameContainer.isResizable(). */
@@ -49,12 +30,19 @@ export class ApplicationGameContainer extends AppGameContainer {
 
     /** Java Slick2D counterpart: AppGameContainer.destroy(). */
     public override destroy(): void {
-        if (this.resizeHandler && typeof window !== "undefined") {
-            window.removeEventListener("resize", this.resizeHandler);
-            this.resizeHandler = null;
-        }
         this.resizable = false;
         Display.setResizable(false);
         super.destroy();
+    }
+
+    protected override handleBrowserResize(): void {
+        if (this.isFullscreen() || !this.resizable || !this.canvas) {
+            super.handleBrowserResize();
+            return;
+        }
+        const rect = this.canvas.getBoundingClientRect();
+        const width = Math.max(1, Math.trunc(rect.width || this.canvas.clientWidth || this.getWidth()));
+        const height = Math.max(1, Math.trunc(rect.height || this.canvas.clientHeight || this.getHeight()));
+        this.setDisplayMode(width, height, false);
     }
 }

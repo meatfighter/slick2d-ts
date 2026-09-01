@@ -120,6 +120,11 @@ export declare class AppGameContainer extends GameContainer {
     private scheduleNextFrame;
     private cancelScheduledFrame;
     private readonly handleWindowResize;
+    /**
+     * Browser resize policy hook shared by window and VisualViewport events.
+     * ApplicationGameContainer overrides this for resizable-window semantics.
+     */
+    protected handleBrowserResize(): void;
     private readonly handleFullscreenChange;
     private readonly handleVisibilityChange;
     private readonly handleWebGLContextLost;

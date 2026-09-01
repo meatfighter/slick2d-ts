@@ -23,6 +23,7 @@ export declare class Graphics {
     static readonly MODE_SCREEN = 6;
     private static current;
     private static readonly currentStack;
+    private static sharedDefaultFont;
     private color;
     private background;
     private font;
@@ -36,6 +37,10 @@ export declare class Graphics {
     private screenClipRecord;
     private worldClipRecord;
     private readonly pixelScratch;
+    private readonly gradientColor1;
+    private readonly gradientColor2;
+    private readonly arcPointScratch;
+    private readonly trianglePointScratch;
     private readonly renderTarget;
     constructor();
     constructor(width: number, height: number);
@@ -189,9 +194,13 @@ export declare class Graphics {
     setDimensions(width: number, height: number): void;
     /** Browser parity helper: returns current draw mode. */
     getDrawMode(): number;
-    private static arcPoints;
+    private static getSharedDefaultFont;
+    private buildArcPoints;
+    private buildArcTriangles;
+    private getScratchPoint;
     private static normalizeCornerRadius;
     private fillPatternRect;
+    private applyWorldClipValues;
     private applyWorldClip;
     private withRenderTarget;
     private beginRenderTarget;

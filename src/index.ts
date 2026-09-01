@@ -28,6 +28,7 @@ export * from "./slick/openal/SoundStore.js";
 export * from "./slick/opengl/CursorLoader.js";
 export * from "./slick/opengl/ImageData.js";
 export * from "./slick/opengl/ImageIOImageData.js";
+export * from "./slick/opengl/GraphicsFactory.js";
 export * from "./slick/opengl/InternalTextureLoader.js";
 export * from "./slick/opengl/LoadableImageData.js";
 export * from "./slick/opengl/SlickCallable.js";

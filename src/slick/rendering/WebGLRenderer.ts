@@ -355,7 +355,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
             this.popColorMask();
         }
         this.transformStack.length = 1;
-        this.writeIdentity(this.transformStack[0]);
+        this.writeIdentity(this.transformStack[0]!);
         this.screenClip = null;
         this.worldClip = null;
         this.applyActiveClip();
@@ -389,6 +389,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         }
         if (target) {
             target.ensure(gl, this.contextGeneration);
+            target.markModified?.();
             gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
             this.setActiveDimensions(target.width, target.height, target.width, target.height);
         } else {
@@ -626,7 +627,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         const color =
             tint ??
             (useCurrentColorForNullTint && !cornerColors
-                ? this.setScratchColor(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3])
+                ? this.setScratchColor(this.currentColor[0]!, this.currentColor[1]!, this.currentColor[2]!, this.currentColor[3]!)
                 : WHITE_COLOR);
         const topLeft = cornerColors?.[0] ?? WHITE_COLOR;
         const topRight = cornerColors?.[1] ?? WHITE_COLOR;
@@ -705,8 +706,8 @@ export class WebGLRenderer implements RenderBackend, SGL {
     /** Draws connected line segments. */
     public drawLineStrip(points: Array<[number, number]>, color: Color, width: number, transform: Matrix3 = IDENTITY_TRANSFORM): void {
         for (let i = 0; i + 1 < points.length; i++) {
-            const start = points[i];
-            const end = points[i + 1];
+            const start = points[i]!;
+            const end = points[i + 1]!;
             this.drawLine(start[0], start[1], end[0], end[1], color, width, transform);
         }
     }
@@ -1010,10 +1011,10 @@ export class WebGLRenderer implements RenderBackend, SGL {
                 const sourceColumn = Math.min(sourceWidth - 1, Math.max(0, Math.floor(((column + 0.5) * sourceWidth) / width)));
                 const sourceOffset = (sourceRow * sourceWidth + sourceColumn) * 4;
                 const targetOffset = (row * width + column) * 4;
-                target[targetOffset] = source[sourceOffset];
-                target[targetOffset + 1] = source[sourceOffset + 1];
-                target[targetOffset + 2] = source[sourceOffset + 2];
-                target[targetOffset + 3] = source[sourceOffset + 3];
+                target[targetOffset] = source[sourceOffset]!;
+                target[targetOffset + 1] = source[sourceOffset + 1]!;
+                target[targetOffset + 2] = source[sourceOffset + 2]!;
+                target[targetOffset + 3] = source[sourceOffset + 3]!;
             }
         }
     }
@@ -1227,7 +1228,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
 
     /** Java Slick2D counterpart: SGL.glLoadIdentity(). */
     public glLoadIdentity(): void {
-        this.writeIdentity(this.transformStack[this.transformStack.length - 1]);
+        this.writeIdentity(this.transformStack[this.transformStack.length - 1]!);
     }
 
     /** Java Slick2D counterpart: SGL.glGetInteger(int, IntBuffer). */
@@ -1259,7 +1260,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
             scratch[15] = m[8];
             const limit = Math.min(ret.length, scratch.length);
             for (let i = 0; i < limit; i++) {
-                ret[i] = scratch[i];
+                ret[i] = scratch[i]!;
             }
             return;
         }
@@ -1442,19 +1443,19 @@ export class WebGLRenderer implements RenderBackend, SGL {
             return;
         }
         if (this.immediateType === this.GL_LINES) {
-            const color = this.setScratchColor(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3]);
+            const color = this.setScratchColor(this.currentColor[0]!, this.currentColor[1]!, this.currentColor[2]!, this.currentColor[3]!);
             for (let i = 0; i + 7 < this.immediateVertices.length; i += 8) {
                 this.drawLine(
-                    this.immediateVertices[i],
-                    this.immediateVertices[i + 1],
-                    this.immediateVertices[i + 4],
-                    this.immediateVertices[i + 5],
+                    this.immediateVertices[i]!,
+                    this.immediateVertices[i + 1]!,
+                    this.immediateVertices[i + 4]!,
+                    this.immediateVertices[i + 5]!,
                     color,
                     this.lineWidth
                 );
             }
         } else {
-            const color = this.setScratchColor(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3]);
+            const color = this.setScratchColor(this.currentColor[0]!, this.currentColor[1]!, this.currentColor[2]!, this.currentColor[3]!);
             this.drawImmediateSolidVertices(color);
         }
         this.immediateVertices.length = 0;
@@ -1607,12 +1608,12 @@ export class WebGLRenderer implements RenderBackend, SGL {
     public glLoadMatrix(buffer: Float32Array): void {
         if (buffer.length >= 16) {
             const matrix = this.currentMatrix();
-            matrix[0] = buffer[0];
-            matrix[1] = buffer[4];
-            matrix[2] = buffer[12];
-            matrix[3] = buffer[1];
-            matrix[4] = buffer[5];
-            matrix[5] = buffer[13];
+            matrix[0] = buffer[0]!;
+            matrix[1] = buffer[4]!;
+            matrix[2] = buffer[12]!;
+            matrix[3] = buffer[1]!;
+            matrix[4] = buffer[5]!;
+            matrix[5] = buffer[13]!;
             matrix[6] = 0;
             matrix[7] = 0;
             matrix[8] = 1;
@@ -1984,7 +1985,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         const matrix = this.combinedMatrix(transform);
         const vertices = this.ensureDynamicSolidCapacity(points.length);
         for (let i = 0; i < points.length; i++) {
-            const point = points[i];
+            const point = points[i]!;
             this.writeSolidVertex(vertices, i, matrix, point[0], point[1], color);
         }
         this.submitSolidVertices(vertices, points.length);
@@ -1998,7 +1999,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         const vertices = this.ensureDynamicSolidCapacity(vertexCount);
         const matrix = this.currentMatrix();
         for (let vertex = 0, source = 0; vertex < vertexCount; vertex++, source += 4) {
-            this.writeSolidVertex(vertices, vertex, matrix, this.immediateVertices[source], this.immediateVertices[source + 1], color);
+            this.writeSolidVertex(vertices, vertex, matrix, this.immediateVertices[source]!, this.immediateVertices[source + 1]!, color);
         }
         this.submitSolidVertices(vertices, vertexCount);
     }
@@ -2209,6 +2210,6 @@ export class WebGLRenderer implements RenderBackend, SGL {
     }
 
     private currentMatrix(): Matrix3 {
-        return this.transformStack[this.transformStack.length - 1];
+        return this.transformStack[this.transformStack.length - 1]!;
     }
 }

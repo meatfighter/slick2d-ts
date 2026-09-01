@@ -2,11 +2,14 @@ import { Renderer } from "./renderer/Renderer.js";
 /**
  * Java Slick2D counterpart: org.newdawn.slick.opengl.InternalTextureLoader.
  *
- * Compatibility facade over WebGL texture resource caching.
+ * Tracks all logical texture resources and shares path-loaded textures using
+ * Slick's separate nearest/linear caches.
  */
 export class InternalTextureLoader {
     static instance = new InternalTextureLoader();
     textures = new Set();
+    linearTextures = new Map();
+    nearestTextures = new Map();
     holdTextureData = false;
     deferredLoading = false;
     sixteenBit = false;
@@ -26,12 +29,29 @@ export class InternalTextureLoader {
     isDeferredLoading() {
         return this.deferredLoading;
     }
+    /**
+     * Browser texture acquisition helper mirroring Slick's filter-separated
+     * cache identity: resource reference, transparent color, and load flip.
+     */
+    getTexture(ref, filter, transparent, flipped, factory) {
+        const cache = filter === 2 ? this.nearestTextures : this.linearTextures;
+        const key = InternalTextureLoader.cacheKey(ref, transparent, flipped);
+        const existing = cache.get(key);
+        if (existing) {
+            return existing;
+        }
+        const texture = factory();
+        cache.set(key, texture);
+        return texture;
+    }
     clear(name) {
         const gl = Renderer.getBackend().getContext();
-        for (const texture of Array.from(this.textures)) {
+        for (const texture of this.textures) {
             if (name === undefined || texture.ref === name) {
+                // Remove tracking first so clear() is idempotent even for
+                // compatibility resources whose dispose() does not unregister itself.
+                this.unregister(texture);
                 texture.dispose(gl);
-                this.textures.delete(texture);
             }
         }
     }
@@ -66,9 +86,11 @@ export class InternalTextureLoader {
     register(texture) {
         this.textures.add(texture);
     }
-    /** Browser parity helper: removes a texture resource from Java-style cache tracking. */
+    /** Browser parity helper: removes a texture resource from tracking and acquisition caches. */
     unregister(texture) {
         this.textures.delete(texture);
+        InternalTextureLoader.removeCachedTexture(this.linearTextures, texture);
+        InternalTextureLoader.removeCachedTexture(this.nearestTextures, texture);
     }
     /** Browser parity helper: returns whether texture data retention was requested. */
     isHoldingTextureData() {
@@ -77,6 +99,19 @@ export class InternalTextureLoader {
     /** Browser parity helper: returns whether 16-bit mode was requested. */
     is16BitMode() {
         return this.sixteenBit;
+    }
+    static cacheKey(ref, transparent, flipped) {
+        if (!transparent) {
+            return `${ref}:${flipped ? 1 : 0}`;
+        }
+        return `${ref}:${flipped ? 1 : 0}:${transparent.getRed()}:${transparent.getGreen()}:${transparent.getBlue()}`;
+    }
+    static removeCachedTexture(cache, texture) {
+        for (const [key, cached] of cache) {
+            if (cached === texture) {
+                cache.delete(key);
+            }
+        }
     }
 }
 //# sourceMappingURL=InternalTextureLoader.js.map

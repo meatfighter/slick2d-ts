@@ -1,10 +1,11 @@
+import type { ControlledInputReciever } from "./ControlledInputReciever.js";
 import type { ControllerListener } from "./ControllerListener.js";
 import type { InputListener } from "./InputListener.js";
 import type { KeyListener } from "./KeyListener.js";
 import type { MouseListener } from "./MouseListener.js";
 
 type TargetElement = HTMLElement | Window | Document;
-type GamepadSnapshot = readonly (Gamepad | null)[];
+type GamepadSnapshot = readonly Gamepad[];
 
 export interface ControllerDirectionAxisPair {
     readonly horizontalAxis: number;
@@ -165,6 +166,15 @@ export class Input {
 
     private static controllersDisabled = false;
     private static gamepadCacheGeneration = 0;
+    private static readonly INITIAL_EVENT_CAPACITY = 32;
+    private static readonly EVENT_KEY_PRESSED = 1;
+    private static readonly EVENT_KEY_RELEASED = 2;
+    private static readonly EVENT_MOUSE_PRESSED = 3;
+    private static readonly EVENT_MOUSE_RELEASED = 4;
+    private static readonly EVENT_MOUSE_MOVED = 5;
+    private static readonly EVENT_MOUSE_DRAGGED = 6;
+    private static readonly EVENT_MOUSE_WHEEL = 7;
+
     private readonly downKeys = new Set<number>();
     private readonly pressedKeys = new Set<number>();
     private readonly downMouse = new Set<number>();
@@ -176,6 +186,11 @@ export class Input {
     private readonly keyListeners: KeyListener[] = [];
     private readonly mouseListeners: MouseListener[] = [];
     private readonly controllerListeners: ControllerListener[] = [];
+    private readonly dispatchKeyListeners: KeyListener[] = [];
+    private readonly dispatchMouseListeners: MouseListener[] = [];
+    private readonly dispatchControllerListeners: ControllerListener[] = [];
+    private readonly lifecycleListeners: ControlledInputReciever[] = [];
+    private readonly startedListeners: ControlledInputReciever[] = [];
     private target: TargetElement | null = null;
     private paused = false;
     private scaleX = 1;
@@ -187,23 +202,42 @@ export class Input {
     private absoluteMouseX = 0;
     private absoluteMouseY = 0;
     private keyRepeat = false;
-    private keyRepeatInitial = 400;
-    private keyRepeatInterval = 50;
     private doubleClickDelay = 250;
     private mouseClickTolerance = 5;
+    private lastClickButton = -1;
+    private lastClickX = 0;
+    private lastClickY = 0;
+    private lastClickTime = Number.NEGATIVE_INFINITY;
+    private readonly mousePressX = new Map<number, number>();
+    private readonly mousePressY = new Map<number, number>();
     private preventDefaultElement: HTMLElement | null = null;
     private preventDefaultTouchAction: string | null = null;
     private browserInputCapture = true;
     private browserInputCaptureConfigured = false;
-    private cachedGamepads: GamepadSnapshot = [];
+    private readonly cachedGamepads: Gamepad[] = [];
     private gamepadsCached = false;
     private gamepadCacheGeneration = -1;
     private controllerStateSnapshotReady = false;
+    private readonly controllerPhysicalIndices = new Int32Array(Input.BROWSER_CONTROLLER_LIMIT).fill(-1);
+    private readonly controllerPhysicalIds = new Array<string | null>(Input.BROWSER_CONTROLLER_LIMIT).fill(null);
     private additionalControllerDirectionAxes: number[] = [];
     private readonly additionalControllerAxisBaselines = new Float64Array(Input.BROWSER_CONTROLLER_LIMIT * Input.BROWSER_AXIS_LIMIT);
     private readonly additionalControllerAxisOwners = new Array<string | null>(Input.BROWSER_CONTROLLER_LIMIT).fill(null);
     private additionalControllerAxisThreshold = 0.5;
     private additionalControllerAxisRecenterThreshold = 0.05;
+
+    private eventTypes = new Uint8Array(Input.INITIAL_EVENT_CAPACITY);
+    private eventA = new Int32Array(Input.INITIAL_EVENT_CAPACITY);
+    private eventB = new Int32Array(Input.INITIAL_EVENT_CAPACITY);
+    private eventC = new Int32Array(Input.INITIAL_EVENT_CAPACITY);
+    private eventD = new Int32Array(Input.INITIAL_EVENT_CAPACITY);
+    private eventCharacters = new Uint32Array(Input.INITIAL_EVENT_CAPACITY);
+    private eventTimes = new Float64Array(Input.INITIAL_EVENT_CAPACITY);
+    private eventHead = 0;
+    private eventCount = 0;
+    private dispatchingEvent = false;
+    private eventConsumed = false;
+    private dispatchedEventTime = 0;
 
     /**
      * Java Slick2D counterpart: Input.disableControllers().
@@ -215,20 +249,12 @@ export class Input {
         Input.gamepadCacheGeneration++;
     }
 
-    /**
-     * Java Slick2D counterpart: Input.getKeyName(int).
-     *
-     * Returns a stable diagnostic key name for LWJGL key codes.
-     */
+    /** Java Slick2D counterpart: Input.getKeyName(int). */
     public static getKeyName(code: number): string {
         return Input.keyNames.get(code) ?? `KEY_${code}`;
     }
 
-    /**
-     * Java Slick2D counterpart: Input(int height).
-     *
-     * Creates an input adapter for a container of the supplied height.
-     */
+    /** Java Slick2D counterpart: Input(int height). */
     public constructor(private height: number) {
         this.additionalControllerAxisBaselines.fill(Number.NaN);
     }
@@ -311,17 +337,15 @@ export class Input {
 
     /** Browser parity helper: applies a container default unless the caller chose explicitly. */
     public setBrowserInputCaptureDefault(enabled: boolean): void {
-        if (this.browserInputCaptureConfigured) {
-            return;
+        if (!this.browserInputCaptureConfigured) {
+            this.setBrowserInputCapture(enabled);
         }
-        this.setBrowserInputCapture(enabled);
     }
 
     private setBrowserInputCapture(enabled: boolean): void {
         if (this.browserInputCapture === enabled) {
             return;
         }
-
         this.browserInputCapture = enabled;
         this.restorePreventDefaultElementStyle();
         this.applyPreventDefaultElementStyle();
@@ -354,11 +378,17 @@ export class Input {
 
     /** Java Slick2D counterpart: Input.setDoubleClickInterval(int). */
     public setDoubleClickInterval(delay: number): void {
+        if (!Number.isSafeInteger(delay) || delay < 0) {
+            throw new RangeError("Double-click interval must be a non-negative safe integer");
+        }
         this.doubleClickDelay = delay;
     }
 
     /** Java Slick2D counterpart: Input.setMouseClickTolerance(int). */
     public setMouseClickTolerance(mouseClickTolerance: number): void {
+        if (!Number.isSafeInteger(mouseClickTolerance) || mouseClickTolerance < 0) {
+            throw new RangeError("Mouse click tolerance must be a non-negative safe integer");
+        }
         this.mouseClickTolerance = mouseClickTolerance;
     }
 
@@ -503,6 +533,9 @@ export class Input {
     /** Java Slick2D counterpart: Input.isControlPressed(int, int). */
     public isControlPressed(button: number, controller: number): boolean;
     public isControlPressed(button: number, controller: number = 0): boolean {
+        if (Input.controllersDisabled) {
+            return false;
+        }
         const key = Input.controlKey(controller, button);
         const pressed = this.controlPressed.has(key);
         this.controlPressed.delete(key);
@@ -511,17 +544,19 @@ export class Input {
 
     /** Java Slick2D counterpart: Input.isButtonPressed(int, int). */
     public isButtonPressed(index: number, controller: number): boolean {
+        if (Input.controllersDisabled) {
+            return false;
+        }
         const gamepads = this.getFrameGamepads();
         if (controller === Input.ANY_CONTROLLER) {
             for (const gamepad of gamepads) {
-                if (Input.isUsableGamepad(gamepad) && gamepad.buttons[index]?.pressed === true) {
+                if (gamepad.buttons[index]?.pressed === true) {
                     return true;
                 }
             }
             return false;
         }
-        const gamepad = gamepads[controller];
-        return Input.isUsableGamepad(gamepad) && gamepad.buttons[index]?.pressed === true;
+        return gamepads[controller]?.buttons[index]?.pressed === true;
     }
 
     /** Java Slick2D counterpart: Input.isButton1Pressed(int). */
@@ -546,29 +581,24 @@ export class Input {
 
     /** Java Slick2D counterpart: Input.getControllerCount(). */
     public getControllerCount(): number {
-        if (Input.controllersDisabled) {
-            return 0;
-        }
-        let count = 0;
-        const gamepads = this.getFrameGamepads();
-        for (const gamepad of gamepads) {
-            if (Input.isUsableGamepad(gamepad)) {
-                count++;
-            }
-        }
-        return count;
+        return Input.controllersDisabled ? 0 : this.getFrameGamepads().length;
     }
 
     /** Java Slick2D counterpart: Input.getAxisCount(int). */
     public getAxisCount(controller: number): number {
-        const gamepad = this.getFrameGamepads()[controller];
-        return Input.isUsableGamepad(gamepad) ? gamepad.axes.length : 0;
+        if (Input.controllersDisabled) {
+            return 0;
+        }
+        return this.getFrameGamepads()[controller]?.axes.length ?? 0;
     }
 
     /** Java Slick2D counterpart: Input.getAxisValue(int, int). */
     public getAxisValue(controller: number, axis: number): number {
+        if (Input.controllersDisabled) {
+            return 0;
+        }
         const gamepad = this.getFrameGamepads()[controller];
-        return Input.isUsableGamepad(gamepad) ? Input.readGamepadAxis(gamepad, axis) : 0;
+        return gamepad ? Input.readGamepadAxis(gamepad, axis) : 0;
     }
 
     /** Java Slick2D counterpart: Input.getAxisName(int, int). */
@@ -578,46 +608,22 @@ export class Input {
 
     /** Java Slick2D counterpart: Input.isControllerLeft(int). */
     public isControllerLeft(controller: number): boolean {
-        if (Input.controllersDisabled) {
-            return false;
-        }
-        if (this.controllerStateSnapshotReady) {
-            return this.isControllerControlDown(0, controller);
-        }
-        return this.anyController(controller, Input.isGamepadLeft);
+        return this.controllerStateSnapshotReady ? this.isControllerControlDown(0, controller) : this.anyController(controller, Input.isGamepadLeft);
     }
 
     /** Java Slick2D counterpart: Input.isControllerRight(int). */
     public isControllerRight(controller: number): boolean {
-        if (Input.controllersDisabled) {
-            return false;
-        }
-        if (this.controllerStateSnapshotReady) {
-            return this.isControllerControlDown(1, controller);
-        }
-        return this.anyController(controller, Input.isGamepadRight);
+        return this.controllerStateSnapshotReady ? this.isControllerControlDown(1, controller) : this.anyController(controller, Input.isGamepadRight);
     }
 
     /** Java Slick2D counterpart: Input.isControllerUp(int). */
     public isControllerUp(controller: number): boolean {
-        if (Input.controllersDisabled) {
-            return false;
-        }
-        if (this.controllerStateSnapshotReady) {
-            return this.isControllerControlDown(2, controller);
-        }
-        return this.anyController(controller, Input.isGamepadUp);
+        return this.controllerStateSnapshotReady ? this.isControllerControlDown(2, controller) : this.anyController(controller, Input.isGamepadUp);
     }
 
     /** Java Slick2D counterpart: Input.isControllerDown(int). */
     public isControllerDown(controller: number): boolean {
-        if (Input.controllersDisabled) {
-            return false;
-        }
-        if (this.controllerStateSnapshotReady) {
-            return this.isControllerControlDown(3, controller);
-        }
-        return this.anyController(controller, Input.isGamepadDown);
+        return this.controllerStateSnapshotReady ? this.isControllerControlDown(3, controller) : this.anyController(controller, Input.isGamepadDown);
     }
 
     /** Java Slick2D counterpart: Input.isControllerLeftPressed(int). */
@@ -673,10 +679,16 @@ export class Input {
     }
 
     /** Java Slick2D counterpart: Input.consumeEvent(). */
-    public consumeEvent(): void {}
+    public consumeEvent(): void {
+        if (this.dispatchingEvent) {
+            this.eventConsumed = true;
+        }
+    }
 
     /** Java Slick2D counterpart: Input.considerDoubleClick(int, int, int). */
-    public considerDoubleClick(_button: number, _x: number, _y: number): void {}
+    public considerDoubleClick(button: number, x: number, y: number): void {
+        this.considerDoubleClickAt(button, x, y, this.dispatchingEvent ? this.dispatchedEventTime : Input.now());
+    }
 
     /** Java Slick2D counterpart: Input.poll(int, int). */
     public poll(_width: number, height: number): void {
@@ -687,25 +699,44 @@ export class Input {
         }
         if (this.paused) {
             this.clearPressedRecords();
+            this.clearQueuedEvents();
             this.invalidateGamepads();
             return;
         }
-        if (Input.controllersDisabled) {
-            this.invalidateGamepads();
-        } else {
-            this.refreshGamepads();
+
+        this.snapshotListeners();
+        this.startedListeners.length = 0;
+        for (const listener of this.lifecycleListeners) {
+            if (isAccepting(listener)) {
+                listener.inputStarted();
+                this.startedListeners.push(listener);
+            }
         }
-        this.pollControllers();
+
+        try {
+            this.dispatchQueuedEvents();
+            if (Input.controllersDisabled) {
+                this.invalidateGamepads();
+                this.clearAllControllerState();
+            } else {
+                this.refreshGamepads();
+                this.pollControllers();
+            }
+        } finally {
+            this.dispatchingEvent = false;
+            this.eventConsumed = false;
+            for (const listener of this.startedListeners) {
+                listener.inputEnded();
+            }
+        }
     }
 
     /** Java Slick2D counterpart: Input.enableKeyRepeat(int, int). */
-    public enableKeyRepeat(initial: number, interval: number): void;
+    public enableKeyRepeat(_initial: number, _interval: number): void;
     /** Java Slick2D counterpart: Input.enableKeyRepeat(). */
     public enableKeyRepeat(): void;
-    public enableKeyRepeat(initial: number = 400, interval: number = 50): void {
+    public enableKeyRepeat(_initial: number = 400, _interval: number = 50): void {
         this.keyRepeat = true;
-        this.keyRepeatInitial = initial;
-        this.keyRepeatInterval = interval;
     }
 
     /** Java Slick2D counterpart: Input.disableKeyRepeat(). */
@@ -743,12 +774,7 @@ export class Input {
         const wasDown = this.downKeys.has(key);
         this.downKeys.add(key);
         if (!wasDown || this.keyRepeat) {
-            this.pressedKeys.add(key);
-            for (const listener of this.keyListeners) {
-                if (isAccepting(listener)) {
-                    listener.keyPressed(key, event.key?.length === 1 ? event.key : "\0");
-                }
-            }
+            this.enqueueEvent(Input.EVENT_KEY_PRESSED, key, 0, 0, 0, event.key?.length === 1 ? event.key.charCodeAt(0) : 0, Input.eventTimestamp(event));
         }
     };
 
@@ -761,13 +787,8 @@ export class Input {
             event.preventDefault();
         }
         this.downKeys.delete(key);
-        if (this.paused || !this.shouldAcceptGameKey(event)) {
-            return;
-        }
-        for (const listener of this.keyListeners) {
-            if (isAccepting(listener)) {
-                listener.keyReleased(key, event.key?.length === 1 ? event.key : "\0");
-            }
+        if (!this.paused && this.shouldAcceptGameKey(event)) {
+            this.enqueueEvent(Input.EVENT_KEY_RELEASED, key, 0, 0, 0, event.key?.length === 1 ? event.key.charCodeAt(0) : 0, Input.eventTimestamp(event));
         }
     };
 
@@ -779,12 +800,7 @@ export class Input {
         const button = Input.mouseButtonFromEvent(event);
         this.updateMouse(event);
         this.downMouse.add(button);
-        this.pressedMouse.add(button);
-        for (const listener of this.mouseListeners) {
-            if (isAccepting(listener)) {
-                listener.mousePressed(button, this.mouseX, this.mouseY);
-            }
-        }
+        this.enqueueEvent(Input.EVENT_MOUSE_PRESSED, button, this.mouseX, this.mouseY, 0, 0, Input.eventTimestamp(event));
     };
 
     private readonly handlePointerUp = (event: PointerEvent): void => {
@@ -798,12 +814,7 @@ export class Input {
         const button = Input.mouseButtonFromEvent(event);
         this.updateMouse(event);
         this.downMouse.delete(button);
-        for (const listener of this.mouseListeners) {
-            if (isAccepting(listener)) {
-                listener.mouseReleased(button, this.mouseX, this.mouseY);
-                listener.mouseClicked(button, this.mouseX, this.mouseY, 1);
-            }
-        }
+        this.enqueueEvent(Input.EVENT_MOUSE_RELEASED, button, this.mouseX, this.mouseY, 0, 0, Input.eventTimestamp(event));
     };
 
     private readonly handlePointerMove = (event: PointerEvent): void => {
@@ -817,15 +828,15 @@ export class Input {
         const oldX = this.mouseX;
         const oldY = this.mouseY;
         this.updateMouse(event);
-        for (const listener of this.mouseListeners) {
-            if (isAccepting(listener)) {
-                if (this.downMouse.size > 0) {
-                    listener.mouseDragged(oldX, oldY, this.mouseX, this.mouseY);
-                } else {
-                    listener.mouseMoved(oldX, oldY, this.mouseX, this.mouseY);
-                }
-            }
-        }
+        this.enqueueEvent(
+            this.downMouse.size > 0 ? Input.EVENT_MOUSE_DRAGGED : Input.EVENT_MOUSE_MOVED,
+            oldX,
+            oldY,
+            this.mouseX,
+            this.mouseY,
+            0,
+            Input.eventTimestamp(event)
+        );
     };
 
     private readonly handleWheel = (event: WheelEvent): void => {
@@ -833,18 +844,13 @@ export class Input {
             return;
         }
         this.preventBrowserDefault(event);
-        for (const listener of this.mouseListeners) {
-            if (isAccepting(listener)) {
-                listener.mouseWheelMoved(Math.trunc(-event.deltaY));
-            }
-        }
+        this.enqueueEvent(Input.EVENT_MOUSE_WHEEL, Math.trunc(-event.deltaY), 0, 0, 0, 0, Input.eventTimestamp(event));
     };
 
     private readonly handleContextMenu = (event: Event): void => {
-        if (this.paused || !this.shouldAcceptPointerEvent(event)) {
-            return;
+        if (!this.paused && this.shouldAcceptPointerEvent(event)) {
+            this.preventBrowserDefault(event);
         }
-        this.preventBrowserDefault(event);
     };
 
     private readonly handleFocusLost = (): void => {
@@ -857,6 +863,258 @@ export class Input {
         }
     };
 
+    private snapshotListeners(): void {
+        Input.copyArray(this.keyListeners, this.dispatchKeyListeners);
+        Input.copyArray(this.mouseListeners, this.dispatchMouseListeners);
+        Input.copyArray(this.controllerListeners, this.dispatchControllerListeners);
+        this.lifecycleListeners.length = 0;
+        this.appendUniqueLifecycleListeners(this.dispatchKeyListeners);
+        this.appendUniqueLifecycleListeners(this.dispatchMouseListeners);
+        this.appendUniqueLifecycleListeners(this.dispatchControllerListeners);
+    }
+
+    private appendUniqueLifecycleListeners(listeners: readonly ControlledInputReciever[]): void {
+        for (const listener of listeners) {
+            if (!this.lifecycleListeners.includes(listener)) {
+                this.lifecycleListeners.push(listener);
+            }
+        }
+    }
+
+    private dispatchQueuedEvents(): void {
+        const eventsToDispatch = this.eventCount;
+        for (let eventIndex = 0; eventIndex < eventsToDispatch; eventIndex++) {
+            const index = this.eventHead;
+            const type = this.eventTypes[index]!;
+            const a = this.eventA[index]!;
+            const b = this.eventB[index]!;
+            const c = this.eventC[index]!;
+            const d = this.eventD[index]!;
+            const character = this.eventCharacters[index]!;
+            const timestamp = this.eventTimes[index]!;
+            this.eventHead = (this.eventHead + 1) % this.eventTypes.length;
+            this.eventCount--;
+
+            switch (type) {
+                case Input.EVENT_KEY_PRESSED:
+                    this.pressedKeys.add(a);
+                    this.dispatchKeyPressed(a, character === 0 ? "\0" : String.fromCharCode(character), timestamp);
+                    break;
+                case Input.EVENT_KEY_RELEASED:
+                    this.dispatchKeyReleased(a, character === 0 ? "\0" : String.fromCharCode(character), timestamp);
+                    break;
+                case Input.EVENT_MOUSE_PRESSED:
+                    this.pressedMouse.add(a);
+                    this.mousePressX.set(a, b);
+                    this.mousePressY.set(a, c);
+                    this.dispatchMousePressed(a, b, c, timestamp);
+                    break;
+                case Input.EVENT_MOUSE_RELEASED: {
+                    this.dispatchMouseReleased(a, b, c, timestamp);
+                    const pressX = this.mousePressX.get(a);
+                    const pressY = this.mousePressY.get(a);
+                    this.mousePressX.delete(a);
+                    this.mousePressY.delete(a);
+                    if (
+                        pressX !== undefined &&
+                        pressY !== undefined &&
+                        Math.abs(b - pressX) <= this.mouseClickTolerance &&
+                        Math.abs(c - pressY) <= this.mouseClickTolerance
+                    ) {
+                        this.considerDoubleClickAt(a, b, c, timestamp);
+                    }
+                    break;
+                }
+                case Input.EVENT_MOUSE_MOVED:
+                    this.dispatchMouseMoved(a, b, c, d, false, timestamp);
+                    break;
+                case Input.EVENT_MOUSE_DRAGGED:
+                    this.dispatchMouseMoved(a, b, c, d, true, timestamp);
+                    break;
+                case Input.EVENT_MOUSE_WHEEL:
+                    this.dispatchMouseWheel(a, timestamp);
+                    break;
+            }
+        }
+        if (this.eventCount === 0) {
+            this.eventHead = 0;
+        }
+    }
+
+    private considerDoubleClickAt(button: number, x: number, y: number, timestamp: number): void {
+        const elapsed = timestamp - this.lastClickTime;
+        const withinTime = elapsed >= 0 && elapsed <= this.doubleClickDelay;
+        const withinDistance = Math.abs(x - this.lastClickX) <= this.mouseClickTolerance && Math.abs(y - this.lastClickY) <= this.mouseClickTolerance;
+        const doubleClick = button === this.lastClickButton && withinTime && withinDistance;
+        this.dispatchMouseClicked(button, x, y, doubleClick ? 2 : 1, timestamp);
+        if (doubleClick) {
+            this.lastClickButton = -1;
+            this.lastClickTime = Number.NEGATIVE_INFINITY;
+        } else {
+            this.lastClickButton = button;
+            this.lastClickX = x;
+            this.lastClickY = y;
+            this.lastClickTime = timestamp;
+        }
+    }
+
+    private dispatchKeyPressed(key: number, character: string, timestamp: number): void {
+        this.beginEventDispatch(timestamp);
+        for (const listener of this.dispatchKeyListeners) {
+            if (isAccepting(listener)) {
+                listener.keyPressed(key, character);
+                if (this.eventConsumed) {
+                    break;
+                }
+            }
+        }
+        this.endEventDispatch();
+    }
+
+    private dispatchKeyReleased(key: number, character: string, timestamp: number): void {
+        this.beginEventDispatch(timestamp);
+        for (const listener of this.dispatchKeyListeners) {
+            if (isAccepting(listener)) {
+                listener.keyReleased(key, character);
+                if (this.eventConsumed) {
+                    break;
+                }
+            }
+        }
+        this.endEventDispatch();
+    }
+
+    private dispatchMousePressed(button: number, x: number, y: number, timestamp: number): void {
+        this.beginEventDispatch(timestamp);
+        for (const listener of this.dispatchMouseListeners) {
+            if (isAccepting(listener)) {
+                listener.mousePressed(button, x, y);
+                if (this.eventConsumed) {
+                    break;
+                }
+            }
+        }
+        this.endEventDispatch();
+    }
+
+    private dispatchMouseReleased(button: number, x: number, y: number, timestamp: number): void {
+        this.beginEventDispatch(timestamp);
+        for (const listener of this.dispatchMouseListeners) {
+            if (isAccepting(listener)) {
+                listener.mouseReleased(button, x, y);
+                if (this.eventConsumed) {
+                    break;
+                }
+            }
+        }
+        this.endEventDispatch();
+    }
+
+    private dispatchMouseClicked(button: number, x: number, y: number, count: number, timestamp: number): void {
+        this.beginEventDispatch(timestamp);
+        for (const listener of this.dispatchMouseListeners) {
+            if (isAccepting(listener)) {
+                listener.mouseClicked(button, x, y, count);
+                if (this.eventConsumed) {
+                    break;
+                }
+            }
+        }
+        this.endEventDispatch();
+    }
+
+    private dispatchMouseMoved(oldX: number, oldY: number, newX: number, newY: number, dragged: boolean, timestamp: number): void {
+        this.beginEventDispatch(timestamp);
+        for (const listener of this.dispatchMouseListeners) {
+            if (isAccepting(listener)) {
+                if (dragged) {
+                    listener.mouseDragged(oldX, oldY, newX, newY);
+                } else {
+                    listener.mouseMoved(oldX, oldY, newX, newY);
+                }
+                if (this.eventConsumed) {
+                    break;
+                }
+            }
+        }
+        this.endEventDispatch();
+    }
+
+    private dispatchMouseWheel(change: number, timestamp: number): void {
+        this.beginEventDispatch(timestamp);
+        for (const listener of this.dispatchMouseListeners) {
+            if (isAccepting(listener)) {
+                listener.mouseWheelMoved(change);
+                if (this.eventConsumed) {
+                    break;
+                }
+            }
+        }
+        this.endEventDispatch();
+    }
+
+    private beginEventDispatch(timestamp: number): void {
+        this.dispatchingEvent = true;
+        this.eventConsumed = false;
+        this.dispatchedEventTime = timestamp;
+    }
+
+    private endEventDispatch(): void {
+        this.dispatchingEvent = false;
+        this.eventConsumed = false;
+    }
+
+    private enqueueEvent(type: number, a: number, b: number, c: number, d: number, character: number, timestamp: number): void {
+        if (this.eventCount === this.eventTypes.length) {
+            this.growEventQueue();
+        }
+        const index = (this.eventHead + this.eventCount) % this.eventTypes.length;
+        this.eventTypes[index] = type;
+        this.eventA[index] = a;
+        this.eventB[index] = b;
+        this.eventC[index] = c;
+        this.eventD[index] = d;
+        this.eventCharacters[index] = character;
+        this.eventTimes[index] = timestamp;
+        this.eventCount++;
+    }
+
+    private growEventQueue(): void {
+        const capacity = this.eventTypes.length * 2;
+        const types = new Uint8Array(capacity);
+        const a = new Int32Array(capacity);
+        const b = new Int32Array(capacity);
+        const c = new Int32Array(capacity);
+        const d = new Int32Array(capacity);
+        const characters = new Uint32Array(capacity);
+        const times = new Float64Array(capacity);
+        for (let i = 0; i < this.eventCount; i++) {
+            const source = (this.eventHead + i) % this.eventTypes.length;
+            types[i] = this.eventTypes[source]!;
+            a[i] = this.eventA[source]!;
+            b[i] = this.eventB[source]!;
+            c[i] = this.eventC[source]!;
+            d[i] = this.eventD[source]!;
+            characters[i] = this.eventCharacters[source]!;
+            times[i] = this.eventTimes[source]!;
+        }
+        this.eventTypes = types;
+        this.eventA = a;
+        this.eventB = b;
+        this.eventC = c;
+        this.eventD = d;
+        this.eventCharacters = characters;
+        this.eventTimes = times;
+        this.eventHead = 0;
+    }
+
+    private clearQueuedEvents(): void {
+        this.eventHead = 0;
+        this.eventCount = 0;
+        this.mousePressX.clear();
+        this.mousePressY.clear();
+    }
+
     private clearPressedRecords(): void {
         this.clearKeyPressedRecord();
         this.clearMousePressedRecord();
@@ -866,9 +1124,19 @@ export class Input {
     private clearAllInputState(): void {
         this.downKeys.clear();
         this.downMouse.clear();
-        this.controlDown.clear();
+        this.clearAllControllerState();
         this.clearPressedRecords();
+        this.clearQueuedEvents();
         this.invalidateGamepads();
+    }
+
+    private clearAllControllerState(): void {
+        this.controlDown.clear();
+        this.controlPressed.clear();
+        this.seenControllers.clear();
+        this.controllerPhysicalIndices.fill(-1);
+        this.controllerPhysicalIds.fill(null);
+        this.controllerStateSnapshotReady = false;
     }
 
     private updateMouse(event: PointerEvent): void {
@@ -882,18 +1150,12 @@ export class Input {
     }
 
     private pollControllers(): void {
-        if (Input.controllersDisabled) {
-            return;
-        }
-        const seenControllers = this.seenControllers;
-        seenControllers.clear();
         const gamepads = this.getFrameGamepads();
-        for (const gamepad of gamepads) {
-            if (!Input.isUsableGamepad(gamepad)) {
-                continue;
-            }
-            const controller = gamepad.index;
-            seenControllers.add(controller);
+        this.seenControllers.clear();
+        for (let controller = 0; controller < gamepads.length; controller++) {
+            const gamepad = gamepads[controller]!;
+            this.prepareLogicalControllerOwner(controller, gamepad);
+            this.seenControllers.add(controller);
             if (this.additionalControllerDirectionAxes.length > 0) {
                 this.prepareAdditionalControllerAxisCalibration(gamepad);
             }
@@ -902,41 +1164,83 @@ export class Input {
             let up = Input.isGamepadUp(gamepad);
             let down = Input.isGamepadDown(gamepad);
             for (let index = 0; index < this.additionalControllerDirectionAxes.length; index += 2) {
-                const horizontal = this.readCalibratedControllerAxis(gamepad, this.additionalControllerDirectionAxes[index]);
-                const vertical = this.readCalibratedControllerAxis(gamepad, this.additionalControllerDirectionAxes[index + 1]);
-                left = left || horizontal < -this.additionalControllerAxisThreshold;
-                right = right || horizontal > this.additionalControllerAxisThreshold;
-                up = up || vertical < -this.additionalControllerAxisThreshold;
-                down = down || vertical > this.additionalControllerAxisThreshold;
+                const horizontalAxis = this.additionalControllerDirectionAxes[index]!;
+                const verticalAxis = this.additionalControllerDirectionAxes[index + 1]!;
+                const horizontal = this.readCalibratedControllerAxis(gamepad, horizontalAxis);
+                const vertical = this.readCalibratedControllerAxis(gamepad, verticalAxis);
+                left ||= horizontal < -this.additionalControllerAxisThreshold;
+                right ||= horizontal > this.additionalControllerAxisThreshold;
+                up ||= vertical < -this.additionalControllerAxisThreshold;
+                down ||= vertical > this.additionalControllerAxisThreshold;
             }
             this.updateControlState(controller, 0, left);
             this.updateControlState(controller, 1, right);
             this.updateControlState(controller, 2, up);
             this.updateControlState(controller, 3, down);
             for (let index = 0; index < gamepad.buttons.length; index++) {
-                const button = gamepad.buttons[index];
-                if (Input.isStandardDpadButton(index)) {
-                    continue;
+                if (!Input.isStandardDpadButton(index)) {
+                    this.updateControlState(controller, 4 + index, gamepad.buttons[index]?.pressed === true);
                 }
-                const control = 4 + index;
-                this.updateControlState(controller, control, button.pressed);
             }
         }
+
+        for (let controller = gamepads.length; controller < this.controllerPhysicalIndices.length; controller++) {
+            if (this.controllerPhysicalIndices[controller] !== -1) {
+                this.clearControllerState(controller);
+                this.controllerPhysicalIndices[controller] = -1;
+                this.controllerPhysicalIds[controller] = null;
+            }
+        }
+        this.clearDisconnectedAxisCalibration();
+        this.controllerStateSnapshotReady = true;
+    }
+
+    private prepareLogicalControllerOwner(controller: number, gamepad: Gamepad): void {
+        if (controller >= this.controllerPhysicalIndices.length) {
+            return;
+        }
+        const physicalIndex = gamepad.index;
+        const id = gamepad.id || "";
+        if (this.controllerPhysicalIndices[controller] !== physicalIndex || this.controllerPhysicalIds[controller] !== id) {
+            this.clearControllerState(controller);
+            this.controllerPhysicalIndices[controller] = physicalIndex;
+            this.controllerPhysicalIds[controller] = id;
+        }
+    }
+
+    private clearControllerState(controller: number): void {
+        this.deleteControllerKeys(this.controlDown, controller);
+        this.deleteControllerKeys(this.controlPressed, controller);
+    }
+
+    private deleteControllerKeys(keys: Set<number>, controller: number): void {
         this.staleControlKeys.length = 0;
-        for (const key of this.controlDown) {
-            if (!seenControllers.has(Input.controllerFromControlKey(key))) {
+        for (const key of keys) {
+            if (Input.controllerFromControlKey(key) === controller) {
                 this.staleControlKeys.push(key);
             }
         }
-        for (let i = 0; i < this.staleControlKeys.length; i++) {
-            this.controlDown.delete(this.staleControlKeys[i]);
+        for (const key of this.staleControlKeys) {
+            keys.delete(key);
         }
-        for (let controller = 0; controller < this.additionalControllerAxisOwners.length; controller++) {
-            if (this.additionalControllerAxisOwners[controller] !== null && !seenControllers.has(controller)) {
-                this.resetAdditionalControllerAxisCalibration(controller);
+    }
+
+    private clearDisconnectedAxisCalibration(): void {
+        for (let physicalIndex = 0; physicalIndex < this.additionalControllerAxisOwners.length; physicalIndex++) {
+            if (this.additionalControllerAxisOwners[physicalIndex] === null) {
+                continue;
+            }
+            let found = false;
+            for (const gamepad of this.cachedGamepads) {
+                if (gamepad.index === physicalIndex) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                this.resetAdditionalControllerAxisCalibration(physicalIndex);
             }
         }
-        this.controllerStateSnapshotReady = true;
     }
 
     private readCalibratedControllerAxis(gamepad: Gamepad, axis: number): number {
@@ -945,7 +1249,7 @@ export class Input {
         }
         const value = Input.readGamepadAxis(gamepad, axis);
         const baselineIndex = gamepad.index * Input.BROWSER_AXIS_LIMIT + axis;
-        let baseline = this.additionalControllerAxisBaselines[baselineIndex];
+        let baseline = this.additionalControllerAxisBaselines[baselineIndex]!;
         if (Number.isNaN(baseline)) {
             baseline = value;
             this.additionalControllerAxisBaselines[baselineIndex] = baseline;
@@ -963,11 +1267,10 @@ export class Input {
             return;
         }
         const owner = gamepad.id || "";
-        if (this.additionalControllerAxisOwners[controller] === owner) {
-            return;
+        if (this.additionalControllerAxisOwners[controller] !== owner) {
+            this.resetAdditionalControllerAxisCalibration(controller);
+            this.additionalControllerAxisOwners[controller] = owner;
         }
-        this.resetAdditionalControllerAxisCalibration(controller);
-        this.additionalControllerAxisOwners[controller] = owner;
     }
 
     private resetAdditionalControllerAxisCalibration(controller: number): void {
@@ -980,6 +1283,9 @@ export class Input {
     }
 
     private isControllerControlDown(control: number, controller: number): boolean {
+        if (Input.controllersDisabled) {
+            return false;
+        }
         if (controller === Input.ANY_CONTROLLER) {
             for (const seenController of this.seenControllers) {
                 if (this.controlDown.has(Input.controlKey(seenController, control))) {
@@ -994,26 +1300,30 @@ export class Input {
     private updateControlState(controller: number, control: number, down: boolean): void {
         const key = Input.controlKey(controller, control);
         const wasDown = this.controlDown.has(key);
-        if (down) {
-            if (!wasDown) {
-                this.controlDown.add(key);
-                this.controlPressed.add(key);
-                for (const listener of this.controllerListeners) {
-                    if (isAccepting(listener)) {
-                        Input.dispatchControllerPressed(listener, controller, control);
-                    }
-                }
-            }
+        if (down === wasDown) {
             return;
         }
-        if (wasDown) {
+        if (down) {
+            this.controlDown.add(key);
+            this.controlPressed.add(key);
+        } else {
             this.controlDown.delete(key);
-            for (const listener of this.controllerListeners) {
-                if (isAccepting(listener)) {
+        }
+
+        this.beginEventDispatch(Input.now());
+        for (const listener of this.dispatchControllerListeners) {
+            if (isAccepting(listener)) {
+                if (down) {
+                    Input.dispatchControllerPressed(listener, controller, control);
+                } else {
                     Input.dispatchControllerReleased(listener, controller, control);
+                }
+                if (this.eventConsumed) {
+                    break;
                 }
             }
         }
+        this.endEventDispatch();
     }
 
     private anyController(controller: number, predicate: (gamepad: Gamepad) => boolean): boolean {
@@ -1023,21 +1333,25 @@ export class Input {
         const gamepads = this.getFrameGamepads();
         if (controller === Input.ANY_CONTROLLER) {
             for (const gamepad of gamepads) {
-                if (Input.isUsableGamepad(gamepad) && predicate(gamepad)) {
+                if (predicate(gamepad)) {
                     return true;
                 }
             }
             return false;
         }
         const gamepad = gamepads[controller];
-        return Input.isUsableGamepad(gamepad) && predicate(gamepad);
+        return gamepad !== undefined && predicate(gamepad);
     }
 
     private refreshGamepads(): GamepadSnapshot {
-        if (typeof navigator === "undefined" || !navigator.getGamepads) {
-            this.cachedGamepads = [];
-        } else {
-            this.cachedGamepads = navigator.getGamepads();
+        this.cachedGamepads.length = 0;
+        if (typeof navigator !== "undefined" && navigator.getGamepads) {
+            const browserGamepads = navigator.getGamepads();
+            for (const gamepad of browserGamepads) {
+                if (Input.isUsableGamepad(gamepad)) {
+                    this.cachedGamepads.push(gamepad);
+                }
+            }
         }
         this.gamepadsCached = true;
         this.gamepadCacheGeneration = Input.gamepadCacheGeneration;
@@ -1053,7 +1367,7 @@ export class Input {
     }
 
     private invalidateGamepads(): void {
-        this.cachedGamepads = [];
+        this.cachedGamepads.length = 0;
         this.gamepadsCached = false;
         this.gamepadCacheGeneration = Input.gamepadCacheGeneration;
         this.controllerStateSnapshotReady = false;
@@ -1063,6 +1377,13 @@ export class Input {
         const index = array.indexOf(item);
         if (index >= 0) {
             array.splice(index, 1);
+        }
+    }
+
+    private static copyArray<T>(source: readonly T[], target: T[]): void {
+        target.length = source.length;
+        for (let i = 0; i < source.length; i++) {
+            target[i] = source[i]!;
         }
     }
 
@@ -1113,8 +1434,8 @@ export class Input {
         if (typeof value !== "number" || !Number.isFinite(value)) {
             return false;
         }
-        for (let index = 0; index < values.length; index++) {
-            if (Math.abs(value - values[index]) <= Input.POV_HAT_TOLERANCE) {
+        for (const expected of values) {
+            if (Math.abs(value - expected) <= Input.POV_HAT_TOLERANCE) {
                 return true;
             }
         }
@@ -1178,6 +1499,14 @@ export class Input {
             return true;
         }
         return document.visibilityState !== "hidden" && document.hasFocus();
+    }
+
+    private static eventTimestamp(event: Event): number {
+        return Number.isFinite(event.timeStamp) ? event.timeStamp : Input.now();
+    }
+
+    private static now(): number {
+        return typeof performance !== "undefined" ? performance.now() : Date.now();
     }
 
     private shouldPreventDefault(event: KeyboardEvent, key: number): boolean {

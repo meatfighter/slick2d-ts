@@ -1,6 +1,6 @@
 {
     "name": "slick2d-ts",
-    "version": "1.4.1",
+    "version": "1.5.0",
     "description": "A TypeScript/WebGL parity layer for selected Slick2D APIs used by Java game ports.",
     "license": "BSD-3-Clause",
     "type": "module",
@@ -37,14 +37,17 @@
         "README.md"
     ],
     "scripts": {
-        "build": "tsc -p tsconfig.json",
+        "build": "npm run clean && tsc -p tsconfig.json",
         "format": "prettier . --write",
         "format:check": "prettier . --check",
         "lint": "eslint src --ext .ts",
         "test": "npm run build && node --test test/*.mjs",
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "check:dist": "node scripts/check-dist-clean.mjs",
-        "verify": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run check:dist"
+        "verify": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run check:dist",
+        "clean": "node scripts/clean-dist.mjs",
+        "test:browser": "node scripts/run-browser-tests.mjs",
+        "verify:browser": "npm run build && npm run test:browser"
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
