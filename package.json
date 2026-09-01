@@ -1,6 +1,6 @@
 {
     "name": "slick2d-ts",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "description": "A TypeScript/WebGL parity layer for selected Slick2D APIs used by Java game ports.",
     "license": "BSD-3-Clause",
     "type": "module",

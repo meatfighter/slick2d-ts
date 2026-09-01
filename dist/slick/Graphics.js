@@ -144,7 +144,10 @@ export class Graphics {
     }
     /** Java Slick2D counterpart: Graphics.setBackground(Color). */
     setBackground(color) {
-        this.background = color.copy();
+        this.background.r = color.r;
+        this.background.g = color.g;
+        this.background.b = color.b;
+        this.background.a = color.a;
     }
     /** Java Slick2D counterpart: Graphics.getBackground(). */
     getBackground() {
@@ -189,7 +192,13 @@ export class Graphics {
     }
     /** Java Slick2D counterpart: Graphics.setColor(Color). */
     setColor(color) {
-        this.color = color.copy();
+        if (color === null) {
+            return;
+        }
+        this.color.r = color.r;
+        this.color.g = color.g;
+        this.color.b = color.b;
+        this.color.a = color.a;
         this.color.bind();
     }
     /** Java Slick2D counterpart: Graphics.getColor(). */
@@ -491,10 +500,10 @@ export class Graphics {
             h !== undefined &&
             i !== undefined &&
             j !== undefined) {
-            color1 = new Color(a, b, c, Number(d));
+            color1 = Color.fromFloats(a, b, c, Number(d));
             x2 = e;
             y2 = f;
-            color2 = new Color(g, h, i, j);
+            color2 = Color.fromFloats(g, h, i, j);
         }
         else {
             throw new SlickException("Invalid Graphics.drawGradientLine overload");
@@ -744,5 +753,4 @@ export class Graphics {
         }
     }
 }
-void undefined;
 //# sourceMappingURL=Graphics.js.map

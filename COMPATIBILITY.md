@@ -26,6 +26,20 @@ These APIs make asynchronous browser loading explicit while retaining Java resou
 - `ResourceLoadException` reports a stable failure `kind` (`resolution`, `network`, `http`, `abort`, or `decode`), loading `phase`, resource ref, resolved URL, and HTTP status when available.
 - The default retry policy retries transient network conditions, HTTP 408/425/429, and server errors. Permanent client errors such as HTTP 404 fail immediately.
 
+## Java Numeric Overload Boundaries
+
+Java selects `Color(int, ...)` and `Color(float, ...)` overloads at compile time. JavaScript has only one numeric type, so legacy component constructor calls use tuple-wide inference: a fully integral tuple containing a component outside `[-1, 1]` is treated as byte components; otherwise it is treated as floating-point components. Use `Color.fromInts(...)` or `Color.fromFloats(...)` wherever the Java overload intent is ambiguous. Internal color arithmetic uses the explicit float path.
+
+Slick2D's three-float constructor retains raw RGB values and supplies alpha 1. Its four-float constructor clamps only the upper bound to 1. `Color.fromFloats(...)` preserves that distinction. The copy constructor preserves exact mutable channel state, including values outside the nominal range.
+
+## Shared Resource Cancellation
+
+Resource and decoded-audio requests are deduplicated by Java resource reference. The first uncached caller's `AbortSignal` owns cancellation of the shared underlying fetch or decode. Later callers may cancel their own wait but do not replace that ownership. Aborting the first signal therefore rejects every caller sharing that in-flight request. Coordinated preload generations should use one shared controller.
+
+## Browser Controller Calibration Lifetime
+
+Additional direction-axis baselines belong to the controller identity occupying that browser gamepad index. They are cleared when the controller disappears or when the reported gamepad ID changes, preventing a replacement device from inheriting an incompatible neutral baseline. Axis indexes and thresholds are validated when configured.
+
 ## Java Random State
 
 `JavaRandom` implements the Java 48-bit LCG and exposes exact internal state through `getState()`, `setState(...)`, and `fromState(...)`. These are browser-port extensions intended for persistence, deterministic replays, and parity tests. Restoring an internal state bypasses the external-seed scrambling performed by Java's `setSeed(long)`.

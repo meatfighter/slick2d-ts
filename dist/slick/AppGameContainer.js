@@ -330,8 +330,7 @@ export class AppGameContainer extends GameContainer {
     }
     /** Java Slick2D counterpart: AppGameContainer.setMouseCursor(...). */
     setMouseCursor(cursorLike, hotSpotX, hotSpotY) {
-        const setMouseCursor = GameContainer.prototype.setMouseCursor;
-        return setMouseCursor.call(this, cursorLike, hotSpotX, hotSpotY);
+        return this.setMouseCursorImpl(cursorLike, hotSpotX, hotSpotY);
     }
     /** Java Slick2D counterpart: AppGameContainer.setAnimatedMouseCursor(...). */
     setAnimatedMouseCursor(ref, x, y, width, height, cursorDelays) {

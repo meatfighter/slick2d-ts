@@ -190,6 +190,7 @@ export declare class Input {
     private controllerStateSnapshotReady;
     private additionalControllerDirectionAxes;
     private readonly additionalControllerAxisBaselines;
+    private readonly additionalControllerAxisOwners;
     private additionalControllerAxisThreshold;
     private additionalControllerAxisRecenterThreshold;
     /**
@@ -358,6 +359,8 @@ export declare class Input {
     private updateMouse;
     private pollControllers;
     private readCalibratedControllerAxis;
+    private prepareAdditionalControllerAxisCalibration;
+    private resetAdditionalControllerAxisCalibration;
     private isControllerControlDown;
     private updateControlState;
     private anyController;
@@ -367,6 +370,8 @@ export declare class Input {
     private removeFrom;
     private static keyCodeFromEvent;
     private static mouseButtonFromEvent;
+    private static isUsableGamepad;
+    private static readGamepadAxis;
     private static isGamepadLeft;
     private static isGamepadRight;
     private static isGamepadUp;

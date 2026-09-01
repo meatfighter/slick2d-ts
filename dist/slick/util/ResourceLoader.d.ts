@@ -67,7 +67,13 @@ export declare class ResourceLoader {
     static resourceExists(ref: string): boolean;
     /** Registers already-available bytes under the original Java path string. */
     static registerResource(ref: string, data: ArrayBuffer | Uint8Array): void;
-    /** Queues an async fetch for a resource and caches in-flight requests. */
+    /**
+     * Queues an async fetch for a resource and caches in-flight requests.
+     *
+     * The signal supplied by the first uncached caller owns cancellation of the
+     * underlying shared fetch. A later caller reusing that request can cancel
+     * only its own wait; aborting the first signal rejects every shared waiter.
+     */
     static loadResource(ref: string, options?: ResourceLoadOptions): Promise<ArrayBuffer>;
     static preloadResources(refs: Iterable<string>, onProgress?: (progress: ResourcePreloadProgress) => void): Promise<Map<string, ArrayBuffer>>;
     static preloadResources(refs: Iterable<string>, options?: ResourcePreloadOptions): Promise<Map<string, ArrayBuffer>>;

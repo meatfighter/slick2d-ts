@@ -50,8 +50,14 @@ export class ResourceLoader {
     }
     /** Configures transient browser fetch retries. Permanent HTTP failures are not retried. */
     static setRetryOptions(retries, delayMs = 250) {
-        ResourceLoader.retryCount = Math.max(0, Math.trunc(retries));
-        ResourceLoader.retryDelay = Math.max(0, Math.trunc(delayMs));
+        if (!Number.isSafeInteger(retries) || retries < 0) {
+            throw new RangeError("Resource retry count must be a nonnegative safe integer.");
+        }
+        if (!Number.isFinite(delayMs) || delayMs < 0) {
+            throw new RangeError("Resource retry delay must be a finite nonnegative number.");
+        }
+        ResourceLoader.retryCount = retries;
+        ResourceLoader.retryDelay = delayMs;
     }
     /** Java Slick2D counterpart: ResourceLoader.getResource(String). */
     static getResource(ref) {
@@ -82,7 +88,13 @@ export class ResourceLoader {
         }
         ResourceLoader.records.set(ref, { ref, data: bytes });
     }
-    /** Queues an async fetch for a resource and caches in-flight requests. */
+    /**
+     * Queues an async fetch for a resource and caches in-flight requests.
+     *
+     * The signal supplied by the first uncached caller owns cancellation of the
+     * underlying shared fetch. A later caller reusing that request can cancel
+     * only its own wait; aborting the first signal rejects every shared waiter.
+     */
     static async loadResource(ref, options = {}) {
         ResourceLoader.throwIfAborted(options.signal, ref, null, "fetch");
         const existing = ResourceLoader.records.get(ref);

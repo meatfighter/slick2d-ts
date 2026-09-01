@@ -1,7 +1,7 @@
 import { Color } from "../Color.js";
 import type { Image } from "../Image.js";
 import type { SGL } from "../opengl/renderer/SGL.js";
-import { Matrix3, RenderBackend, RenderBackendOptions } from "./RenderBackend.js";
+import type { Matrix3, RenderBackend, RenderBackendOptions } from "./RenderBackend.js";
 import { WebGLRenderTarget } from "./WebGLRenderTarget.js";
 import type { WebGLTextureResource } from "./WebGLTextureResource.js";
 /**

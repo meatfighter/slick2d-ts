@@ -28,7 +28,7 @@ export declare class Color {
     constructor(color: Color);
     /** Java Slick2D counterpart: Color(int, int, int, int). */
     static fromInts(r: number, g: number, b: number, a?: number): Color;
-    /** Java Slick2D counterpart: Color(float, float, float, float). */
+    /** Java Slick2D counterparts: Color(float, float, float) and Color(float, float, float, float). */
     static fromFloats(r: number, g: number, b: number, a?: number): Color;
     /**
      * Java Slick2D counterpart: Color.decode(String).

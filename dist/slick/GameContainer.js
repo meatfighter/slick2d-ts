@@ -254,6 +254,9 @@ export class GameContainer {
     }
     /** Java Slick2D counterpart: GameContainer.setMouseCursor(...). */
     setMouseCursor(cursorLike, hotSpotX, hotSpotY) {
+        return this.setMouseCursorImpl(cursorLike, hotSpotX, hotSpotY);
+    }
+    setMouseCursorImpl(cursorLike, hotSpotX, hotSpotY) {
         if (typeof cursorLike === "string") {
             this.setCssCursor(`url("${ResourceLoader.getResource(cursorLike)?.toString() ?? cursorLike}") ${hotSpotX} ${hotSpotY}, auto`);
             return;

@@ -389,7 +389,9 @@ export class SoundStore {
                 });
             }
         })().catch((error) => {
-            this.buffers.delete(ref);
+            if (this.buffers.get(ref) === promise) {
+                this.buffers.delete(ref);
+            }
             throw error;
         });
         this.buffers.set(ref, promise);

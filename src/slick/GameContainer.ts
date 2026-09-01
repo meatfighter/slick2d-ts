@@ -311,6 +311,14 @@ export abstract class GameContainer {
     public setMouseCursor(cursor: Cursor, hotSpotX: number, hotSpotY: number): void | Promise<void>;
     /** Java Slick2D counterpart: GameContainer.setMouseCursor(...). */
     public setMouseCursor(cursorLike: string | DomImageData | SlickImageData | Image | Cursor, hotSpotX: number, hotSpotY: number): void | Promise<void> {
+        return this.setMouseCursorImpl(cursorLike, hotSpotX, hotSpotY);
+    }
+
+    protected setMouseCursorImpl(
+        cursorLike: string | DomImageData | SlickImageData | Image | Cursor,
+        hotSpotX: number,
+        hotSpotY: number
+    ): void | Promise<void> {
         if (typeof cursorLike === "string") {
             this.setCssCursor(`url("${ResourceLoader.getResource(cursorLike)?.toString() ?? cursorLike}") ${hotSpotX} ${hotSpotY}, auto`);
             return;

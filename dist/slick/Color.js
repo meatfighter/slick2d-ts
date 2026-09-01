@@ -5,8 +5,14 @@ function clamp01(value) {
     }
     return Math.max(0, Math.min(1, value));
 }
-function normalizeChannel(value) {
-    return value > 1 ? value / 255 : Math.min(value, 1);
+function clampFloatChannel(value) {
+    return Math.min(value, 1);
+}
+function usesIntegerComponentOverload(r, g, b, a) {
+    if (!Number.isInteger(r) || !Number.isInteger(g) || !Number.isInteger(b) || (a !== undefined && !Number.isInteger(a))) {
+        return false;
+    }
+    return Math.abs(r) > 1 || Math.abs(g) > 1 || Math.abs(b) > 1 || (a !== undefined && Math.abs(a) > 1);
 }
 function decodeInteger(value) {
     let text = value.trim();
@@ -56,7 +62,7 @@ export class Color {
     static lightGray = new Color(0.7, 0.7, 0.7, 1);
     static pink = new Color(255, 175, 175, 255);
     static orange = new Color(255, 200, 0, 255);
-    static magenta = new Color(1, 0, 1, 1);
+    static magenta = new Color(255, 0, 255, 255);
     r;
     g;
     b;
@@ -66,6 +72,9 @@ export class Color {
      *
      * Creates a mutable RGBA color. Packed integers are interpreted as 0xAARRGGBB;
      * an alpha byte of 0 means 255 for compatibility with existing Java ports.
+     * Component overloads are selected tuple-wide: integral tuples containing a
+     * value outside [-1, 1] use Java's byte-component path; other tuples use the
+     * float path. Use fromInts() or fromFloats() when an all-0/1 tuple is ambiguous.
      */
     constructor(rOrPackedOrColor, g, b, a) {
         if (rOrPackedOrColor instanceof Color) {
@@ -83,20 +92,35 @@ export class Color {
             this.g = ((packed >>> 8) & 0xff) / 255;
             this.b = (packed & 0xff) / 255;
         }
+        else if (usesIntegerComponentOverload(rOrPackedOrColor, g, b, a)) {
+            this.r = rOrPackedOrColor / 255;
+            this.g = g / 255;
+            this.b = b / 255;
+            this.a = (a ?? 255) / 255;
+        }
+        else if (a === undefined) {
+            this.r = rOrPackedOrColor;
+            this.g = g;
+            this.b = b;
+            this.a = 1;
+        }
         else {
-            this.r = normalizeChannel(rOrPackedOrColor);
-            this.g = normalizeChannel(g);
-            this.b = normalizeChannel(b);
-            this.a = normalizeChannel(a ?? 1);
+            this.r = clampFloatChannel(rOrPackedOrColor);
+            this.g = clampFloatChannel(g);
+            this.b = clampFloatChannel(b);
+            this.a = clampFloatChannel(a);
         }
     }
     /** Java Slick2D counterpart: Color(int, int, int, int). */
     static fromInts(r, g, b, a = 255) {
         return Color.createRaw(Math.trunc(r) / 255, Math.trunc(g) / 255, Math.trunc(b) / 255, Math.trunc(a) / 255);
     }
-    /** Java Slick2D counterpart: Color(float, float, float, float). */
-    static fromFloats(r, g, b, a = 1) {
-        return Color.createRaw(r, g, b, a);
+    /** Java Slick2D counterparts: Color(float, float, float) and Color(float, float, float, float). */
+    static fromFloats(r, g, b, a) {
+        if (a === undefined) {
+            return Color.createRaw(r, g, b, 1);
+        }
+        return Color.createRaw(clampFloatChannel(r), clampFloatChannel(g), clampFloatChannel(b), clampFloatChannel(a));
     }
     /**
      * Java Slick2D counterpart: Color.decode(String).
@@ -142,7 +166,7 @@ export class Color {
      * Returns a new component-wise multiplied color.
      */
     multiply(c) {
-        return new Color(this.r * c.r, this.g * c.g, this.b * c.b, this.a * c.a);
+        return Color.fromFloats(this.r * c.r, this.g * c.g, this.b * c.b, this.a * c.a);
     }
     /**
      * Java Slick2D counterpart: Color.brighter().
@@ -151,7 +175,7 @@ export class Color {
      */
     brighter(scale = 0.2) {
         const factor = scale + 1;
-        return new Color(this.r * factor, this.g * factor, this.b * factor, this.a);
+        return Color.fromFloats(this.r * factor, this.g * factor, this.b * factor, this.a);
     }
     /**
      * Java Slick2D counterpart: Color.darker().
@@ -160,7 +184,7 @@ export class Color {
      */
     darker(scale = 0.5) {
         const factor = 1 - scale;
-        return new Color(this.r * factor, this.g * factor, this.b * factor, this.a);
+        return Color.fromFloats(this.r * factor, this.g * factor, this.b * factor, this.a);
     }
     /**
      * Java Slick2D counterpart: Color.toString().
@@ -192,7 +216,7 @@ export class Color {
      * Returns an independent mutable copy.
      */
     copy() {
-        return new Color(this.r, this.g, this.b, this.a);
+        return new Color(this);
     }
     /** Java Slick2D counterpart: Color.getRed(). */
     getRed() {
@@ -228,13 +252,13 @@ export class Color {
     }
     /** Java Slick2D counterpart: Color.addToCopy(Color). */
     addToCopy(c) {
-        const copy = new Color(this.r, this.g, this.b, this.a);
+        const copy = Color.fromFloats(this.r, this.g, this.b, this.a);
         copy.add(c);
         return copy;
     }
     /** Java Slick2D counterpart: Color.scaleCopy(float). */
     scaleCopy(value) {
-        const copy = new Color(this.r, this.g, this.b, this.a);
+        const copy = Color.fromFloats(this.r, this.g, this.b, this.a);
         copy.scale(value);
         return copy;
     }

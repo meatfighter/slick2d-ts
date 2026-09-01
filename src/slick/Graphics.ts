@@ -2,7 +2,7 @@ import { Color } from "./Color.js";
 import type { Font } from "./Font.js";
 import { Image } from "./Image.js";
 import { SlickException } from "./SlickException.js";
-import { identityMatrix3, Matrix3 } from "./rendering/RenderBackend.js";
+import { identityMatrix3 } from "./rendering/RenderBackend.js";
 import type { WebGLRenderTarget } from "./rendering/WebGLRenderTarget.js";
 import type { WebGLRenderer } from "./rendering/WebGLRenderer.js";
 import { Renderer } from "./opengl/renderer/Renderer.js";
@@ -173,7 +173,10 @@ export class Graphics {
 
     /** Java Slick2D counterpart: Graphics.setBackground(Color). */
     public setBackground(color: Color): void {
-        this.background = color.copy();
+        this.background.r = color.r;
+        this.background.g = color.g;
+        this.background.b = color.b;
+        this.background.a = color.a;
     }
 
     /** Java Slick2D counterpart: Graphics.getBackground(). */
@@ -225,8 +228,14 @@ export class Graphics {
     }
 
     /** Java Slick2D counterpart: Graphics.setColor(Color). */
-    public setColor(color: Color): void {
-        this.color = color.copy();
+    public setColor(color: Color | null): void {
+        if (color === null) {
+            return;
+        }
+        this.color.r = color.r;
+        this.color.g = color.g;
+        this.color.b = color.b;
+        this.color.a = color.a;
         this.color.bind();
     }
 
@@ -631,10 +640,10 @@ export class Graphics {
             i !== undefined &&
             j !== undefined
         ) {
-            color1 = new Color(a, b, c, Number(d));
+            color1 = Color.fromFloats(a, b, c, Number(d));
             x2 = e;
             y2 = f;
-            color2 = new Color(g, h, i, j);
+            color2 = Color.fromFloats(g, h, i, j);
         } else {
             throw new SlickException("Invalid Graphics.drawGradientLine overload");
         }
@@ -905,5 +914,3 @@ export class Graphics {
         }
     }
 }
-
-void (undefined as unknown as Matrix3 | undefined);

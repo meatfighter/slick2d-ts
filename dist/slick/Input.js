@@ -185,6 +185,7 @@ export class Input {
     controllerStateSnapshotReady = false;
     additionalControllerDirectionAxes = [];
     additionalControllerAxisBaselines = new Float64Array(Input.BROWSER_CONTROLLER_LIMIT * Input.BROWSER_AXIS_LIMIT);
+    additionalControllerAxisOwners = new Array(Input.BROWSER_CONTROLLER_LIMIT).fill(null);
     additionalControllerAxisThreshold = 0.5;
     additionalControllerAxisRecenterThreshold = 0.05;
     /**
@@ -220,21 +221,35 @@ export class Input {
     setAdditionalControllerDirectionAxes(axes, threshold = 0.5, recenterThreshold = 0.05) {
         const values = [];
         for (const pair of axes) {
-            const horizontal = Math.trunc(pair.horizontalAxis);
-            const vertical = Math.trunc(pair.verticalAxis);
-            if (horizontal < 0 || horizontal >= Input.BROWSER_AXIS_LIMIT || vertical < 0 || vertical >= Input.BROWSER_AXIS_LIMIT) {
-                throw new RangeError(`Controller direction axes must be between 0 and ${Input.BROWSER_AXIS_LIMIT - 1}.`);
+            const horizontal = pair.horizontalAxis;
+            const vertical = pair.verticalAxis;
+            if (!Number.isFinite(horizontal) ||
+                !Number.isInteger(horizontal) ||
+                horizontal < 0 ||
+                horizontal >= Input.BROWSER_AXIS_LIMIT ||
+                !Number.isFinite(vertical) ||
+                !Number.isInteger(vertical) ||
+                vertical < 0 ||
+                vertical >= Input.BROWSER_AXIS_LIMIT) {
+                throw new RangeError(`Controller direction axes must be finite integers between 0 and ${Input.BROWSER_AXIS_LIMIT - 1}.`);
             }
             values.push(horizontal, vertical);
         }
+        if (!Number.isFinite(threshold) || threshold < 0 || threshold > 2) {
+            throw new RangeError("Controller direction threshold must be a finite number between 0 and 2.");
+        }
+        if (!Number.isFinite(recenterThreshold) || recenterThreshold < 0 || recenterThreshold > 1) {
+            throw new RangeError("Controller recenter threshold must be a finite number between 0 and 1.");
+        }
         this.additionalControllerDirectionAxes = values;
-        this.additionalControllerAxisThreshold = Math.max(0, Math.abs(threshold));
-        this.additionalControllerAxisRecenterThreshold = Math.max(0, Math.abs(recenterThreshold));
+        this.additionalControllerAxisThreshold = threshold;
+        this.additionalControllerAxisRecenterThreshold = recenterThreshold;
         this.resetAdditionalControllerDirectionAxisCalibration();
     }
     /** Browser controller helper: clears learned neutral positions for configured additional axes. */
     resetAdditionalControllerDirectionAxisCalibration() {
         this.additionalControllerAxisBaselines.fill(Number.NaN);
+        this.additionalControllerAxisOwners.fill(null);
     }
     /** Browser parity helper: attaches DOM listeners to an element/window. */
     bindToElement(target) {
@@ -440,13 +455,14 @@ export class Input {
         const gamepads = this.getFrameGamepads();
         if (controller === Input.ANY_CONTROLLER) {
             for (const gamepad of gamepads) {
-                if (gamepad?.buttons[index]?.pressed === true) {
+                if (Input.isUsableGamepad(gamepad) && gamepad.buttons[index]?.pressed === true) {
                     return true;
                 }
             }
             return false;
         }
-        return gamepads[controller]?.buttons[index]?.pressed === true;
+        const gamepad = gamepads[controller];
+        return Input.isUsableGamepad(gamepad) && gamepad.buttons[index]?.pressed === true;
     }
     /** Java Slick2D counterpart: Input.isButton1Pressed(int). */
     isButton1Pressed(controller) {
@@ -472,7 +488,7 @@ export class Input {
         let count = 0;
         const gamepads = this.getFrameGamepads();
         for (const gamepad of gamepads) {
-            if (gamepad) {
+            if (Input.isUsableGamepad(gamepad)) {
                 count++;
             }
         }
@@ -480,11 +496,13 @@ export class Input {
     }
     /** Java Slick2D counterpart: Input.getAxisCount(int). */
     getAxisCount(controller) {
-        return this.getFrameGamepads()[controller]?.axes.length ?? 0;
+        const gamepad = this.getFrameGamepads()[controller];
+        return Input.isUsableGamepad(gamepad) ? gamepad.axes.length : 0;
     }
     /** Java Slick2D counterpart: Input.getAxisValue(int, int). */
     getAxisValue(controller, axis) {
-        return this.getFrameGamepads()[controller]?.axes[axis] ?? 0;
+        const gamepad = this.getFrameGamepads()[controller];
+        return Input.isUsableGamepad(gamepad) ? Input.readGamepadAxis(gamepad, axis) : 0;
     }
     /** Java Slick2D counterpart: Input.getAxisName(int, int). */
     getAxisName(_controller, axis) {
@@ -767,11 +785,14 @@ export class Input {
         seenControllers.clear();
         const gamepads = this.getFrameGamepads();
         for (const gamepad of gamepads) {
-            if (!gamepad) {
+            if (!Input.isUsableGamepad(gamepad)) {
                 continue;
             }
             const controller = gamepad.index;
             seenControllers.add(controller);
+            if (this.additionalControllerDirectionAxes.length > 0) {
+                this.prepareAdditionalControllerAxisCalibration(gamepad);
+            }
             let left = Input.isGamepadLeft(gamepad);
             let right = Input.isGamepadRight(gamepad);
             let up = Input.isGamepadUp(gamepad);
@@ -806,13 +827,18 @@ export class Input {
         for (let i = 0; i < this.staleControlKeys.length; i++) {
             this.controlDown.delete(this.staleControlKeys[i]);
         }
+        for (let controller = 0; controller < this.additionalControllerAxisOwners.length; controller++) {
+            if (this.additionalControllerAxisOwners[controller] !== null && !seenControllers.has(controller)) {
+                this.resetAdditionalControllerAxisCalibration(controller);
+            }
+        }
         this.controllerStateSnapshotReady = true;
     }
     readCalibratedControllerAxis(gamepad, axis) {
-        if (gamepad.index < 0 || gamepad.index >= Input.BROWSER_CONTROLLER_LIMIT || gamepad.axes.length <= axis) {
+        if (gamepad.index < 0 || gamepad.index >= Input.BROWSER_CONTROLLER_LIMIT || axis < 0 || gamepad.axes.length <= axis) {
             return 0;
         }
-        const value = gamepad.axes[axis] ?? 0;
+        const value = Input.readGamepadAxis(gamepad, axis);
         const baselineIndex = gamepad.index * Input.BROWSER_AXIS_LIMIT + axis;
         let baseline = this.additionalControllerAxisBaselines[baselineIndex];
         if (Number.isNaN(baseline)) {
@@ -824,6 +850,26 @@ export class Input {
             return 0;
         }
         return value - baseline;
+    }
+    prepareAdditionalControllerAxisCalibration(gamepad) {
+        const controller = gamepad.index;
+        if (controller < 0 || controller >= Input.BROWSER_CONTROLLER_LIMIT) {
+            return;
+        }
+        const owner = gamepad.id || "";
+        if (this.additionalControllerAxisOwners[controller] === owner) {
+            return;
+        }
+        this.resetAdditionalControllerAxisCalibration(controller);
+        this.additionalControllerAxisOwners[controller] = owner;
+    }
+    resetAdditionalControllerAxisCalibration(controller) {
+        if (controller < 0 || controller >= Input.BROWSER_CONTROLLER_LIMIT) {
+            return;
+        }
+        const start = controller * Input.BROWSER_AXIS_LIMIT;
+        this.additionalControllerAxisBaselines.fill(Number.NaN, start, start + Input.BROWSER_AXIS_LIMIT);
+        this.additionalControllerAxisOwners[controller] = null;
     }
     isControllerControlDown(control, controller) {
         if (controller === Input.ANY_CONTROLLER) {
@@ -867,14 +913,14 @@ export class Input {
         const gamepads = this.getFrameGamepads();
         if (controller === Input.ANY_CONTROLLER) {
             for (const gamepad of gamepads) {
-                if (gamepad && predicate(gamepad)) {
+                if (Input.isUsableGamepad(gamepad) && predicate(gamepad)) {
                     return true;
                 }
             }
             return false;
         }
         const gamepad = gamepads[controller];
-        return !!gamepad && predicate(gamepad);
+        return Input.isUsableGamepad(gamepad) && predicate(gamepad);
     }
     refreshGamepads() {
         if (typeof navigator === "undefined" || !navigator.getGamepads) {
@@ -921,21 +967,28 @@ export class Input {
                 return event.button;
         }
     }
+    static isUsableGamepad(gamepad) {
+        return gamepad !== null && gamepad !== undefined && gamepad.connected !== false;
+    }
+    static readGamepadAxis(gamepad, axis) {
+        const value = gamepad.axes[axis];
+        return typeof value === "number" && Number.isFinite(value) ? value : 0;
+    }
     static isGamepadLeft(gamepad) {
-        return (gamepad.axes[0] ?? 0) < -0.5 || gamepad.buttons[14]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_LEFT);
+        return Input.readGamepadAxis(gamepad, 0) < -0.5 || gamepad.buttons[14]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_LEFT);
     }
     static isGamepadRight(gamepad) {
-        return (gamepad.axes[0] ?? 0) > 0.5 || gamepad.buttons[15]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_RIGHT);
+        return Input.readGamepadAxis(gamepad, 0) > 0.5 || gamepad.buttons[15]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_RIGHT);
     }
     static isGamepadUp(gamepad) {
-        return (gamepad.axes[1] ?? 0) < -0.5 || gamepad.buttons[12]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_UP);
+        return Input.readGamepadAxis(gamepad, 1) < -0.5 || gamepad.buttons[12]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_UP);
     }
     static isGamepadDown(gamepad) {
-        return (gamepad.axes[1] ?? 0) > 0.5 || gamepad.buttons[13]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_DOWN);
+        return Input.readGamepadAxis(gamepad, 1) > 0.5 || gamepad.buttons[13]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_DOWN);
     }
     static isGamepadPovHat(gamepad, values) {
         const value = gamepad.axes[Input.POV_HAT_AXIS];
-        if (typeof value !== "number") {
+        if (typeof value !== "number" || !Number.isFinite(value)) {
             return false;
         }
         for (let index = 0; index < values.length; index++) {

@@ -192,7 +192,7 @@ test("monochrome palette clamps endpoint RGB channels and ignores endpoint alpha
     renderer.solidProgram = normalSolid;
     renderer.textureProgram = normalTexture;
 
-    renderer.setMonochromePalette(Color.fromFloats(-1, 0.25, Number.NaN, 0), Color.fromFloats(2, 0.5, Number.POSITIVE_INFINITY, 0));
+    renderer.setMonochromePalette(Color.fromFloats(-1, 0.25, Number.NaN, 0), Color.fromFloats(2, 0.5, -1, 0));
 
     assert.deepEqual(
         gl.uniform3fCalls.map(({ red, green, blue }) => [red, green, blue]),

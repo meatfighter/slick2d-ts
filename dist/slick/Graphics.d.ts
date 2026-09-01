@@ -94,7 +94,7 @@ export declare class Graphics {
     /** Java Slick2D counterpart: Graphics.translate(float, float). */
     translate(x: number, y: number): void;
     /** Java Slick2D counterpart: Graphics.setColor(Color). */
-    setColor(color: Color): void;
+    setColor(color: Color | null): void;
     /** Java Slick2D counterpart: Graphics.getColor(). */
     getColor(): Color;
     /** Java Slick2D counterpart: Graphics.drawLine(float, float, float, float). */

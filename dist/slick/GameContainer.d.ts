@@ -134,6 +134,7 @@ export declare abstract class GameContainer {
     setMouseCursor(data: DomImageData | SlickImageData, hotSpotX: number, hotSpotY: number): void | Promise<void>;
     setMouseCursor(image: Image, hotSpotX: number, hotSpotY: number): void | Promise<void>;
     setMouseCursor(cursor: Cursor, hotSpotX: number, hotSpotY: number): void | Promise<void>;
+    protected setMouseCursorImpl(cursorLike: string | DomImageData | SlickImageData | Image | Cursor, hotSpotX: number, hotSpotY: number): void | Promise<void>;
     /** Java Slick2D counterpart: GameContainer.setAnimatedMouseCursor(...). */
     setAnimatedMouseCursor(ref: string, x: number, y: number, _width: number, _height: number, cursorDelays: number[]): void | Promise<void>;
     /** Java Slick2D counterpart: GameContainer.setDefaultMouseCursor(). */

@@ -424,7 +424,7 @@ export class WebGLRenderer {
         if (!gl || !this.textureProgram || !this.buffer) {
             return;
         }
-        const resource = image.__getTextureResource?.() ?? null;
+        const resource = image.__getTextureResource();
         const texture = resource?.ensureTexture(gl);
         if (!resource || !texture || resource.width <= 0 || resource.height <= 0) {
             return;
@@ -434,7 +434,7 @@ export class WebGLRenderer {
         const v1 = srcY / resource.height;
         const u2 = (srcX + srcWidth) / resource.width;
         const v2 = (srcY + srcHeight) / resource.height;
-        const cornerColors = useCornerColors ? (image.__getCornerColors?.() ?? null) : null;
+        const cornerColors = useCornerColors ? image.__getCornerColors() : null;
         const color = tint ??
             (useCurrentColorForNullTint && !cornerColors
                 ? this.setScratchColor(this.currentColor[0], this.currentColor[1], this.currentColor[2], this.currentColor[3])

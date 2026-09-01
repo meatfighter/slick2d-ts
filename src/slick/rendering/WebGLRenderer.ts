@@ -2,16 +2,12 @@ import { Color } from "../Color.js";
 import { SlickException } from "../SlickException.js";
 import type { Image } from "../Image.js";
 import type { SGL } from "../opengl/renderer/SGL.js";
-import { identityMatrix3, Matrix3, RenderBackend, RenderBackendOptions } from "./RenderBackend.js";
+import { identityMatrix3 } from "./RenderBackend.js";
+import type { Matrix3, RenderBackend, RenderBackendOptions } from "./RenderBackend.js";
 import { WebGLBatch } from "./WebGLBatch.js";
 import { WebGLRenderTarget } from "./WebGLRenderTarget.js";
 import { WebGLShaderProgram } from "./WebGLShaderProgram.js";
 import type { WebGLTextureResource } from "./WebGLTextureResource.js";
-
-type ImageInternals = {
-    __getTextureResource(): WebGLTextureResource | null;
-    __getCornerColors(): [Color, Color, Color, Color] | null;
-};
 
 type TextureInfo = {
     texture: WebGLTexture;
@@ -616,7 +612,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         if (!gl || !this.textureProgram || !this.buffer) {
             return;
         }
-        const resource = (image as unknown as ImageInternals).__getTextureResource?.() ?? null;
+        const resource = image.__getTextureResource();
         const texture = resource?.ensureTexture(gl);
         if (!resource || !texture || resource.width <= 0 || resource.height <= 0) {
             return;
@@ -626,7 +622,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         const v1 = srcY / resource.height;
         const u2 = (srcX + srcWidth) / resource.width;
         const v2 = (srcY + srcHeight) / resource.height;
-        const cornerColors = useCornerColors ? ((image as unknown as ImageInternals).__getCornerColors?.() ?? null) : null;
+        const cornerColors = useCornerColors ? image.__getCornerColors() : null;
         const color =
             tint ??
             (useCurrentColorForNullTint && !cornerColors

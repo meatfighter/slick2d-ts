@@ -404,13 +404,7 @@ export class AppGameContainer extends GameContainer {
         hotSpotX: number,
         hotSpotY: number
     ): void | Promise<void> {
-        const setMouseCursor = GameContainer.prototype.setMouseCursor as unknown as (
-            this: GameContainer,
-            value: string | DomImageData | SlickImageData | Image | Cursor,
-            x: number,
-            y: number
-        ) => void | Promise<void>;
-        return setMouseCursor.call(this, cursorLike, hotSpotX, hotSpotY);
+        return this.setMouseCursorImpl(cursorLike, hotSpotX, hotSpotY);
     }
 
     /** Java Slick2D counterpart: AppGameContainer.setAnimatedMouseCursor(...). */
