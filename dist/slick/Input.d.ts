@@ -316,6 +316,8 @@ export declare class Input {
     isButtonDown(index: number, controller: number): boolean;
     /** Java Slick2D counterpart: Input.getControllerCount(). */
     getControllerCount(): number;
+    /** Browser controller helper: returns the physical button count for a dense logical controller. */
+    getButtonCount(controller: number): number;
     /** Java Slick2D counterpart: Input.getAxisCount(int). */
     getAxisCount(controller: number): number;
     /** Java Slick2D counterpart: Input.getAxisValue(int, int). */

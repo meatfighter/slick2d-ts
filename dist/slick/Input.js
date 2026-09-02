@@ -517,6 +517,13 @@ export class Input {
     getControllerCount() {
         return Input.controllersDisabled ? 0 : this.getFrameGamepads().length;
     }
+    /** Browser controller helper: returns the physical button count for a dense logical controller. */
+    getButtonCount(controller) {
+        if (Input.controllersDisabled) {
+            return 0;
+        }
+        return this.getFrameGamepads()[controller]?.buttons.length ?? 0;
+    }
     /** Java Slick2D counterpart: Input.getAxisCount(int). */
     getAxisCount(controller) {
         if (Input.controllersDisabled) {
