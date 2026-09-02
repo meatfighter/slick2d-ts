@@ -19,7 +19,7 @@ The goal is API and behavior parity for Java game ports that already depend on S
 ## Install
 
 ```sh
-npm install git+https://github.com/meatfighter/slick2d-ts.git#semver:^1.5.0
+npm install git+https://github.com/meatfighter/slick2d-ts.git#semver:^1.5.3
 ```
 
 ## Example
@@ -61,7 +61,7 @@ const game = new BufferedScalableGame(new DemoGame(), 640, 480, {
 
 ## Browser Preloading
 
-Resource and audio batches accept an optional `AbortSignal`. Batch promises settle all work started by that batch before rejecting, so a host application can present a Retry action without leaving an earlier loading attempt running underneath it.
+Resource and audio batches accept an optional `AbortSignal` and `concurrency` limit. Batch promises settle all work started by that batch before rejecting, so a host application can present a Retry action without leaving an earlier loading attempt running underneath it. `ResourceLoader.setCacheVersionResolver(...)` can assign content-derived cache versions per Java resource ref while leaving those logical refs unchanged.
 
 ```ts
 import { ResourceLoader, SoundStore } from "slick2d-ts";
@@ -70,10 +70,12 @@ const controller = new AbortController();
 await Promise.all([
     ResourceLoader.preloadResources(imageAndDataRefs, {
         signal: controller.signal,
+        concurrency: 8,
         onProgress: ({ loaded, total }) => updateProgress(loaded, total)
     }),
     SoundStore.get().preloadAudioBuffers(audioRefs, {
-        signal: controller.signal
+        signal: controller.signal,
+        concurrency: 3
     })
 ]);
 ```

@@ -23,7 +23,8 @@ These APIs are available for browser ports that need whole-scene display treatme
 
 These APIs make asynchronous browser loading explicit while retaining Java resource paths as logical keys:
 
-- `ResourceLoader.preloadResources(...)` and `SoundStore.preloadAudioBuffers(...)` accept an optional `AbortSignal` and progress callback.
+- `ResourceLoader.preloadResources(...)` and `SoundStore.preloadAudioBuffers(...)` accept an optional `AbortSignal`, progress callback, and positive-integer `concurrency` limit. Omitting `concurrency` preserves the existing unbounded batch behavior.
+- `ResourceLoader.setCacheVersionResolver(...)` assigns a cache-version query value independently for each logical Java resource ref. `setCacheBust(...)` remains the simpler mutually exclusive global-version mode.
 - Batch preload calls wait for every operation started by the batch to settle before reporting a failure. This prevents a host Retry action from accidentally overlapping the previous batch.
 - `ResourceLoadException` reports a stable failure `kind` (`resolution`, `network`, `http`, `abort`, or `decode`), loading `phase`, resource ref, resolved URL, and HTTP status when available.
 - The default retry policy retries transient network conditions, HTTP 408/425/429, and server errors. Permanent client errors such as HTTP 404 fail immediately.

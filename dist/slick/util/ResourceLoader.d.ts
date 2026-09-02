@@ -5,6 +5,7 @@ export type TrackedResourceError = {
 };
 export type ResourceLoadFailureKind = "resolution" | "network" | "http" | "abort" | "decode";
 export type ResourceLoadPhase = "resolve" | "fetch" | "read" | "decode";
+export type ResourceCacheVersionResolver = (ref: string) => string | number | null;
 export interface ResourceLoadFailureDetails {
     readonly ref: string;
     readonly url?: string | null;
@@ -33,6 +34,7 @@ export type ResourcePreloadProgress = {
 };
 export interface ResourcePreloadOptions extends ResourceLoadOptions {
     readonly onProgress?: (progress: ResourcePreloadProgress) => void;
+    readonly concurrency?: number;
 }
 /**
  * Java Slick2D counterpart: org.newdawn.slick.util.ResourceLoader.
@@ -47,6 +49,7 @@ export declare class ResourceLoader {
     private static trackedErrors;
     private static trackingGeneration;
     private static cacheBustValue;
+    private static cacheVersionResolver;
     private static retryCount;
     private static retryDelay;
     /** Java Slick2D counterpart: ResourceLoader.addResourceLocation(ResourceLocation). */
@@ -55,8 +58,10 @@ export declare class ResourceLoader {
     static removeResourceLocation(location: unknown): void;
     /** Java Slick2D counterpart: ResourceLoader.removeAllResourceLocations(). */
     static removeAllResourceLocations(): void;
-    /** Adds or clears a cache-version query parameter while retaining Java refs as cache keys. */
+    /** Adds or clears one global cache-version query parameter while retaining Java refs as cache keys. */
     static setCacheBust(value: string | number | null): void;
+    /** Browser/PWA helper: supplies a stable cache version independently for each Java resource ref. */
+    static setCacheVersionResolver(resolver: ResourceCacheVersionResolver | null): void;
     /** Configures transient browser fetch retries. Permanent HTTP failures are not retried. */
     static setRetryOptions(retries: number, delayMs?: number): void;
     /** Java Slick2D counterpart: ResourceLoader.getResource(String). */
@@ -97,7 +102,7 @@ export declare class ResourceLoader {
     static clearFailures(): void;
     private static normalizePreloadOptions;
     private static toTrackedFailureException;
-    private static withCacheBust;
+    private static withCacheVersion;
     private static getResourceCandidates;
     private static resolveLocation;
     private static fetchFromCandidates;

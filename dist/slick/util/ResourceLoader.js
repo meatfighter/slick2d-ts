@@ -1,4 +1,5 @@
 import { SlickException } from "../SlickException.js";
+import { runSettledBatch } from "./BatchLoader.js";
 /** Browser resource failure with stable, application-readable semantics. */
 export class ResourceLoadException extends SlickException {
     ref;
@@ -29,6 +30,7 @@ export class ResourceLoader {
     static trackedErrors = [];
     static trackingGeneration = 0;
     static cacheBustValue = null;
+    static cacheVersionResolver = null;
     static retryCount = 0;
     static retryDelay = 250;
     /** Java Slick2D counterpart: ResourceLoader.addResourceLocation(ResourceLocation). */
@@ -44,9 +46,17 @@ export class ResourceLoader {
     static removeAllResourceLocations() {
         ResourceLoader.locations = [];
     }
-    /** Adds or clears a cache-version query parameter while retaining Java refs as cache keys. */
+    /** Adds or clears one global cache-version query parameter while retaining Java refs as cache keys. */
     static setCacheBust(value) {
         ResourceLoader.cacheBustValue = value === null ? null : String(value);
+        ResourceLoader.cacheVersionResolver = null;
+    }
+    /** Browser/PWA helper: supplies a stable cache version independently for each Java resource ref. */
+    static setCacheVersionResolver(resolver) {
+        ResourceLoader.cacheVersionResolver = resolver;
+        if (resolver !== null) {
+            ResourceLoader.cacheBustValue = null;
+        }
     }
     /** Configures transient browser fetch retries. Permanent HTTP failures are not retried. */
     static setRetryOptions(retries, delayMs = 250) {
@@ -156,13 +166,13 @@ export class ResourceLoader {
         if (total === 0) {
             return results;
         }
-        const settled = await Promise.allSettled(uniqueRefs.map(async (ref) => {
+        const settled = await runSettledBatch(uniqueRefs, options.concurrency, async (ref) => {
             const bytes = await ResourceLoader.loadResource(ref, options);
             results.set(ref, bytes);
             loaded++;
             bytesLoaded += bytes.byteLength;
             options.onProgress?.({ ref, loaded, total, bytesLoaded });
-        }));
+        });
         const failure = settled.find((entry) => entry.status === "rejected");
         if (failure) {
             throw failure.reason;
@@ -279,9 +289,10 @@ export class ResourceLoader {
         }
         return first.error instanceof SlickException ? first.error : new SlickException(`Failed tracked resource: ${first.label}`, first.error);
     }
-    static withCacheBust(url) {
-        if (ResourceLoader.cacheBustValue !== null) {
-            url.searchParams.set("v", ResourceLoader.cacheBustValue);
+    static withCacheVersion(url, ref) {
+        const version = ResourceLoader.cacheVersionResolver !== null ? ResourceLoader.cacheVersionResolver(ref) : ResourceLoader.cacheBustValue;
+        if (version !== null) {
+            url.searchParams.set("v", String(version));
         }
         return url;
     }
@@ -289,7 +300,7 @@ export class ResourceLoader {
         const urls = [];
         for (const location of ResourceLoader.locations) {
             try {
-                urls.push(ResourceLoader.withCacheBust(ResourceLoader.resolveLocation(location, ref)));
+                urls.push(ResourceLoader.withCacheVersion(ResourceLoader.resolveLocation(location, ref), ref));
             }
             catch {
                 continue;

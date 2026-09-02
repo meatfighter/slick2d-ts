@@ -1,0 +1,1 @@
+{"version":3,"file":"BatchLoader.d.ts","sourceRoot":"","sources":["../../../src/slick/util/BatchLoader.ts"],"names":[],"mappings":"AAAA,+EAA+E;AAC/E,wBAAsB,eAAe,CAAC,CAAC,EACnC,KAAK,EAAE,SAAS,CAAC,EAAE,EACnB,WAAW,EAAE,MAAM,GAAG,SAAS,EAC/B,SAAS,EAAE,CAAC,IAAI,EAAE,CAAC,EAAE,KAAK,EAAE,MAAM,KAAK,OAAO,CAAC,IAAI,CAAC,GACrD,OAAO,CAAC,oBAAoB,CAAC,IAAI,CAAC,EAAE,CAAC,CA0BvC"}

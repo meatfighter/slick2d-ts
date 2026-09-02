@@ -11,6 +11,7 @@ export type AudioPreloadProgress = {
 };
 export interface AudioPreloadOptions extends ResourceLoadOptions {
     readonly onProgress?: (progress: AudioPreloadProgress) => void;
+    readonly concurrency?: number;
 }
 /**
  * Browser Web Audio playback handle.

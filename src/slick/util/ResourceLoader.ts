@@ -1,4 +1,5 @@
 import { SlickException } from "../SlickException.js";
+import { runSettledBatch } from "./BatchLoader.js";
 
 type ResourceRecord = {
     ref: string;
@@ -14,6 +15,7 @@ export type TrackedResourceError = {
 
 export type ResourceLoadFailureKind = "resolution" | "network" | "http" | "abort" | "decode";
 export type ResourceLoadPhase = "resolve" | "fetch" | "read" | "decode";
+export type ResourceCacheVersionResolver = (ref: string) => string | number | null;
 
 export interface ResourceLoadFailureDetails {
     readonly ref: string;
@@ -56,6 +58,7 @@ export type ResourcePreloadProgress = {
 
 export interface ResourcePreloadOptions extends ResourceLoadOptions {
     readonly onProgress?: (progress: ResourcePreloadProgress) => void;
+    readonly concurrency?: number;
 }
 
 /**
@@ -71,6 +74,7 @@ export class ResourceLoader {
     private static trackedErrors: TrackedResourceError[] = [];
     private static trackingGeneration = 0;
     private static cacheBustValue: string | null = null;
+    private static cacheVersionResolver: ResourceCacheVersionResolver | null = null;
     private static retryCount = 0;
     private static retryDelay = 250;
 
@@ -90,9 +94,18 @@ export class ResourceLoader {
         ResourceLoader.locations = [];
     }
 
-    /** Adds or clears a cache-version query parameter while retaining Java refs as cache keys. */
+    /** Adds or clears one global cache-version query parameter while retaining Java refs as cache keys. */
     public static setCacheBust(value: string | number | null): void {
         ResourceLoader.cacheBustValue = value === null ? null : String(value);
+        ResourceLoader.cacheVersionResolver = null;
+    }
+
+    /** Browser/PWA helper: supplies a stable cache version independently for each Java resource ref. */
+    public static setCacheVersionResolver(resolver: ResourceCacheVersionResolver | null): void {
+        ResourceLoader.cacheVersionResolver = resolver;
+        if (resolver !== null) {
+            ResourceLoader.cacheBustValue = null;
+        }
     }
 
     /** Configures transient browser fetch retries. Permanent HTTP failures are not retried. */
@@ -215,15 +228,13 @@ export class ResourceLoader {
             return results;
         }
 
-        const settled = await Promise.allSettled(
-            uniqueRefs.map(async (ref) => {
-                const bytes = await ResourceLoader.loadResource(ref, options);
-                results.set(ref, bytes);
-                loaded++;
-                bytesLoaded += bytes.byteLength;
-                options.onProgress?.({ ref, loaded, total, bytesLoaded });
-            })
-        );
+        const settled = await runSettledBatch(uniqueRefs, options.concurrency, async (ref) => {
+            const bytes = await ResourceLoader.loadResource(ref, options);
+            results.set(ref, bytes);
+            loaded++;
+            bytesLoaded += bytes.byteLength;
+            options.onProgress?.({ ref, loaded, total, bytesLoaded });
+        });
         const failure = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected");
         if (failure) {
             throw failure.reason;
@@ -353,9 +364,10 @@ export class ResourceLoader {
         return first.error instanceof SlickException ? first.error : new SlickException(`Failed tracked resource: ${first.label}`, first.error);
     }
 
-    private static withCacheBust(url: URL): URL {
-        if (ResourceLoader.cacheBustValue !== null) {
-            url.searchParams.set("v", ResourceLoader.cacheBustValue);
+    private static withCacheVersion(url: URL, ref: string): URL {
+        const version = ResourceLoader.cacheVersionResolver !== null ? ResourceLoader.cacheVersionResolver(ref) : ResourceLoader.cacheBustValue;
+        if (version !== null) {
+            url.searchParams.set("v", String(version));
         }
         return url;
     }
@@ -364,7 +376,7 @@ export class ResourceLoader {
         const urls: URL[] = [];
         for (const location of ResourceLoader.locations) {
             try {
-                urls.push(ResourceLoader.withCacheBust(ResourceLoader.resolveLocation(location, ref)));
+                urls.push(ResourceLoader.withCacheVersion(ResourceLoader.resolveLocation(location, ref), ref));
             } catch {
                 continue;
             }

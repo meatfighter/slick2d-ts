@@ -1,4 +1,5 @@
 import { ResourceLoadException, ResourceLoader, type ResourceLoadOptions } from "../util/ResourceLoader.js";
+import { runSettledBatch } from "../util/BatchLoader.js";
 import { Log } from "../util/Log.js";
 
 type WebAudioGlobal = typeof globalThis & {
@@ -19,6 +20,7 @@ export type AudioPreloadProgress = {
 
 export interface AudioPreloadOptions extends ResourceLoadOptions {
     readonly onProgress?: (progress: AudioPreloadProgress) => void;
+    readonly concurrency?: number;
 }
 
 /**
@@ -424,13 +426,11 @@ export class SoundStore {
         if (total === 0) {
             return;
         }
-        const settled = await Promise.allSettled(
-            uniqueRefs.map(async (ref) => {
-                await this.preloadAudioBuffer(ref, options);
-                loaded++;
-                options.onProgress?.({ ref, loaded, total });
-            })
-        );
+        const settled = await runSettledBatch(uniqueRefs, options.concurrency, async (ref) => {
+            await this.preloadAudioBuffer(ref, options);
+            loaded++;
+            options.onProgress?.({ ref, loaded, total });
+        });
         const failure = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected");
         if (failure) {
             throw failure.reason;
