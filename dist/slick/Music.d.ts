@@ -60,6 +60,14 @@ export declare class Music {
     setVolume(volume: number): void;
     /** Java Slick2D counterpart: Music.getVolume(). */
     getVolume(): number;
+    /** Browser parity helper: reports whether the current playback mode loops. */
+    isLooped(): boolean;
+    /** Browser parity helper: reports whether playback is explicitly paused. */
+    isPaused(): boolean;
+    /** Browser parity helper: reports the pitch/playback-rate used by play/loop. */
+    getPlaybackRate(): number;
+    /** Browser parity helper: reports the decoded track duration when available. */
+    getDuration(): number | null;
     /** Java Slick2D counterpart: Music.setPosition(float). */
     setPosition(position: number): boolean;
     /** Java Slick2D counterpart: Music.getPosition(). */

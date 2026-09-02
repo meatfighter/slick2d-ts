@@ -146,6 +146,23 @@ export class Music {
     getVolume() {
         return this.volume;
     }
+    /** Browser parity helper: reports whether the current playback mode loops. */
+    isLooped() {
+        return this.looped;
+    }
+    /** Browser parity helper: reports whether playback is explicitly paused. */
+    isPaused() {
+        return this.paused;
+    }
+    /** Browser parity helper: reports the pitch/playback-rate used by play/loop. */
+    getPlaybackRate() {
+        return this.playbackRate;
+    }
+    /** Browser parity helper: reports the decoded track duration when available. */
+    getDuration() {
+        const duration = this.buffer?.duration;
+        return typeof duration === "number" && Number.isFinite(duration) && duration >= 0 ? duration : null;
+    }
     /** Java Slick2D counterpart: Music.setPosition(float). */
     setPosition(position) {
         this.positionOffset = this.buffer ? this.normalizeOffset(this.buffer, position, this.looped) : this.sanitizeOffset(position);
