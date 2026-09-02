@@ -1,0 +1,373 @@
+name: Apply v1.5.3 maintenance
+
+on:
+    push:
+        paths:
+            - ".github/workflows/apply-v1-5-3-maintenance.yml"
+
+permissions:
+    contents: write
+
+jobs:
+    apply:
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Apply resource-loading maintenance
+              shell: bash
+              run: |
+                  python - <<'PY'
+                  from pathlib import Path
+
+                  def replace_once(path, old, new):
+                      file = Path(path)
+                      text = file.read_text()
+                      count = text.count(old)
+                      if count != 1:
+                          raise SystemExit(f"Expected exactly one match in {path}, found {count}: {old[:80]!r}")
+                      file.write_text(text.replace(old, new, 1))
+
+                  replace_once(
+                      "package.json",
+                      '"version": "1.5.2"',
+                      '"version": "1.5.3"'
+                  )
+
+                  batch_loader = '''/** Runs a batch with a bounded number of in-flight asynchronous operations. */
+                  export async function runSettledBatch<T>(
+                      items: readonly T[],
+                      concurrency: number | undefined,
+                      operation: (item: T, index: number) => Promise<void>
+                  ): Promise<PromiseSettledResult<void>[]> {
+                      const workerCount = normalizeBatchConcurrency(concurrency, items.length);
+                      const results = new Array<PromiseSettledResult<void>>(items.length);
+                      let nextIndex = 0;
+
+                      const worker = async (): Promise<void> => {
+                          while (true) {
+                              const index = nextIndex++;
+                              if (index >= items.length) {
+                                  return;
+                              }
+                              try {
+                                  await operation(items[index]!, index);
+                                  results[index] = { status: "fulfilled", value: undefined };
+                              } catch (reason) {
+                                  results[index] = { status: "rejected", reason };
+                              }
+                          }
+                      };
+
+                      const workers = new Array<Promise<void>>(workerCount);
+                      for (let i = 0; i < workerCount; i++) {
+                          workers[i] = worker();
+                      }
+                      await Promise.all(workers);
+                      return results;
+                  }
+
+                  function normalizeBatchConcurrency(concurrency: number | undefined, itemCount: number): number {
+                      if (concurrency !== undefined && (!Number.isSafeInteger(concurrency) || concurrency <= 0)) {
+                          throw new RangeError("Batch preload concurrency must be a positive safe integer.");
+                      }
+                      if (itemCount === 0) {
+                          return 0;
+                      }
+                      return concurrency === undefined ? itemCount : Math.min(concurrency, itemCount);
+                  }
+                  '''
+                  Path("src/slick/util/BatchLoader.ts").write_text(batch_loader)
+
+                  replace_once(
+                      "src/slick/util/ResourceLoader.ts",
+                      'import { SlickException } from "../SlickException.js";\n',
+                      'import { SlickException } from "../SlickException.js";\nimport { runSettledBatch } from "./BatchLoader.js";\n'
+                  )
+                  replace_once(
+                      "src/slick/util/ResourceLoader.ts",
+                      'export type ResourceLoadPhase = "resolve" | "fetch" | "read" | "decode";\n',
+                      'export type ResourceLoadPhase = "resolve" | "fetch" | "read" | "decode";\nexport type ResourceCacheVersionResolver = (ref: string) => string | number | null;\n'
+                  )
+                  replace_once(
+                      "src/slick/util/ResourceLoader.ts",
+                      'export interface ResourcePreloadOptions extends ResourceLoadOptions {\n    readonly onProgress?: (progress: ResourcePreloadProgress) => void;\n}\n',
+                      'export interface ResourcePreloadOptions extends ResourceLoadOptions {\n    readonly onProgress?: (progress: ResourcePreloadProgress) => void;\n    readonly concurrency?: number;\n}\n'
+                  )
+                  replace_once(
+                      "src/slick/util/ResourceLoader.ts",
+                      '    private static cacheBustValue: string | null = null;\n',
+                      '    private static cacheBustValue: string | null = null;\n    private static cacheVersionResolver: ResourceCacheVersionResolver | null = null;\n'
+                  )
+                  replace_once(
+                      "src/slick/util/ResourceLoader.ts",
+                      '''    /** Adds or clears a cache-version query parameter while retaining Java refs as cache keys. */
+    public static setCacheBust(value: string | number | null): void {
+        ResourceLoader.cacheBustValue = value === null ? null : String(value);
+    }
+''',
+                      '''    /** Adds or clears one global cache-version query parameter while retaining Java refs as cache keys. */
+    public static setCacheBust(value: string | number | null): void {
+        ResourceLoader.cacheBustValue = value === null ? null : String(value);
+        ResourceLoader.cacheVersionResolver = null;
+    }
+
+    /** Browser/PWA helper: supplies a stable cache version independently for each Java resource ref. */
+    public static setCacheVersionResolver(resolver: ResourceCacheVersionResolver | null): void {
+        ResourceLoader.cacheVersionResolver = resolver;
+        if (resolver !== null) {
+            ResourceLoader.cacheBustValue = null;
+        }
+    }
+'''
+                  )
+                  replace_once(
+                      "src/slick/util/ResourceLoader.ts",
+                      '''        const settled = await Promise.allSettled(
+            uniqueRefs.map(async (ref) => {
+                const bytes = await ResourceLoader.loadResource(ref, options);
+                results.set(ref, bytes);
+                loaded++;
+                bytesLoaded += bytes.byteLength;
+                options.onProgress?.({ ref, loaded, total, bytesLoaded });
+            })
+        );
+''',
+                      '''        const settled = await runSettledBatch(uniqueRefs, options.concurrency, async (ref) => {
+            const bytes = await ResourceLoader.loadResource(ref, options);
+            results.set(ref, bytes);
+            loaded++;
+            bytesLoaded += bytes.byteLength;
+            options.onProgress?.({ ref, loaded, total, bytesLoaded });
+        });
+'''
+                  )
+                  replace_once(
+                      "src/slick/util/ResourceLoader.ts",
+                      '''    private static withCacheBust(url: URL): URL {
+        if (ResourceLoader.cacheBustValue !== null) {
+            url.searchParams.set("v", ResourceLoader.cacheBustValue);
+        }
+        return url;
+    }
+
+    private static getResourceCandidates(ref: string): URL[] {
+        const urls: URL[] = [];
+        for (const location of ResourceLoader.locations) {
+            try {
+                urls.push(ResourceLoader.withCacheBust(ResourceLoader.resolveLocation(location, ref)));
+            } catch {
+                continue;
+            }
+        }
+        return urls;
+    }
+''',
+                      '''    private static withCacheVersion(url: URL, ref: string): URL {
+        const version =
+            ResourceLoader.cacheVersionResolver !== null ? ResourceLoader.cacheVersionResolver(ref) : ResourceLoader.cacheBustValue;
+        if (version !== null) {
+            url.searchParams.set("v", String(version));
+        }
+        return url;
+    }
+
+    private static getResourceCandidates(ref: string): URL[] {
+        const urls: URL[] = [];
+        for (const location of ResourceLoader.locations) {
+            try {
+                urls.push(ResourceLoader.withCacheVersion(ResourceLoader.resolveLocation(location, ref), ref));
+            } catch {
+                continue;
+            }
+        }
+        return urls;
+    }
+'''
+                  )
+
+                  replace_once(
+                      "src/slick/openal/SoundStore.ts",
+                      'import { ResourceLoadException, ResourceLoader, type ResourceLoadOptions } from "../util/ResourceLoader.js";\n',
+                      'import { ResourceLoadException, ResourceLoader, type ResourceLoadOptions } from "../util/ResourceLoader.js";\nimport { runSettledBatch } from "../util/BatchLoader.js";\n'
+                  )
+                  replace_once(
+                      "src/slick/openal/SoundStore.ts",
+                      'export interface AudioPreloadOptions extends ResourceLoadOptions {\n    readonly onProgress?: (progress: AudioPreloadProgress) => void;\n}\n',
+                      'export interface AudioPreloadOptions extends ResourceLoadOptions {\n    readonly onProgress?: (progress: AudioPreloadProgress) => void;\n    readonly concurrency?: number;\n}\n'
+                  )
+                  replace_once(
+                      "src/slick/openal/SoundStore.ts",
+                      '''        const settled = await Promise.allSettled(
+            uniqueRefs.map(async (ref) => {
+                await this.preloadAudioBuffer(ref, options);
+                loaded++;
+                options.onProgress?.({ ref, loaded, total });
+            })
+        );
+''',
+                      '''        const settled = await runSettledBatch(uniqueRefs, options.concurrency, async (ref) => {
+            await this.preloadAudioBuffer(ref, options);
+            loaded++;
+            options.onProgress?.({ ref, loaded, total });
+        });
+'''
+                  )
+
+                  replace_once(
+                      "README.md",
+                      'npm install git+https://github.com/meatfighter/slick2d-ts.git#semver:^1.5.0',
+                      'npm install git+https://github.com/meatfighter/slick2d-ts.git#semver:^1.5.3'
+                  )
+                  replace_once(
+                      "README.md",
+                      'Resource and audio batches accept an optional `AbortSignal`. Batch promises settle all work started by that batch before rejecting, so a host application can present a Retry action without leaving an earlier loading attempt running underneath it.\n',
+                      'Resource and audio batches accept an optional `AbortSignal` and `concurrency` limit. Batch promises settle all work started by that batch before rejecting, so a host application can present a Retry action without leaving an earlier loading attempt running underneath it. `ResourceLoader.setCacheVersionResolver(...)` can assign content-derived cache versions per Java resource ref while leaving those logical refs unchanged.\n'
+                  )
+                  replace_once(
+                      "README.md",
+                      '''    ResourceLoader.preloadResources(imageAndDataRefs, {
+        signal: controller.signal,
+        onProgress: ({ loaded, total }) => updateProgress(loaded, total)
+    }),
+    SoundStore.get().preloadAudioBuffers(audioRefs, {
+        signal: controller.signal
+    })
+''',
+                      '''    ResourceLoader.preloadResources(imageAndDataRefs, {
+        signal: controller.signal,
+        concurrency: 8,
+        onProgress: ({ loaded, total }) => updateProgress(loaded, total)
+    }),
+    SoundStore.get().preloadAudioBuffers(audioRefs, {
+        signal: controller.signal,
+        concurrency: 3
+    })
+'''
+                  )
+                  replace_once(
+                      "COMPATIBILITY.md",
+                      '- `ResourceLoader.preloadResources(...)` and `SoundStore.preloadAudioBuffers(...)` accept an optional `AbortSignal` and progress callback.\n',
+                      '- `ResourceLoader.preloadResources(...)` and `SoundStore.preloadAudioBuffers(...)` accept an optional `AbortSignal`, progress callback, and positive-integer `concurrency` limit. Omitting `concurrency` preserves the existing unbounded batch behavior.\n- `ResourceLoader.setCacheVersionResolver(...)` assigns a cache-version query value independently for each logical Java resource ref. `setCacheBust(...)` remains the simpler mutually exclusive global-version mode.\n'
+                  )
+
+                  tests = '''import assert from "node:assert/strict";
+                  import { afterEach, test } from "node:test";
+                  import { SoundStore } from "../dist/slick/openal/SoundStore.js";
+                  import { ResourceLoader } from "../dist/slick/util/ResourceLoader.js";
+
+                  const originalFetch = globalThis.fetch;
+
+                  afterEach(() => {
+                      globalThis.fetch = originalFetch;
+                      ResourceLoader.clearCache();
+                      ResourceLoader.removeAllResourceLocations();
+                      ResourceLoader.addResourceLocation("");
+                      ResourceLoader.setCacheBust(null);
+                      ResourceLoader.setRetryOptions(0, 0);
+                  });
+
+                  function responseFor(url, byteLength = 4) {
+                      return {
+                          ok: true,
+                          status: 200,
+                          url: String(url),
+                          async arrayBuffer() {
+                              return new Uint8Array(byteLength).buffer;
+                          }
+                      };
+                  }
+
+                  test("per-resource cache versions preserve Java refs while versioning resolved URLs", () => {
+                      ResourceLoader.removeAllResourceLocations();
+                      ResourceLoader.addResourceLocation("https://example.test/resources/");
+                      ResourceLoader.setCacheVersionResolver((ref) => (ref === "images/a.png" ? "content-a" : null));
+
+                      assert.equal(ResourceLoader.getResource("images/a.png")?.href, "https://example.test/resources/images/a.png?v=content-a");
+                      assert.equal(ResourceLoader.getResource("images/b.png")?.href, "https://example.test/resources/images/b.png");
+
+                      ResourceLoader.setCacheBust("build-7");
+                      assert.equal(ResourceLoader.getResource("images/a.png")?.href, "https://example.test/resources/images/a.png?v=build-7");
+                  });
+
+                  test("resource preload concurrency bounds simultaneous fetches", async () => {
+                      ResourceLoader.removeAllResourceLocations();
+                      ResourceLoader.addResourceLocation("https://example.test/resources/");
+                      let active = 0;
+                      let peak = 0;
+                      globalThis.fetch = async (url) => {
+                          active++;
+                          peak = Math.max(peak, active);
+                          await new Promise((resolve) => setTimeout(resolve, 5));
+                          active--;
+                          return responseFor(url);
+                      };
+
+                      const refs = Array.from({ length: 7 }, (_, index) => `resource-${index}.bin`);
+                      const result = await ResourceLoader.preloadResources(refs, { concurrency: 2 });
+                      assert.equal(result.size, refs.length);
+                      assert.equal(peak, 2);
+                  });
+
+                  test("resource preload rejects invalid concurrency", async () => {
+                      await assert.rejects(ResourceLoader.preloadResources(["a.bin"], { concurrency: 0 }), RangeError);
+                  });
+
+                  test("audio preload concurrency bounds simultaneous decodes", async () => {
+                      const store = SoundStore.get();
+                      const originalPreloadAudioBuffer = store.preloadAudioBuffer;
+                      let active = 0;
+                      let peak = 0;
+                      store.preloadAudioBuffer = async () => {
+                          active++;
+                          peak = Math.max(peak, active);
+                          await new Promise((resolve) => setTimeout(resolve, 5));
+                          active--;
+                      };
+                      try {
+                          const refs = Array.from({ length: 6 }, (_, index) => `audio-${index}.ogg`);
+                          await store.preloadAudioBuffers(refs, { concurrency: 3 });
+                          assert.equal(peak, 3);
+                      } finally {
+                          store.preloadAudioBuffer = originalPreloadAudioBuffer;
+                      }
+                  });
+                  '''
+                  Path("test/resource-preload-policy.test.mjs").write_text(tests)
+                  PY
+
+                  npm install --package-lock-only --ignore-scripts
+                  npm run format
+
+            - name: Verify source and Node tests
+              run: npm run verify
+
+            - name: Verify browser behavior
+              run: npm run verify:browser
+
+            - name: Commit release and tag
+              shell: bash
+              run: |
+                  git rm .github/workflows/apply-v1-5-3-maintenance.yml
+                  git add -A
+                  git diff --cached --check
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git commit -m "Release v1.5.3 resource preload controls"
+                  git push
+                  git tag v1.5.3
+                  git push origin v1.5.3
