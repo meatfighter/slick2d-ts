@@ -1,4 +1,4 @@
-import { AppGameContainer, Color, Display, Image, Input, Renderer, ResourceLoader } from "../../dist/index.js";
+import { AppGameContainer, Color, Display, Image, Input, Renderer, ResourceLoader, XMLPackedSheet } from "../../dist/index.js";
 import { WebGLTextureResource } from "../../dist/slick/rendering/WebGLTextureResource.js";
 
 const result = document.querySelector("#result");
@@ -37,12 +37,18 @@ function noopGame(title) {
 }
 
 async function pngBytes(red, green, blue) {
+    return canvasPngBytes(4, 4, (sourceContext) => {
+        sourceContext.fillStyle = `rgb(${red}, ${green}, ${blue})`;
+        sourceContext.fillRect(0, 0, 4, 4);
+    });
+}
+
+async function canvasPngBytes(width, height, draw) {
     const source = document.createElement("canvas");
-    source.width = 4;
-    source.height = 4;
+    source.width = width;
+    source.height = height;
     const sourceContext = source.getContext("2d");
-    sourceContext.fillStyle = `rgb(${red}, ${green}, ${blue})`;
-    sourceContext.fillRect(0, 0, 4, 4);
+    draw(sourceContext);
     const blob = await new Promise((resolve) => source.toBlob(resolve, "image/png"));
     assert(blob, "Test browser could not encode a PNG fixture");
     return blob.arrayBuffer();
@@ -88,6 +94,43 @@ async function verifyContainerRestartPathTexture() {
         parent.remove();
         ResourceLoader.clearCache();
     }
+}
+
+async function verifyXmlPackedSheetAsyncSubImages() {
+    const imageRef = "images/browser-packed-sheet.png";
+    const xmlRef = "images/browser-packed-sheet.xml";
+    ResourceLoader.registerResource(
+        imageRef,
+        await canvasPngBytes(4, 2, (context) => {
+            context.fillStyle = "rgb(255, 0, 0)";
+            context.fillRect(0, 0, 2, 2);
+            context.fillStyle = "rgb(0, 255, 0)";
+            context.fillRect(2, 0, 2, 2);
+        })
+    );
+    ResourceLoader.registerResource(xmlRef, new TextEncoder().encode('<sprites><sprite name="right" x="2" y="0" width="2" height="2" /></sprites>'));
+
+    const sheet = new XMLPackedSheet(imageRef, xmlRef);
+    const sprite = sheet.getSprite("right");
+    assert(sprite !== null, "XMLPackedSheet did not create the sprite");
+    await ResourceLoader.waitForAll();
+
+    assert(sprite.getWidth() === 2 && sprite.getHeight() === 2, "Packed-sheet sprite dimensions changed after image decode");
+    assert(closeTo(sprite.getTextureOffsetX(), 0.5, 0.00001), "Packed-sheet sprite lost its atlas X offset");
+    assert(closeTo(sprite.getTextureOffsetY(), 0, 0.00001), "Packed-sheet sprite lost its atlas Y offset");
+    assert(closeTo(sprite.getTextureWidth(), 0.5, 0.00001), "Packed-sheet sprite lost its atlas source width");
+    assert(closeTo(sprite.getTextureHeight(), 1, 0.00001), "Packed-sheet sprite lost its atlas source height");
+
+    const renderer = Renderer.getBackend();
+    renderer.beginFrame(2, 2, Color.transparent, 2, 2);
+    sprite.draw(0, 0, 2, 2);
+    renderer.endFrame();
+    const pixel = new Uint8Array(4);
+    renderer.readPixels(0, 1, 1, 1, pixel);
+    assert(closeTo(pixel[1], 255) && pixel[0] < 3 && pixel[2] < 3, "Packed-sheet sprite rendered the wrong atlas region");
+
+    sprite.destroy();
+    ResourceLoader.clearCache();
 }
 
 async function run() {
@@ -150,6 +193,9 @@ async function run() {
     assert(Array.isArray(inputEvents[1]) && inputEvents[1][0] === "pressed", "Queued key press was not dispatched");
     assert(inputEvents.at(-1) === "ended", "inputEnded() was not the final poll callback");
     passed.push("poll-time browser input dispatch");
+
+    await verifyXmlPackedSheetAsyncSubImages();
+    passed.push("XML packed-sheet async subimages");
 
     input.unbind();
     loaded.destroy();

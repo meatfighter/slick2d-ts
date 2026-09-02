@@ -384,6 +384,27 @@ test("flipped subimages and partial draws use signed Java texture coordinates", 
     }
 });
 
+test("subimages created before async texture dimensions resolve keep the requested source rectangle", async () => {
+    installCanvasDocument();
+    const completion = deferred();
+    const texture = new DeferredTextureResource(0, 0, completion.promise);
+    const image = new Image(texture);
+    const sub = image.getSubImage(32, 16, 8, 8);
+
+    texture.width = 256;
+    texture.height = 128;
+    completion.resolve();
+    await Promise.resolve();
+
+    assert.equal(sub.getWidth(), 8);
+    assert.equal(sub.getHeight(), 8);
+    assert.equal(sub.getTextureOffsetX(), 32 / 256);
+    assert.equal(sub.getTextureOffsetY(), 16 / 128);
+    assert.equal(sub.getTextureWidth(), 8 / 256);
+    assert.equal(sub.getTextureHeight(), 8 / 128);
+    image.destroy();
+});
+
 test("GraphicsFactory returns one Graphics and target per shared texture even when a copy asks first", () => {
     installCanvasDocument();
     const image = new Image(8, 8);

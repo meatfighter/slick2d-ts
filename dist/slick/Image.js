@@ -331,6 +331,14 @@ export class Image {
     }
     /** Java Slick2D counterpart: Image.getSubImage(int, int, int, int). */
     getSubImage(x, y, width, height) {
+        if (!this.flipHorizontal &&
+            !this.flipVertical &&
+            this.sourceWidth === 0 &&
+            this.sourceHeight === 0 &&
+            this.displayWidth === 0 &&
+            this.displayHeight === 0) {
+            return Image.fromShared(this.textureResource, this.sourceX + x, this.sourceY + y, width, height, false, false, width, height, this.inverted);
+        }
         const source = this.mapLogicalSourceRect(x, y, x + width, y + height);
         return Image.fromShared(this.textureResource, source[0], source[1], source[2], source[3], this.flipHorizontal, this.flipVertical, width, height, this.inverted);
     }

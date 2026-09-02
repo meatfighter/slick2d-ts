@@ -440,6 +440,17 @@ export class Image implements Renderable {
 
     /** Java Slick2D counterpart: Image.getSubImage(int, int, int, int). */
     public getSubImage(x: number, y: number, width: number, height: number): Image {
+        if (
+            !this.flipHorizontal &&
+            !this.flipVertical &&
+            this.sourceWidth === 0 &&
+            this.sourceHeight === 0 &&
+            this.displayWidth === 0 &&
+            this.displayHeight === 0
+        ) {
+            return Image.fromShared(this.textureResource, this.sourceX + x, this.sourceY + y, width, height, false, false, width, height, this.inverted);
+        }
+
         const source = this.mapLogicalSourceRect(x, y, x + width, y + height);
         return Image.fromShared(
             this.textureResource,
