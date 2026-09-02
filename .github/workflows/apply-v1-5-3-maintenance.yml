@@ -31,10 +31,17 @@ jobs:
             - name: Apply maintenance
               run: python .github/scripts/apply-v1-5-3.py
 
-            - name: Synchronize lockfile and format
+            - name: Prepare candidate tree
+              shell: bash
               run: |
                   npm install --package-lock-only --ignore-scripts
                   npm run format
+                  npm run build
+                  git add -A
+                  git diff --cached --check
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git commit -m "Release v1.5.3 resource preload controls"
 
             - name: Verify source and Node tests
               run: npm run verify
@@ -42,15 +49,11 @@ jobs:
             - name: Verify browser behavior
               run: npm run verify:browser
 
-            - name: Commit release and tag
+            - name: Publish release
               shell: bash
               run: |
                   git rm .github/workflows/apply-v1-5-3-maintenance.yml .github/scripts/apply-v1-5-3.py
-                  git add -A
-                  git diff --cached --check
-                  git config user.name "github-actions[bot]"
-                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-                  git commit -m "Release v1.5.3 resource preload controls"
+                  git commit --amend --no-edit
                   git push
                   git tag v1.5.3
                   git push origin v1.5.3
