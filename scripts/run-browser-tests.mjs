@@ -279,6 +279,53 @@ async function waitForBrowserResult(page, html) {
     throw new Error(`Browser verification did not finish within 30 seconds. Last result: ${JSON.stringify(lastResult)}`);
 }
 
+async function collectBrowserListenerCount(page) {
+    await page.call("HeapProfiler.collectGarbage");
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 75));
+    await page.call("HeapProfiler.collectGarbage");
+    const counters = await page.call("Memory.getDOMCounters");
+    return counters.jsEventListeners;
+}
+
+async function runAudioLifecycleCycles(page, method, cycles) {
+    const evaluation = await page.call("Runtime.evaluate", {
+        expression: `(async () => {
+            const api = globalThis.__slickAudioLifecycle;
+            if (!api) throw new Error("Audio lifecycle browser fixture is unavailable");
+            for (let index = 0; index < ${cycles}; index++) {
+                await api[${JSON.stringify(method)}]();
+            }
+            return true;
+        })()`,
+        awaitPromise: true,
+        returnByValue: true
+    });
+    if (evaluation.exceptionDetails) {
+        throw new Error(`Audio lifecycle evaluation failed: ${JSON.stringify(evaluation.exceptionDetails)}`);
+    }
+}
+
+async function verifyAudioLifecycleListenerCleanup(page) {
+    for (const [label, method] of [
+        ["Music", "runMusicCycle"],
+        ["SoundStore", "runSoundCycle"]
+    ]) {
+        await runAudioLifecycleCycles(page, method, 1);
+        const baseline = await collectBrowserListenerCount(page);
+        await runAudioLifecycleCycles(page, method, 8);
+        const after = await collectBrowserListenerCount(page);
+        const growth = after - baseline;
+        console.log(`${label} listener lifecycle: ${baseline} -> ${after} (${growth >= 0 ? "+" : ""}${growth})`);
+        if (growth > 0) {
+            throw new Error(`${label} leaked ${growth} browser event listener(s) across eight explicit stop cycles.`);
+        }
+    }
+    await page.call("Runtime.evaluate", {
+        expression: "globalThis.__slickAudioLifecycle?.cleanup(); true;",
+        returnByValue: true
+    });
+}
+
 async function pathExists(path) {
     try {
         await stat(path);
@@ -410,6 +457,7 @@ try {
     page = await connectCdp(pageWebSocketUrl);
     const output = await waitForBrowserResult(page, browserDocument);
     console.log(output);
+    await verifyAudioLifecycleListenerCleanup(page);
 } catch (error) {
     const diagnostics = stderrChunks.join("").trim();
     const suffix = diagnostics ? `\n\nChromium diagnostics:\n${diagnostics}` : "";

@@ -1,4 +1,4 @@
-import { AppGameContainer, Color, Display, Image, Input, Renderer, ResourceLoader, XMLPackedSheet } from "../../dist/index.js";
+import { AppGameContainer, Color, Display, Image, Input, Music, Renderer, ResourceLoader, SoundStore, XMLPackedSheet } from "../../dist/index.js";
 import { WebGLTextureResource } from "../../dist/slick/rendering/WebGLTextureResource.js";
 
 const result = document.querySelector("#result");
@@ -35,6 +35,76 @@ function noopGame(title) {
         update: () => undefined
     };
 }
+
+const audioLifecycleRef = "audio/browser-lifecycle.wav";
+let audioLifecycleReady = null;
+
+function silentWavBytes() {
+    const sampleRate = 8000;
+    const sampleCount = 80;
+    const bytes = new ArrayBuffer(44 + sampleCount * 2);
+    const view = new DataView(bytes);
+    const writeAscii = (offset, value) => {
+        for (let index = 0; index < value.length; index++) {
+            view.setUint8(offset + index, value.charCodeAt(index));
+        }
+    };
+    writeAscii(0, "RIFF");
+    view.setUint32(4, 36 + sampleCount * 2, true);
+    writeAscii(8, "WAVE");
+    writeAscii(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeAscii(36, "data");
+    view.setUint32(40, sampleCount * 2, true);
+    return bytes;
+}
+
+async function prepareAudioLifecycle() {
+    if (audioLifecycleReady === null) {
+        ResourceLoader.registerResource(audioLifecycleRef, silentWavBytes());
+        const store = SoundStore.get();
+        store.init();
+        audioLifecycleReady = store.preloadAudioBuffer(audioLifecycleRef);
+    }
+    await audioLifecycleReady;
+}
+
+async function runMusicLifecycleCycle() {
+    await prepareAudioLifecycle();
+    const music = new Music(audioLifecycleRef);
+    await music.ready();
+    music.loop();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    music.stop();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+async function runSoundLifecycleCycle() {
+    await prepareAudioLifecycle();
+    const handle = SoundStore.get().playSound(audioLifecycleRef, 1, 1, true);
+    assert(handle !== null, "SoundStore did not create an audio lifecycle test handle");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    handle.stop();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+function cleanupAudioLifecycle() {
+    SoundStore.get().destroy();
+    ResourceLoader.clearCache();
+    audioLifecycleReady = null;
+}
+
+globalThis.__slickAudioLifecycle = {
+    runMusicCycle: runMusicLifecycleCycle,
+    runSoundCycle: runSoundLifecycleCycle,
+    cleanup: cleanupAudioLifecycle
+};
 
 async function pngBytes(red, green, blue) {
     return canvasPngBytes(4, 4, (sourceContext) => {
@@ -204,6 +274,9 @@ async function run() {
 
     await verifyContainerRestartPathTexture();
     passed.push("container restart texture cache boundary");
+
+    await prepareAudioLifecycle();
+    passed.push("audio lifecycle fixture");
 }
 
 try {
