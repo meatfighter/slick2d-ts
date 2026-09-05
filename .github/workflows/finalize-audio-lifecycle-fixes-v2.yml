@@ -1,0 +1,92 @@
+name: Finalize audio lifecycle fixes v2
+
+on:
+    push:
+        paths:
+            - .github/workflows/finalize-audio-lifecycle-fixes-v2.yml
+
+permissions:
+    contents: write
+
+jobs:
+    finalize:
+        runs-on: ubuntu-24.04
+        timeout-minutes: 25
+
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v7
+              with:
+                  node-version: "22"
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Run corrected fail-fast finalizer
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  python3 - <<'PY'
+                  from pathlib import Path
+
+                  workflow = Path(".github/workflows/finalize-audio-lifecycle-fixes.yml").read_text()
+                  marker = "            - name: Rebuild and verify audio lifecycle repair\n              shell: bash\n              run: |\n"
+                  if workflow.count(marker) != 1:
+                      raise SystemExit("Could not locate finalizer run block")
+                  script = workflow.split(marker, 1)[1]
+                  lines = script.splitlines()
+                  script = "\n".join(line[18:] if line.startswith("                  ") else line for line in lines) + "\n"
+
+                  bad_position = '''    ''' + "'''" + '''        if (this.source) {
+                          this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
+                      }
+                  ''' + "'''" + ''',
+                      ''' + "'''" + '''        if (this.source) {
+                          this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
+                      }
+                  ''' + "'''" + '''
+                  '''
+                  good_position = '''    "        if (this.source) {\\n            this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);\\n        }\\n",
+                      "        if (this.source) {\\n            this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);\\n        }\\n"
+                  '''
+                  if script.count(bad_position) != 1:
+                      raise SystemExit(f"Expected one malformed setPosition anchor, found {script.count(bad_position)}")
+                  script = script.replace(bad_position, good_position)
+
+                  bad_handle = '''    ''' + "'''" + '''            resume: () => this.resumeForMusicOn(),
+                              playing: () => this.playing()
+                          };
+                          SoundStore.get().track(this.handle);
+                      }
+
+                      private clearHandle(): void {
+                  ''' + "'''" + ''',
+                      ''' + "'''" + '''            resume: () => this.resumeForMusicOn(),
+                              playing: () => this.isPlaybackActiveForStore()
+                          };
+                          SoundStore.get().track(this.handle);
+                      }
+
+                      private isPlaybackActiveForStore(): boolean {
+                          return Music.currentMusic === this && !this.endPending && (this.playingFlag || this.paused || this.globallySuspended);
+                      }
+
+                      private clearHandle(): void {
+                  ''' + "'''" + '''
+                  '''
+                  good_handle = '''    "            resume: () => this.resumeForMusicOn(),\\n            playing: () => this.playing()\\n        };\\n        SoundStore.get().track(this.handle);\\n    }\\n\\n    private clearHandle(): void {\\n",
+                      "            resume: () => this.resumeForMusicOn(),\\n            playing: () => this.isPlaybackActiveForStore()\\n        };\\n        SoundStore.get().track(this.handle);\\n    }\\n\\n    private isPlaybackActiveForStore(): boolean {\\n        return Music.currentMusic === this && !this.endPending && (this.playingFlag || this.paused || this.globallySuspended);\\n    }\\n\\n    private clearHandle(): void {\\n"
+                  '''
+                  if script.count(bad_handle) != 1:
+                      raise SystemExit(f"Expected one malformed handle anchor, found {script.count(bad_handle)}")
+                  script = script.replace(bad_handle, good_handle)
+
+                  Path("/tmp/finalize-audio-lifecycle.sh").write_text(script)
+                  PY
+                  bash /tmp/finalize-audio-lifecycle.sh
