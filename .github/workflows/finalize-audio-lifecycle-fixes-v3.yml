@@ -1,0 +1,67 @@
+name: Finalize audio lifecycle fixes v3
+
+on:
+    push:
+        paths:
+            - .github/workflows/finalize-audio-lifecycle-fixes-v3.yml
+
+permissions:
+    contents: write
+
+jobs:
+    finalize:
+        runs-on: ubuntu-24.04
+        timeout-minutes: 25
+
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v7
+              with:
+                  node-version: "22"
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Run corrected fail-fast finalizer
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  python3 - <<'PY'
+                  from pathlib import Path
+                  import re
+
+                  workflow = Path(".github/workflows/finalize-audio-lifecycle-fixes.yml").read_text()
+                  marker = "            - name: Rebuild and verify audio lifecycle repair\n              shell: bash\n              run: |\n"
+                  if workflow.count(marker) != 1:
+                      raise SystemExit("Could not locate finalizer run block")
+                  script = workflow.split(marker, 1)[1]
+                  lines = script.splitlines()
+                  script = "\n".join(line[18:] if line.startswith("                  ") else line for line in lines) + "\n"
+
+                  position_pattern = re.compile(
+                      r"    '''        if \(this\.source\) \{\n\s*this\.start\(this\.looped, this\.playbackRate, this\.volume, this\.positionOffset\);\n\s*\}\n'''[,]\n\s*'''        if \(this\.source\) \{\n\s*this\.start\(this\.looped, this\.playbackRate, this\.volume, this\.positionOffset, false\);\n\s*\}\n'''"
+                  )
+                  position_replacement = '''    "        if (this.source) {\\n            this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);\\n        }\\n",
+                      "        if (this.source) {\\n            this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);\\n        }\\n"'''
+                  script, position_count = position_pattern.subn(position_replacement, script, count=1)
+                  if position_count != 1:
+                      raise SystemExit(f"Expected one setPosition replacement block, found {position_count}")
+
+                  handle_pattern = re.compile(
+                      r"    '''            resume: \(\) => this\.resumeForMusicOn\(\),\n\s*playing: \(\) => this\.playing\(\)\n\s*\};\n\s*SoundStore\.get\(\)\.track\(this\.handle\);\n\s*\}\n\n\s*private clearHandle\(\): void \{\n'''[,]\n\s*'''            resume: \(\) => this\.resumeForMusicOn\(\),\n\s*playing: \(\) => this\.isPlaybackActiveForStore\(\)\n\s*\};\n\s*SoundStore\.get\(\)\.track\(this\.handle\);\n\s*\}\n\n\s*private isPlaybackActiveForStore\(\): boolean \{\n\s*return Music\.currentMusic === this && !this\.endPending && \(this\.playingFlag \|\| this\.paused \|\| this\.globallySuspended\);\n\s*\}\n\n\s*private clearHandle\(\): void \{\n'''"
+                  )
+                  handle_replacement = '''    "            resume: () => this.resumeForMusicOn(),\\n            playing: () => this.playing()\\n        };\\n        SoundStore.get().track(this.handle);\\n    }\\n\\n    private clearHandle(): void {\\n",
+                      "            resume: () => this.resumeForMusicOn(),\\n            playing: () => this.isPlaybackActiveForStore()\\n        };\\n        SoundStore.get().track(this.handle);\\n    }\\n\\n    private isPlaybackActiveForStore(): boolean {\\n        return Music.currentMusic === this && !this.endPending && (this.playingFlag || this.paused || this.globallySuspended);\\n    }\\n\\n    private clearHandle(): void {\\n"'''
+                  script, handle_count = handle_pattern.subn(handle_replacement, script, count=1)
+                  if handle_count != 1:
+                      raise SystemExit(f"Expected one handle replacement block, found {handle_count}")
+
+                  Path("/tmp/finalize-audio-lifecycle.sh").write_text(script)
+                  PY
+                  bash /tmp/finalize-audio-lifecycle.sh
