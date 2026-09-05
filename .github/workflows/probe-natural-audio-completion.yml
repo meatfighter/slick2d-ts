@@ -47,14 +47,14 @@ jobs:
               const music = new Music(audioLifecycleRef);
               await music.ready();
               music.play();
-              await new Promise((resolve) => setTimeout(resolve, 40));
+              await new Promise((resolve) => setTimeout(resolve, 50));
           }
 
           async function runNaturalSoundLifecycleCycle() {
               await prepareAudioLifecycle();
               const handle = SoundStore.get().playSound(audioLifecycleRef, 1, 1, false);
               assert(handle !== null, "SoundStore did not create a natural-completion test handle");
-              await new Promise((resolve) => setTimeout(resolve, 40));
+              await new Promise((resolve) => setTimeout(resolve, 50));
           }
           '''
           if text.count(anchor) != 1:
@@ -71,6 +71,8 @@ jobs:
               runSoundCycle: runSoundLifecycleCycle,
               runNaturalMusicCycle: runNaturalMusicLifecycleCycle,
               runNaturalSoundCycle: runNaturalSoundLifecycleCycle,
+              unlock: () => SoundStore.get().unlock(),
+              audioState: () => SoundStore.get().getAudioContext()?.state ?? "missing",
               cleanup: cleanupAudioLifecycle
           };
           '''
@@ -80,32 +82,46 @@ jobs:
 
           runner = Path('scripts/run-browser-tests.mjs')
           text = runner.read_text()
-          old = '''    for (const [label, method] of [
+          old = '''async function verifyAudioLifecycleListenerCleanup(page) {
+              const failures = [];
+          '''
+          new = '''async function verifyAudioLifecycleListenerCleanup(page) {
+              const unlock = await page.call("Runtime.evaluate", {
+                  expression: "globalThis.__slickAudioLifecycle.unlock()",
+                  awaitPromise: true,
+                  returnByValue: true,
+                  userGesture: true
+              });
+              if (unlock.exceptionDetails || unlock.result?.value !== true) {
+                  throw new Error(`Could not unlock Web Audio for natural-completion verification: ${JSON.stringify(unlock)}`);
+              }
+              const stateResult = await page.call("Runtime.evaluate", {
+                  expression: "globalThis.__slickAudioLifecycle.audioState()",
+                  returnByValue: true
+              });
+              console.log(`Audio lifecycle context state: ${stateResult.result?.value}`);
+              if (stateResult.result?.value !== "running") {
+                  throw new Error(`Web Audio context did not enter running state: ${stateResult.result?.value}`);
+              }
+              const failures = [];
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('audio lifecycle verifier anchor changed')
+          text = text.replace(old, new)
+          old2 = '''    for (const [label, method] of [
                   ["Music", "runMusicCycle"],
                   ["SoundStore", "runSoundCycle"]
               ]) {
           '''
-          new = '''    for (const [label, method] of [
+          new2 = '''    for (const [label, method] of [
                   ["Music explicit stop", "runMusicCycle"],
                   ["SoundStore explicit stop", "runSoundCycle"],
                   ["Music natural completion", "runNaturalMusicCycle"],
                   ["SoundStore natural completion", "runNaturalSoundCycle"]
               ]) {
           '''
-          if text.count(old) != 1:
-              raise SystemExit('audio lifecycle loop anchor changed')
-          text = text.replace(old, new)
-          old2 = '''        await runAudioLifecycleCycles(page, method, 8);
-                  const after = await collectBrowserListenerCount(page);
-          '''
-          new2 = '''        await runAudioLifecycleCycles(page, method, 8);
-                  if (method === "runNaturalSoundCycle") {
-                      await new Promise((resolveDelay) => setTimeout(resolveDelay, 2_000));
-                  }
-                  const after = await collectBrowserListenerCount(page);
-          '''
           if text.count(old2) != 1:
-              raise SystemExit('audio lifecycle measurement anchor changed')
+              raise SystemExit('audio lifecycle loop anchor changed')
           runner.write_text(text.replace(old2, new2))
           PY
           npx prettier test/browser/verify.mjs scripts/run-browser-tests.mjs --write
