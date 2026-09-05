@@ -1,28 +1,39 @@
 # slick2d-ts
 
-`slick2d-ts` is a TypeScript/WebGL browser port of [Slick2D](https://github.com/joshmarcus/slick2d), built for porting Java Slick2D and LWJGL-style games to modern browsers.
+`slick2d-ts` is a TypeScript/WebGL2 compatibility layer for porting Java games built on Slick2D and LWJGL-style APIs to modern browsers.
 
-The goal is API and behavior parity for Java game ports that already depend on Slick2D shapes such as `Game`, `BasicGame`, `AppGameContainer`, `Graphics`, `Image`, `Input`, `Sound`, `Music`, sprite sheets, and a small set of LWJGL/OpenGL/OpenAL shims. It is not a full Slick2D port, a complete desktop runtime, or a general-purpose game engine.
+The project focuses on the APIs and behaviors needed by maintained Java-to-TypeScript game ports. It is not a complete Slick2D implementation, a desktop runtime, or a general-purpose browser game engine.
 
-## Features
+## What it provides
 
-- Slick-style container lifecycle with browser `requestAnimationFrame` timing.
-- WebGL2 rendering backend with logical CSS-pixel coordinates and high-DPI backing stores.
-- Optional native-resolution buffered scaling with crisp, smooth, and pixel-perfect presentation modes.
+- Slick-style `Game`, `BasicGame`, and `AppGameContainer` lifecycle behavior.
+- WebGL2 rendering with Java/Slick-style `Graphics`, `Image`, sprite-sheet, shape, transform, clip, and draw-mode APIs.
+- Native-resolution buffered rendering with Smooth, Crisp, and Pixel Perfect presentation modes.
+- High-DPI canvas backing stores while gameplay coordinates remain logical CSS pixels.
 - Web Audio-backed `Sound`, `Music`, and `SoundStore` compatibility.
-- Keyboard, mouse, touch-style pointer, and browser Gamepad API input mapping.
-- Java parity helpers for numeric behavior, random numbers, binary reads, bitmap text, songs, and sprite drawing.
-- Browser resource preload/cache helpers with abortable batches, structured failures, and Java resource reference strings.
-- Exact Java `Random` state capture/restoration for save states, replays, and deterministic tests.
-- Optional calibrated secondary gamepad axes that feed Slick controller-direction queries once per input poll.
+- Keyboard, mouse, pointer, and Gamepad API input support.
+- Resource preloading and browser-cache helpers for Java-style resource references.
+- Java numeric, random-number, binary-read, bitmap-text, and sprite-drawing helpers used by parity-sensitive ports.
+- Exact Java `Random` state capture and restoration.
+- Browser lifecycle support for same-page container recreation and WebGL context loss/restoration.
 
-## Install
+## Installation
+
+The repository is not published to npm. For experimentation, install directly from GitHub:
 
 ```sh
-npm install git+https://github.com/meatfighter/slick2d-ts.git#semver:^1.5.3
+npm install git+https://github.com/meatfighter/slick2d-ts.git#main
 ```
 
-## Example
+Production game repositories should pin an **exact qualified commit**, not a moving branch. For example:
+
+```text
+https://codeload.github.com/meatfighter/slick2d-ts/tar.gz/<40-character-commit-sha>
+```
+
+The package and lockfile should agree on the same immutable revision.
+
+## Minimal example
 
 ```ts
 import { AppGameContainer, BasicGame, Color, type GameContainer, type Graphics } from "slick2d-ts";
@@ -48,7 +59,7 @@ await app.start();
 
 If `Display.setParent(...)` is not used, the container creates a canvas and appends it to `document.body`.
 
-For browser pages that need stable whole-scene scaling, wrap a fixed-resolution game with `BufferedScalableGame`:
+For a fixed-resolution game that should scale as one scene, wrap it with `BufferedScalableGame`:
 
 ```ts
 import { BufferedScalableGame, BufferedScalingMode } from "slick2d-ts";
@@ -59,9 +70,11 @@ const game = new BufferedScalableGame(new DemoGame(), 640, 480, {
 });
 ```
 
-## Browser Preloading
+## Resource preloading
 
-Resource and audio batches accept an optional `AbortSignal` and `concurrency` limit. Batch promises settle all work started by that batch before rejecting, so a host application can present a Retry action without leaving an earlier loading attempt running underneath it. `ResourceLoader.setCacheVersionResolver(...)` can assign content-derived cache versions per Java resource ref while leaving those logical refs unchanged.
+Browser APIs are asynchronous in places where Java Slick2D APIs were synchronous. Image, audio, XML, atlas, and binary resources should therefore be preloaded before synchronous game code consumes them.
+
+Resource and audio batches accept an `AbortSignal`, a concurrency limit, and progress reporting. Batch work settles before rejection so a host can safely present Retry without leaving an earlier load attempt running underneath it.
 
 ```ts
 import { ResourceLoader, SoundStore } from "slick2d-ts";
@@ -80,33 +93,58 @@ await Promise.all([
 ]);
 ```
 
-Failures from resource fetches and browser decoding use `ResourceLoadException`, whose `kind`, `phase`, `status`, `ref`, and `url` fields let the host distinguish network, HTTP, abort, and decode failures without parsing error messages.
+`ResourceLoadException` exposes structured failure information such as failure kind, phase, HTTP status, resource reference, and URL.
 
-## Deterministic Java Random State
+## Deterministic Java random state
 
-`JavaRandom.getState()`, `setState(...)`, and `JavaRandom.fromState(...)` preserve the internal 48-bit Java LCG state exactly. The state is intentionally distinct from the public Java constructor seed: restoring it does not apply Java's seed scrambling a second time.
+`JavaRandom.getState()`, `setState(...)`, and `JavaRandom.fromState(...)` preserve the internal 48-bit Java LCG state exactly. The saved state is deliberately different from the public Java constructor seed: restoring it must not apply Java's seed scrambling a second time.
 
-## Browser Boundaries
+## Browser boundaries
 
-Java Slick2D APIs are synchronous in places where browsers are not. Image, audio, XML, atlas, and binary assets should be preloaded through `ResourceLoader` before code paths that synchronously parse or consume those bytes.
+Fullscreen, audio unlock, canvas sizing, context loss, and resource loading follow browser security and lifecycle rules. Host applications should unlock audio from a user gesture when reliable first-play sound matters.
 
-Fullscreen, audio unlock, and canvas sizing follow browser security and lifecycle rules. Host pages should call audio unlock helpers from a user gesture when reliable first-play audio matters.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for known browser boundaries and intentional compatibility no-ops.
+See [`COMPATIBILITY.md`](COMPATIBILITY.md) for intentional compatibility no-ops and browser-specific boundaries.
 
 ## Development
 
+Install dependencies from the lockfile:
+
 ```sh
-npm install
+npm ci
+```
+
+Run the normal source/build verification gate:
+
+```sh
+npm run verify
+```
+
+Run the real-browser suite separately:
+
+```sh
+npm run verify:browser
+```
+
+Useful focused commands include:
+
+```sh
 npm run format:check
 npm run lint
 npm run typecheck
 npm test
+npm run check:dist
 ```
 
-Use `npm run format` to apply the project Prettier style.
+Use `npm run format` to apply the repository's Prettier rules.
+
+## Compatibility philosophy
+
+The goal is behavioral compatibility for the Java games that depend on this project. Java-shaped APIs and seemingly unusual semantics should not be “cleaned up” merely for style when they encode observable Slick2D/LWJGL behavior.
+
+Engine changes should be qualified in both `slick2d-ts` and the downstream games that exercise the affected feature. Rendering, input, timing, audio, lifecycle, and persistence-related changes are behavioral dependencies, not ordinary package bumps.
 
 ## License
 
-BSD-3-Clause. See [LICENSE](LICENSE). Slick2D upstream attribution is included
-in [NOTICE.md](NOTICE.md).
+`slick2d-ts` is licensed under the **BSD 3-Clause License**. See [`LICENSE`](LICENSE).
+
+Upstream Slick2D attribution is included in [`NOTICE.md`](NOTICE.md).
