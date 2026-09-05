@@ -26,6 +26,8 @@ export declare class CanvasFont implements Font {
     drawString(x: number, y: number, text: string, col: Color, startIndex: number, endIndex: number): void;
     private getMeasureContext;
     private getTextImage;
+    /** @internal Releases cached renderer resources at an application-container lifecycle boundary. */
+    dispose(): void;
     private evictTextImages;
 }
 //# sourceMappingURL=CanvasFont.d.ts.map

@@ -133,7 +133,7 @@ export class BufferedScalableGame {
         try {
             renderer.pushTransform();
             nativeTransformPushed = true;
-            nativeGraphics.resetTransform();
+            nativeGraphics.__prepareForGameRender();
             nativeGraphics.clearClip();
             nativeGraphics.clearWorldClip();
             nativeGraphics.__copyBackgroundFrom(screenGraphics);
@@ -361,16 +361,7 @@ export class BufferedScalableGame {
         if (nativeFrame === null || nativeFrame.getFilter() === filter) {
             return;
         }
-        const renderer = Renderer.getBackend();
-        const gl = renderer.getContext();
-        const textureResource = nativeFrame.__getTextureResource();
-        if (gl && textureResource) {
-            renderer.flush();
-        }
         nativeFrame.setFilter(filter);
-        if (gl && textureResource) {
-            textureResource.__applyFilterToExistingTexture(gl);
-        }
     }
     getConfiguredPresentationFilter() {
         return this.scalingMode === BufferedScalingMode.Linear ? Image.FILTER_LINEAR : Image.FILTER_NEAREST;

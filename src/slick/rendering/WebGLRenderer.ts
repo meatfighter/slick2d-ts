@@ -281,6 +281,12 @@ export class WebGLRenderer implements RenderBackend, SGL {
         backingHeight: number = canvas.height
     ): void {
         this.resetDrawModeStateTracking();
+        this.lineWidth = 1;
+        this.globalAlphaScale = 1;
+        this.currentColor[0] = 1;
+        this.currentColor[1] = 1;
+        this.currentColor[2] = 1;
+        this.currentColor[3] = 1;
         const contextOptions: WebGLContextAttributes = {
             alpha: options.alpha ?? true,
             antialias: options.antialias ?? false,
@@ -317,6 +323,7 @@ export class WebGLRenderer implements RenderBackend, SGL {
         this.monochromePaletteEnabledStack.length = 0;
         gl.enable(gl.BLEND);
         gl.colorMask(true, true, true, true);
+        gl.lineWidth(1);
         this.applyBlendFunction(gl, gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         this.initDisplay(logicalWidth, logicalHeight, backingWidth, backingHeight);
     }

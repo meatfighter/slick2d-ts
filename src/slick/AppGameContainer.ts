@@ -8,6 +8,7 @@ import { GameContainer } from "./GameContainer.js";
 import { Graphics } from "./Graphics.js";
 import { Image } from "./Image.js";
 import { Music } from "./Music.js";
+import { SpriteSheet } from "./SpriteSheet.js";
 import { SoundStore } from "./openal/SoundStore.js";
 import type { ImageData as SlickImageData } from "./opengl/ImageData.js";
 import { InternalTextureLoader } from "./opengl/InternalTextureLoader.js";
@@ -464,6 +465,7 @@ export class AppGameContainer extends GameContainer {
             document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
             document.removeEventListener("visibilitychange", this.handleVisibilityChange);
         }
+        this.resetRenderingLifecycleState();
         InternalTextureLoader.get().clear();
         Renderer.getBackend().dispose();
         if (this.preserveAudioCacheOnDestroy) {
@@ -553,7 +555,12 @@ export class AppGameContainer extends GameContainer {
                 Renderer.getBackend().beginFrame(this.width, this.height, Color.transparent, this.backingWidth, this.backingHeight);
             }
             Graphics.setCurrent(this.graphics);
-            this.game.render(this, this.graphics);
+            this.graphics.__prepareForGameRender();
+            try {
+                this.game.render(this, this.graphics);
+            } finally {
+                this.graphics.resetTransform();
+            }
             if (this.showFPS) {
                 this.graphics.drawString(this.fpsDisplayText, 10, 10);
             }
@@ -613,6 +620,7 @@ export class AppGameContainer extends GameContainer {
         this.waitingForResources = false;
         this.resourceError = null;
         ResourceLoader.clearFailures();
+        this.resetRenderingLifecycleState();
         InternalTextureLoader.get().clear();
         SoundStore.get().clear();
         Renderer.getBackend().dispose();
@@ -642,6 +650,12 @@ export class AppGameContainer extends GameContainer {
         this.defaultFont = this.graphics.getFont();
         Renderer.get().enterOrtho(this.width, this.height);
         this.resetFrameBookkeeping();
+    }
+
+    private resetRenderingLifecycleState(): void {
+        Graphics.__resetSharedState();
+        Image.__resetUseState();
+        SpriteSheet.__resetUseState();
     }
 
     private resetFrameBookkeeping(): void {
@@ -739,6 +753,8 @@ export class AppGameContainer extends GameContainer {
         this.contextLost = true;
         this.cancelScheduledFrame();
         this.storedDelta = 0;
+        Image.__resetUseState();
+        SpriteSheet.__resetUseState();
         Renderer.getBackend().handleContextLost();
         InternalTextureLoader.get().invalidate();
     };

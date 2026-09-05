@@ -11,6 +11,11 @@ import type { WebGLTextureResource } from "./rendering/WebGLTextureResource.js";
 export class SpriteSheet extends Image {
     private static sheetInUse: SpriteSheet | null = null;
 
+    /** @internal Clears an interrupted accelerated-use guard at a renderer lifecycle boundary. */
+    public static override __resetUseState(): void {
+        SpriteSheet.sheetInUse = null;
+    }
+
     private readonly target: Image;
     private readonly tileWidth: number;
     private readonly tileHeight: number;

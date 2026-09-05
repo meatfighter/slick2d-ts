@@ -240,6 +240,12 @@ export class WebGLRenderer {
     /** Initializes the renderer with a canvas and WebGL2 context attributes. */
     initialize(canvas, options, logicalWidth = canvas.width, logicalHeight = canvas.height, backingWidth = canvas.width, backingHeight = canvas.height) {
         this.resetDrawModeStateTracking();
+        this.lineWidth = 1;
+        this.globalAlphaScale = 1;
+        this.currentColor[0] = 1;
+        this.currentColor[1] = 1;
+        this.currentColor[2] = 1;
+        this.currentColor[3] = 1;
         const contextOptions = {
             alpha: options.alpha ?? true,
             antialias: options.antialias ?? false,
@@ -276,6 +282,7 @@ export class WebGLRenderer {
         this.monochromePaletteEnabledStack.length = 0;
         gl.enable(gl.BLEND);
         gl.colorMask(true, true, true, true);
+        gl.lineWidth(1);
         this.applyBlendFunction(gl, gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         this.initDisplay(logicalWidth, logicalHeight, backingWidth, backingHeight);
     }

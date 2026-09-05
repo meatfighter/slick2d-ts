@@ -103,6 +103,15 @@ export class CanvasFont {
         this.evictTextImages();
         return entry;
     }
+    /** @internal Releases cached renderer resources at an application-container lifecycle boundary. */
+    dispose() {
+        for (const cached of this.textImages.values()) {
+            cached.image.destroy();
+        }
+        this.textImages.clear();
+        this.measureContext = null;
+        this.measureCanvas = null;
+    }
     evictTextImages() {
         while (this.textImages.size > MAX_TEXT_CACHE_ENTRIES) {
             const oldestKey = this.textImages.keys().next().value;

@@ -89,6 +89,17 @@ export class Graphics {
         return Graphics.current;
     }
 
+    /** @internal Clears static renderer-bound state at an application-container lifecycle boundary. */
+    public static __resetSharedState(): void {
+        const sharedDefaultFont = Graphics.sharedDefaultFont;
+        Graphics.current = null;
+        Graphics.currentStack.length = 0;
+        Graphics.sharedDefaultFont = null;
+        if (sharedDefaultFont instanceof CanvasFont) {
+            sharedDefaultFont.dispose();
+        }
+    }
+
     /** @internal Enters this Graphics object's complete renderer context. */
     public __beginRenderContext(): void {
         this.beginRenderTarget();
@@ -97,6 +108,14 @@ export class Graphics {
     /** @internal Leaves a context entered by __beginRenderContext(). */
     public __endRenderContext(): void {
         this.endRenderTarget(Renderer.getBackend());
+    }
+
+    /** @internal Restores the Java Slick defaults applied before each Game.render() call. */
+    public __prepareForGameRender(): void {
+        this.resetTransform();
+        this.resetFont();
+        this.resetLineWidth();
+        this.setAntiAlias(false);
     }
 
     /** Java Slick2D counterpart: Graphics.setDrawMode(int). */
@@ -204,9 +223,19 @@ export class Graphics {
 
     /** Java Slick2D counterpart: Graphics.clear(). */
     public clear(): void {
-        const renderer = this.beginRenderTarget();
+        const renderer = this.beginRenderTarget(false);
         try {
-            renderer.fillRect(0, 0, this.width || 1, this.height || 1, this.background, IDENTITY_TRANSFORM);
+            renderer.flush();
+            renderer.clearClip();
+            renderer.clearWorldClip();
+            renderer.pushFullColorMask();
+            try {
+                renderer.glClearColor(this.background.r, this.background.g, this.background.b, this.background.a);
+                renderer.glClear(renderer.GL_COLOR_BUFFER_BIT);
+            } finally {
+                renderer.popColorMask();
+            }
+            this.applyClipState(renderer);
         } finally {
             this.endRenderTarget(renderer);
         }

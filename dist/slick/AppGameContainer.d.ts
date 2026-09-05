@@ -115,6 +115,7 @@ export declare class AppGameContainer extends GameContainer {
     private shouldProcessTargetFrame;
     private updateGame;
     private rebuildSystemForReinit;
+    private resetRenderingLifecycleState;
     private resetFrameBookkeeping;
     private resetLoopResumeTiming;
     private scheduleNextFrame;

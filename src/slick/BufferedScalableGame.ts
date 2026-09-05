@@ -205,7 +205,7 @@ export class BufferedScalableGame implements Game {
             renderer.pushTransform();
             nativeTransformPushed = true;
 
-            nativeGraphics.resetTransform();
+            nativeGraphics.__prepareForGameRender();
             nativeGraphics.clearClip();
             nativeGraphics.clearWorldClip();
             nativeGraphics.__copyBackgroundFrom(screenGraphics);
@@ -471,18 +471,7 @@ export class BufferedScalableGame implements Game {
         if (nativeFrame === null || nativeFrame.getFilter() === filter) {
             return;
         }
-
-        const renderer = Renderer.getBackend();
-        const gl = renderer.getContext();
-        const textureResource = nativeFrame.__getTextureResource();
-        if (gl && textureResource) {
-            renderer.flush();
-        }
-
         nativeFrame.setFilter(filter);
-        if (gl && textureResource) {
-            textureResource.__applyFilterToExistingTexture(gl);
-        }
     }
 
     private getConfiguredPresentationFilter(): number {

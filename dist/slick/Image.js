@@ -56,6 +56,10 @@ export class Image {
     static FILTER_LINEAR = 1;
     static FILTER_NEAREST = 2;
     static inUse = null;
+    /** @internal Clears an interrupted accelerated-use guard at a renderer lifecycle boundary. */
+    static __resetUseState() {
+        Image.inUse = null;
+    }
     textureResource;
     renderTarget = null;
     sourceX = 0;
@@ -173,7 +177,18 @@ export class Image {
     }
     /** Java Slick2D counterpart: Image.setFilter(int). */
     setFilter(filter) {
+        if (this.textureResource.filter === filter) {
+            return;
+        }
+        const renderer = Renderer.getBackend();
+        const gl = renderer.getContext();
+        if (gl && this.textureResource.__getTextureReference()) {
+            renderer.flush();
+        }
         this.textureResource.filter = filter;
+        if (gl) {
+            this.textureResource.__applyFilterToExistingTexture(gl);
+        }
     }
     /** Java Slick2D counterpart: Image.getFilter(). */
     getFilter() {

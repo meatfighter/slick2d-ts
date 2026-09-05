@@ -17,6 +17,8 @@ export declare class Image implements Renderable {
     static readonly FILTER_LINEAR = 1;
     static readonly FILTER_NEAREST = 2;
     private static inUse;
+    /** @internal Clears an interrupted accelerated-use guard at a renderer lifecycle boundary. */
+    static __resetUseState(): void;
     private textureResource;
     private renderTarget;
     private sourceX;

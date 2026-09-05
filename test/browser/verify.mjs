@@ -1,4 +1,18 @@
-import { AppGameContainer, Color, Display, Image, Input, Music, Renderer, ResourceLoader, SoundStore, XMLPackedSheet } from "../../dist/index.js";
+import {
+    AppGameContainer,
+    BufferedScalableGame,
+    Color,
+    Display,
+    Graphics,
+    Image,
+    Input,
+    Music,
+    Renderer,
+    ResourceLoader,
+    SoundStore,
+    SpriteSheet,
+    XMLPackedSheet
+} from "../../dist/index.js";
 import { WebGLTextureResource } from "../../dist/slick/rendering/WebGLTextureResource.js";
 
 const result = document.querySelector("#result");
@@ -150,13 +164,34 @@ async function verifyContainerRestartPathTexture() {
         const firstPixel = await drawPathTextureAndReadPixel(ref);
         assert(closeTo(firstPixel[1], 255) && firstPixel[0] < 3 && firstPixel[2] < 3, "First container did not render the path texture");
 
+        Renderer.get().setGlobalAlphaScale(0.25);
+        Renderer.get().glColor4f(0.25, 0.5, 0.75, 0.5);
+        const interruptedBacking = new Image(2, 2);
+        const interruptedSheet = new SpriteSheet(interruptedBacking, 1, 1);
+        interruptedSheet.startUse();
+
         first.destroy();
         first = null;
 
         second = new AppGameContainer(noopGame("browser restart B"), 4, 4, false);
         await second.start();
+        const currentColor = Renderer.get().getCurrentColor();
+        assert(
+            currentColor.length >= 4 && currentColor[0] === 1 && currentColor[1] === 1 && currentColor[2] === 1 && currentColor[3] === 1,
+            "Renderer current color leaked across container recreation"
+        );
+
+        const secondBacking = new Image(2, 2);
+        const secondSheet = new SpriteSheet(secondBacking, 1, 1);
+        secondSheet.startUse();
+        secondSheet.endUse();
+        secondSheet.destroy();
+
         const secondPixel = await drawPathTextureAndReadPixel(ref);
-        assert(closeTo(secondPixel[1], 255) && secondPixel[0] < 3 && secondPixel[2] < 3, "Second container did not render the reused path texture");
+        assert(
+            closeTo(secondPixel[1], 255) && secondPixel[0] < 3 && secondPixel[2] < 3 && closeTo(secondPixel[3], 255),
+            "Second container inherited renderer alpha state or failed to render the reused path texture"
+        );
     } finally {
         first?.destroy();
         second?.destroy();
@@ -201,6 +236,229 @@ async function verifyXmlPackedSheetAsyncSubImages() {
 
     sprite.destroy();
     ResourceLoader.clearCache();
+}
+
+async function waitForBrowserCondition(predicate, message, timeoutMilliseconds = 5000) {
+    const deadline = performance.now() + timeoutMilliseconds;
+    while (performance.now() < deadline) {
+        if (predicate()) {
+            return;
+        }
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    throw new Error(message);
+}
+
+async function verifyLiveImageFilterUpdates() {
+    const source = document.createElement("canvas");
+    source.width = 2;
+    source.height = 2;
+    const context = source.getContext("2d");
+    context.fillStyle = "rgb(255, 255, 255)";
+    context.fillRect(0, 0, 2, 2);
+    const image = new Image(new WebGLTextureResource(source, Image.FILTER_NEAREST, "browser-live-filter"));
+    const renderer = Renderer.getBackend();
+    const gl = renderer.getContext();
+    assert(gl, "Live filter test did not have a WebGL context");
+
+    renderer.beginFrame(4, 4, Color.transparent, 4, 4);
+    image.draw(0, 0, 4, 4);
+    renderer.endFrame();
+
+    image.setFilter(Image.FILTER_LINEAR);
+    image.bind();
+    assert(gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER) === gl.LINEAR, "Image.setFilter(LINEAR) did not update an existing GPU texture");
+    assert(gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER) === gl.LINEAR, "Image.setFilter(LINEAR) did not update GPU magnification filtering");
+
+    image.setFilter(Image.FILTER_NEAREST);
+    image.bind();
+    assert(gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER) === gl.NEAREST, "Image.setFilter(NEAREST) did not update an existing GPU texture");
+    assert(gl.getTexParameter(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER) === gl.NEAREST, "Image.setFilter(NEAREST) did not update GPU magnification filtering");
+    image.destroy();
+}
+
+async function verifyTrueGraphicsClear() {
+    const target = new Image(8, 8, Image.FILTER_NEAREST);
+    const graphics = target.getGraphics();
+    graphics.setColor(Color.fromInts(0, 0, 255));
+    graphics.fillRect(0, 0, 8, 8);
+    graphics.flush();
+
+    graphics.setBackground(Color.fromInts(255, 0, 0));
+    graphics.setClip(0, 0, 2, 2);
+    graphics.setWorldClip(0, 0, 2, 2);
+    graphics.translate(100, 100);
+    Renderer.get().setGlobalAlphaScale(0.25);
+    graphics.setColorInverted(true);
+    graphics.setDrawMode(Graphics.MODE_ALPHA_MAP);
+    Renderer.get().glColorMask(false, false, false, false);
+    graphics.clear();
+
+    const pixel = target.getColor(6, 6);
+    assert(
+        closeTo(pixel.getRed(), 255) && pixel.getGreen() < 3 && pixel.getBlue() < 3 && closeTo(pixel.getAlpha(), 255),
+        "Graphics.clear() was affected by transform, clip, draw mode, alpha, color mask, or color effects"
+    );
+    const screenClip = graphics.getClip();
+    const worldClip = graphics.getWorldClip();
+    assert(screenClip?.width === 2 && screenClip?.height === 2, "Graphics.clear() did not restore the screen clip");
+    assert(worldClip?.width === 2 && worldClip?.height === 2, "Graphics.clear() did not restore the world clip");
+
+    Renderer.get().glColorMask(true, true, true, true);
+    graphics.setDrawMode(Graphics.MODE_NORMAL);
+    graphics.setColorInverted(false);
+    Renderer.get().setGlobalAlphaScale(1);
+    graphics.clearClip();
+    graphics.clearWorldClip();
+    graphics.resetTransform();
+    target.destroy();
+}
+
+async function verifyBufferedFrameStateReset() {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const state = { error: null, renders: 0, verified: false };
+    let defaultFont = null;
+    const customFont = {
+        drawString: () => undefined,
+        getHeight: () => 1,
+        getLineHeight: () => 1,
+        getWidth: () => 1
+    };
+    const held = {
+        closeRequested: () => true,
+        getTitle: () => "frame reset",
+        init: () => undefined,
+        render: (_container, graphics) => {
+            if (state.renders === 0) {
+                defaultFont = graphics.getFont();
+                graphics.setFont(customFont);
+                graphics.setLineWidth(5);
+                graphics.setAntiAlias(true);
+                graphics.translate(7, 9);
+            } else if (!state.verified) {
+                assert(graphics.getFont() === defaultFont, "Buffered game font leaked across frames");
+                assert(graphics.getLineWidth() === 1, "Buffered game line width leaked across frames");
+                assert(graphics.isAntiAlias() === false, "Buffered game anti-alias flag leaked across frames");
+                const matrix = Renderer.getBackend().getCurrentMatrix();
+                assert(
+                    closeTo(matrix[0], 1, 0.00001) &&
+                        closeTo(matrix[1], 0, 0.00001) &&
+                        closeTo(matrix[2], 0, 0.00001) &&
+                        closeTo(matrix[3], 0, 0.00001) &&
+                        closeTo(matrix[4], 1, 0.00001) &&
+                        closeTo(matrix[5], 0, 0.00001),
+                    "Buffered game transform leaked across frames"
+                );
+                state.verified = true;
+            }
+            state.renders++;
+        },
+        update: () => undefined
+    };
+    let app = null;
+    try {
+        Display.setParent(parent);
+        app = new AppGameContainer(new BufferedScalableGame(held, 16, 16, { maintainAspect: true }), 32, 32, false);
+        app.setShowFPS(false);
+        app.setAlwaysRender(true);
+        app.setErrorHandler((error) => {
+            state.error = error;
+        });
+        await app.start();
+        await waitForBrowserCondition(() => state.verified || state.error !== null, "Buffered per-frame state reset did not complete");
+        if (state.error) {
+            throw state.error;
+        }
+    } finally {
+        app?.destroy();
+        Display.setParent(null);
+        parent.remove();
+    }
+}
+
+async function verifyDefaultFontLifecycleAndContextRestore() {
+    const parent = document.createElement("div");
+    document.body.appendChild(parent);
+    const createGame = (title, state) => ({
+        closeRequested: () => true,
+        getTitle: () => title,
+        init: () => undefined,
+        render: (_container, graphics) => {
+            graphics.setColor(Color.white);
+            graphics.drawString("Slick font cache", 1, 1);
+            state.renders++;
+
+            if (state.capturePostRestore && !state.capturedBrightPixel) {
+                graphics.flush();
+                const pixels = new Uint8Array(64 * 32 * 4);
+                Renderer.getBackend().readPixels(0, 0, 64, 32, pixels);
+                for (let index = 0; index < pixels.length; index += 4) {
+                    if (pixels[index] > 180 && pixels[index + 1] > 180 && pixels[index + 2] > 180) {
+                        state.capturedBrightPixel = true;
+                        break;
+                    }
+                }
+            }
+        },
+        update: () => undefined
+    });
+    let first = null;
+    let second = null;
+    try {
+        Display.setParent(parent);
+        const firstState = { capturePostRestore: false, capturedBrightPixel: false, renders: 0 };
+        first = new AppGameContainer(createGame("font lifecycle A", firstState), 64, 32, false);
+        first.setShowFPS(false);
+        first.setAlwaysRender(true);
+        await first.start();
+        await waitForBrowserCondition(() => firstState.renders > 0, "First default-font container did not render");
+        const firstFont = first.getGraphics().getFont();
+        first.destroy();
+        first = null;
+
+        const secondState = {
+            capturePostRestore: false,
+            capturedBrightPixel: false,
+            error: null,
+            renders: 0
+        };
+        second = new AppGameContainer(createGame("font lifecycle B", secondState), 64, 32, false);
+        second.setShowFPS(false);
+        second.setAlwaysRender(true);
+        second.setErrorHandler((error) => {
+            secondState.error = error;
+        });
+        await second.start();
+        await waitForBrowserCondition(() => secondState.renders > 0 || secondState.error !== null, "Second default-font container did not render");
+        if (secondState.error) {
+            throw secondState.error;
+        }
+        assert(second.getGraphics().getFont() !== firstFont, "Default CanvasFont cache survived container destruction");
+
+        const renderer = Renderer.getBackend();
+        const gl = renderer.getContext();
+        const loseContext = gl?.getExtension("WEBGL_lose_context");
+        assert(gl && loseContext, "WEBGL_lose_context is unavailable for default-font lifecycle verification");
+        loseContext.loseContext();
+        await waitForBrowserCondition(() => Renderer.getBackend().getContext() === null, "AppGameContainer did not observe WebGL context loss");
+        secondState.capturePostRestore = true;
+        loseContext.restoreContext();
+        await waitForBrowserCondition(() => Renderer.getBackend().getContext() !== null, "AppGameContainer did not restore the WebGL context");
+        await waitForBrowserCondition(
+            () => secondState.capturedBrightPixel || secondState.error !== null,
+            "Default-font rendering did not produce pixels after context restoration"
+        );
+        if (secondState.error) {
+            throw secondState.error;
+        }
+        assert(secondState.capturedBrightPixel, "Default CanvasFont did not render after context restoration");
+    } finally {
+        first?.destroy();
+        second?.destroy();
+        Display.setParent(null);
+        parent.remove();
+    }
 }
 
 async function run() {
@@ -267,6 +525,12 @@ async function run() {
     await verifyXmlPackedSheetAsyncSubImages();
     passed.push("XML packed-sheet async subimages");
 
+    await verifyLiveImageFilterUpdates();
+    passed.push("live Image filter updates");
+
+    await verifyTrueGraphicsClear();
+    passed.push("true Graphics clear semantics");
+
     input.unbind();
     loaded.destroy();
     dynamic.destroy();
@@ -274,6 +538,12 @@ async function run() {
 
     await verifyContainerRestartPathTexture();
     passed.push("container restart texture cache boundary");
+
+    await verifyBufferedFrameStateReset();
+    passed.push("buffered per-frame Graphics reset");
+
+    await verifyDefaultFontLifecycleAndContextRestore();
+    passed.push("default-font container/context lifecycle");
 
     await prepareAudioLifecycle();
     passed.push("audio lifecycle fixture");

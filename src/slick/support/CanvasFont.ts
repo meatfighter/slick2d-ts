@@ -129,6 +129,16 @@ export class CanvasFont implements Font {
         return entry;
     }
 
+    /** @internal Releases cached renderer resources at an application-container lifecycle boundary. */
+    public dispose(): void {
+        for (const cached of this.textImages.values()) {
+            cached.image.destroy();
+        }
+        this.textImages.clear();
+        this.measureContext = null;
+        this.measureCanvas = null;
+    }
+
     private evictTextImages(): void {
         while (this.textImages.size > MAX_TEXT_CACHE_ENTRIES) {
             const oldestKey = this.textImages.keys().next().value;

@@ -8,6 +8,10 @@ import { Color } from "./Color.js";
  */
 export class SpriteSheet extends Image {
     static sheetInUse = null;
+    /** @internal Clears an interrupted accelerated-use guard at a renderer lifecycle boundary. */
+    static __resetUseState() {
+        SpriteSheet.sheetInUse = null;
+    }
     target;
     tileWidth;
     tileHeight;

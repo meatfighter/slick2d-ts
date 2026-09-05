@@ -67,6 +67,11 @@ export class Image implements Renderable {
 
     private static inUse: Image | null = null;
 
+    /** @internal Clears an interrupted accelerated-use guard at a renderer lifecycle boundary. */
+    public static __resetUseState(): void {
+        Image.inUse = null;
+    }
+
     private textureResource: WebGLTextureResource;
     private renderTarget: WebGLRenderTarget | null = null;
     private sourceX = 0;
@@ -219,7 +224,18 @@ export class Image implements Renderable {
 
     /** Java Slick2D counterpart: Image.setFilter(int). */
     public setFilter(filter: number): void {
+        if (this.textureResource.filter === filter) {
+            return;
+        }
+        const renderer = Renderer.getBackend();
+        const gl = renderer.getContext();
+        if (gl && this.textureResource.__getTextureReference()) {
+            renderer.flush();
+        }
         this.textureResource.filter = filter;
+        if (gl) {
+            this.textureResource.__applyFilterToExistingTexture(gl);
+        }
     }
 
     /** Java Slick2D counterpart: Image.getFilter(). */
