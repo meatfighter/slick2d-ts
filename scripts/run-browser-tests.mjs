@@ -306,6 +306,7 @@ async function runAudioLifecycleCycles(page, method, cycles) {
 }
 
 async function verifyAudioLifecycleListenerCleanup(page) {
+    const failures = [];
     for (const [label, method] of [
         ["Music", "runMusicCycle"],
         ["SoundStore", "runSoundCycle"]
@@ -317,13 +318,16 @@ async function verifyAudioLifecycleListenerCleanup(page) {
         const growth = after - baseline;
         console.log(`${label} listener lifecycle: ${baseline} -> ${after} (${growth >= 0 ? "+" : ""}${growth})`);
         if (growth > 0) {
-            throw new Error(`${label} leaked ${growth} browser event listener(s) across eight explicit stop cycles.`);
+            failures.push(`${label} leaked ${growth} browser event listener(s) across eight explicit stop cycles.`);
         }
     }
     await page.call("Runtime.evaluate", {
         expression: "globalThis.__slickAudioLifecycle?.cleanup(); true;",
         returnByValue: true
     });
+    if (failures.length > 0) {
+        throw new Error(failures.join("\n"));
+    }
 }
 
 async function pathExists(path) {
