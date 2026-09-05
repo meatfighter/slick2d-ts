@@ -280,16 +280,30 @@ export class Music {
         }
         this.stopRequested = requested;
         const source = this.source;
+        const gain = this.gain;
         this.source = null;
         this.gain = null;
         if (!keepHandle) {
             this.clearHandle();
         }
+        source.onended = null;
         try {
             source.stop();
         }
         catch {
             // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
+        }
+        try {
+            source.disconnect();
+        }
+        catch {
+            // A source can already be disconnected during repeated teardown.
+        }
+        try {
+            gain?.disconnect();
+        }
+        catch {
+            // A gain node can already be disconnected during repeated teardown.
         }
     }
     startSource(buffer, loop, offset) {
@@ -303,17 +317,31 @@ export class Music {
         void context.resume().catch(() => undefined);
         const source = context.createBufferSource();
         this.source = source;
-        this.gain = context.createGain();
+        const gain = context.createGain();
+        this.gain = gain;
         source.buffer = buffer;
         source.loop = loop;
         source.playbackRate.value = this.playbackRate;
-        this.gain.gain.value = this.volume;
-        source.connect(this.gain);
-        this.gain.connect(bus);
+        gain.gain.value = this.volume;
+        source.connect(gain);
+        gain.connect(bus);
         this.positionOffset = this.normalizeOffset(buffer, offset, loop);
         this.startedAt = context.currentTime;
         this.stopRequested = false;
         source.onended = () => {
+            source.onended = null;
+            try {
+                source.disconnect();
+            }
+            catch {
+                // The source may already have been disconnected by explicit teardown.
+            }
+            try {
+                gain.disconnect();
+            }
+            catch {
+                // The gain may already have been disconnected by explicit teardown.
+            }
             if (this.source !== source) {
                 return;
             }

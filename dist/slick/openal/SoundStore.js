@@ -410,6 +410,7 @@ export class SoundStore {
             return null;
         }
         let source = null;
+        let gain = null;
         let sourceGain = 0;
         let playing = true;
         let stopped = false;
@@ -422,13 +423,27 @@ export class SoundStore {
                 if (source) {
                     const stoppedSource = source;
                     source = null;
+                    stoppedSource.onended = null;
                     try {
                         stoppedSource.stop();
                     }
                     catch {
                         // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
                     }
+                    try {
+                        stoppedSource.disconnect();
+                    }
+                    catch {
+                        // A source can already be disconnected during repeated teardown.
+                    }
                 }
+                try {
+                    gain?.disconnect();
+                }
+                catch {
+                    // A gain node can already be disconnected during repeated teardown.
+                }
+                gain = null;
                 playing = false;
                 this.activeHandles.delete(handle);
                 this.musicHandles.delete(handle);
@@ -445,7 +460,7 @@ export class SoundStore {
                 return;
             }
             void context.resume().catch(() => undefined);
-            const gain = context.createGain();
+            gain = context.createGain();
             source = context.createBufferSource();
             source.buffer = buffer;
             source.loop = loop;
@@ -454,11 +469,31 @@ export class SoundStore {
             gain.gain.value = sourceGain;
             source.connect(gain);
             this.connectPositionedSource(context, gain, bus, position);
+            const startedSource = source;
+            const startedGain = gain;
             source.onended = () => {
-                if (requestedStop || source?.loop) {
+                startedSource.onended = null;
+                try {
+                    startedSource.disconnect();
+                }
+                catch {
+                    // The source may already have been disconnected by explicit teardown.
+                }
+                try {
+                    startedGain.disconnect();
+                }
+                catch {
+                    // The gain may already have been disconnected by explicit teardown.
+                }
+                if (source !== startedSource) {
                     return;
                 }
+                const wasLooping = startedSource.loop;
                 source = null;
+                gain = null;
+                if (requestedStop || wasLooping) {
+                    return;
+                }
                 playing = false;
                 this.activeHandles.delete(handle);
                 this.musicHandles.delete(handle);
