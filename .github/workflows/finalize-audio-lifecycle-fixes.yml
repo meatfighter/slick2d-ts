@@ -1,0 +1,1220 @@
+name: Finalize audio lifecycle fixes
+
+on:
+    push:
+        paths:
+            - .github/workflows/finalize-audio-lifecycle-fixes.yml
+
+permissions:
+    contents: write
+
+jobs:
+    finalize:
+        runs-on: ubuntu-24.04
+        timeout-minutes: 25
+
+        steps:
+            - name: Check out repository
+              uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v7
+              with:
+                  node-version: "22"
+                  cache: npm
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Rebuild and verify audio lifecycle repair
+              shell: bash
+              run: |
+                  set -euo pipefail
+
+                  GOOD_BASE=4f5de2e726c79b12c8853c70b1c6df1d6e434fc0
+                  git checkout "$GOOD_BASE" -- \
+                      src/slick/Music.ts \
+                      src/slick/openal/SoundStore.ts \
+                      src/lwjgl/openal/AL.ts
+
+                  python3 - <<'PY'
+                  from pathlib import Path
+
+                  def replace_once(path: str, old: str, new: str) -> None:
+                      file = Path(path)
+                      text = file.read_text()
+                      count = text.count(old)
+                      if count != 1:
+                          raise SystemExit(f"Expected one match in {path}, found {count}: {old[:120]!r}")
+                      file.write_text(text.replace(old, new))
+
+                  music = "src/slick/Music.ts"
+
+                  replace_once(
+                      music,
+                      "    private static currentMusic: Music | null = null;\n    private static readonly active = new Set<Music>();",
+                      "    private static currentMusic: Music | null = null;"
+                  )
+                  replace_once(
+                      music,
+                      "    private stopRequested = false;\n    private startToken = 0;",
+                      "    private stopRequested = false;\n    private endPending = false;\n    private startToken = 0;"
+                  )
+                  replace_once(
+                      music,
+                      '''    /** Java Slick2D counterpart: Music.poll(int). */
+                      public static poll(delta: number): void {
+                          if (Music.currentMusic && Music.currentMusic.playingFlag) {
+                              Music.currentMusic.poll(delta);
+                          }
+                          for (const music of Music.active) {
+                              if (music !== Music.currentMusic) {
+                                  music.poll(delta);
+                              }
+                          }
+                      }
+                  ''',
+                      '''    /** Java Slick2D counterpart: Music.poll(int). */
+                      public static poll(delta: number): void {
+                          const current = Music.currentMusic;
+                          if (!current) {
+                              return;
+                          }
+                          SoundStore.get().poll(delta);
+                          if (current.endPending) {
+                              Music.currentMusic = null;
+                              current.finishEnded();
+                              return;
+                          }
+                          current.poll(delta);
+                      }
+
+                      /** Browser lifecycle helper: clears static Music playback state without firing listeners. */
+                      public static resetPlaybackState(): void {
+                          const current = Music.currentMusic;
+                          Music.currentMusic = null;
+                          if (!current) {
+                              return;
+                          }
+                          current.startToken++;
+                          current.stopSource(true);
+                          current.positionOffset = 0;
+                          current.paused = false;
+                          current.playingFlag = false;
+                          current.globallySuspended = false;
+                          current.stopRequested = false;
+                          current.endPending = false;
+                          current.fadeState = null;
+                      }
+                  '''
+                  )
+                  replace_once(
+                      music,
+                      '''    /** Java Slick2D counterpart: Music.pause(). */
+                      public pause(): void {
+                          if (Music.currentMusic !== this || (!this.source && !this.playingFlag)) {
+                              return;
+                          }
+                          this.startToken++;
+                          this.positionOffset = this.getPosition();
+                          this.stopSource(true, true);
+                          this.paused = true;
+                          this.playingFlag = false;
+                          this.globallySuspended = false;
+                          Music.active.delete(this);
+                      }
+
+                      /** Java Slick2D counterpart: Music.stop(). */
+                      public stop(): void {
+                          this.startToken++;
+                          this.stopSource(true);
+                          this.positionOffset = 0;
+                          this.paused = false;
+                          this.playingFlag = false;
+                          this.globallySuspended = false;
+                          Music.active.delete(this);
+                          this.fadeState = null;
+                          if (Music.currentMusic === this) {
+                              Music.currentMusic = null;
+                          }
+                      }
+                  ''',
+                      '''    /** Java Slick2D counterpart: Music.pause(). */
+                      public pause(): void {
+                          if (Music.currentMusic !== this || (!this.source && !this.playingFlag)) {
+                              return;
+                          }
+                          this.startToken++;
+                          this.positionOffset = this.getPosition();
+                          this.stopSource(true, true);
+                          this.paused = true;
+                          this.playingFlag = false;
+                          this.globallySuspended = false;
+                      }
+
+                      /** Java Slick2D counterpart: Music.stop(). */
+                      public stop(): void {
+                          this.startToken++;
+                          this.stopSource(true);
+                          this.positionOffset = 0;
+                          this.paused = false;
+                          this.playingFlag = false;
+                          this.globallySuspended = false;
+                          this.fadeState = null;
+                          this.endPending = Music.currentMusic === this;
+                      }
+                  '''
+                  )
+                  replace_once(
+                      music,
+                      '''    /** Java Slick2D counterpart: Music.resume(). */
+                      public resume(): void {
+                          if (this.paused) {
+                              this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
+                          } else if (this.globallySuspended && SoundStore.get().musicOn()) {
+                              this.resumeForMusicOn();
+                          }
+                      }
+                  ''',
+                      '''    /** Java Slick2D counterpart: Music.resume(). */
+                      public resume(): void {
+                          if (this.paused) {
+                              this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
+                          } else if (this.globallySuspended && SoundStore.get().musicOn()) {
+                              this.resumeForMusicOn();
+                          }
+                      }
+                  '''
+                  )
+                  replace_once(
+                      music,
+                      '''        if (this.source) {
+                          this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
+                      }
+                  ''',
+                      '''        if (this.source) {
+                          this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
+                      }
+                  '''
+                  )
+                  replace_once(
+                      music,
+                      '''        };
+                          Music.active.add(this);
+                      }
+
+                      private start(loop: boolean, pitch: number, volume: number, offset: number = 0): void {
+                  ''',
+                      '''        };
+                      }
+
+                      private start(loop: boolean, pitch: number, volume: number, offset: number = 0, resetFade: boolean = true): void {
+                  '''
+                  )
+                  replace_once(
+                      music,
+                      '''        Music.currentMusic = this;
+                          this.looped = loop;
+                          this.playbackRate = Math.max(0.25, Math.min(4, pitch));
+                  ''',
+                      '''        Music.currentMusic = this;
+                          this.endPending = false;
+                          if (resetFade) {
+                              this.fadeState = null;
+                          }
+                          this.looped = loop;
+                          this.playbackRate = Math.max(0.25, Math.min(4, pitch));
+                  '''
+                  )
+                  replace_once(
+                      music,
+                      '''                if (token === this.startToken && Music.currentMusic === this) {
+                                      this.playingFlag = false;
+                                      this.globallySuspended = false;
+                                      Music.currentMusic = null;
+                                      this.clearHandle();
+                                  }
+                  ''',
+                      '''                if (token === this.startToken && Music.currentMusic === this) {
+                                      this.playingFlag = false;
+                                      this.globallySuspended = false;
+                                      this.endPending = false;
+                                      Music.currentMusic = null;
+                                      this.clearHandle();
+                                  }
+                  '''
+                  )
+                  replace_once(
+                      music,
+                      '''    private stopForSwap(newMusic: Music): void {
+                          this.startToken++;
+                          this.stopSource(true);
+                          this.playingFlag = false;
+                          this.paused = false;
+                          this.globallySuspended = false;
+                          this.fadeState = null;
+                          Music.active.delete(this);
+                          if (Music.currentMusic === this) {
+                              Music.currentMusic = null;
+                          }
+                          for (const listener of this.listeners) {
+                              listener.musicSwapped(this, newMusic);
+                          }
+                      }
+                  ''',
+                      '''    private stopForSwap(newMusic: Music): void {
+                          this.startToken++;
+                          this.stopSource(true);
+                          this.playingFlag = false;
+                          this.paused = false;
+                          this.globallySuspended = false;
+                          this.endPending = false;
+                          this.fadeState = null;
+                          if (Music.currentMusic === this) {
+                              Music.currentMusic = null;
+                          }
+                          for (const listener of this.listeners) {
+                              listener.musicSwapped(this, newMusic);
+                          }
+                      }
+
+                      private finishEnded(): void {
+                          this.endPending = false;
+                          this.playingFlag = false;
+                          this.paused = false;
+                          this.globallySuspended = false;
+                          this.positionOffset = 0;
+                          this.clearHandle();
+                          for (const listener of this.listeners) {
+                              listener.musicEnded(this);
+                          }
+                      }
+                  '''
+                  )
+                  replace_once(
+                      music,
+                      '''    private stopSource(requested: boolean, keepHandle = false): void {
+                          if (!this.source) {
+                              if (!keepHandle) {
+                                  this.clearHandle();
+                              }
+                              return;
+                          }
+                          this.stopRequested = requested;
+                          const source = this.source;
+                          const gain = this.gain;
+                          this.source = null;
+                          this.gain = null;
+                          if (!keepHandle) {
+                              this.clearHandle();
+                          }
+                          source.onended = null;
+                          try {
+                              source.stop();
+                          } catch {
+                              // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
+                          }
+                          try {
+                              source.disconnect();
+                          } catch {
+                              // A source can already be disconnected during repeated teardown.
+                          }
+                          try {
+                              gain?.disconnect();
+                          } catch {
+                              // A gain node can already be disconnected during repeated teardown.
+                          }
+                      }
+
+                      private startSource(buffer: AudioBuffer, loop: boolean, offset: number): void {
+                          const context = SoundStore.get().getAudioContext();
+                          const bus = SoundStore.get().getMusicBus();
+                          if (!context || !bus) {
+                              throw new SlickException("Music playback requires Web Audio API");
+                          }
+                          this.stopSource(true);
+                          this.ensureHandle();
+                          void context.resume().catch(() => undefined);
+                          const source = context.createBufferSource();
+                          this.source = source;
+                          const gain = context.createGain();
+                          this.gain = gain;
+                          source.buffer = buffer;
+                          source.loop = loop;
+                          source.playbackRate.value = this.playbackRate;
+                          gain.gain.value = this.volume;
+                          source.connect(gain);
+                          gain.connect(bus);
+                          this.positionOffset = this.normalizeOffset(buffer, offset, loop);
+                          this.startedAt = context.currentTime;
+                          this.stopRequested = false;
+                          source.onended = () => {
+                              source.onended = null;
+                              try {
+                                  source.disconnect();
+                              } catch {
+                                  // The source may already have been disconnected by explicit teardown.
+                              }
+                              try {
+                                  gain.disconnect();
+                              } catch {
+                                  // The gain may already have been disconnected by explicit teardown.
+                              }
+                              if (this.source !== source) {
+                                  return;
+                              }
+                              const requested = this.stopRequested;
+                              this.source = null;
+                              this.gain = null;
+                              if (!requested && !loop) {
+                                  this.clearHandle();
+                                  this.playingFlag = false;
+                                  this.globallySuspended = false;
+                                  this.positionOffset = 0;
+                                  Music.active.delete(this);
+                                  if (Music.currentMusic === this) {
+                                      Music.currentMusic = null;
+                                  }
+                                  for (const listener of this.listeners) {
+                                      listener.musicEnded(this);
+                                  }
+                              }
+                          };
+                          source.start(0, this.positionOffset);
+                          Music.active.add(this);
+                      }
+                  ''',
+                      '''    private stopSource(requested: boolean, keepHandle = false): void {
+                          if (!this.source) {
+                              if (!keepHandle) {
+                                  this.clearHandle();
+                              }
+                              return;
+                          }
+                          this.stopRequested = requested;
+                          const source = this.source;
+                          const gain = this.gain;
+                          this.source = null;
+                          this.gain = null;
+                          if (!keepHandle) {
+                              this.clearHandle();
+                          }
+                          this.cleanupSourceGraph(source, gain, true);
+                      }
+
+                      private cleanupSourceGraph(source: AudioBufferSourceNode | null, gain: GainNode | null, stopSource: boolean): void {
+                          if (source) {
+                              source.onended = null;
+                              if (stopSource) {
+                                  try {
+                                      source.stop();
+                                  } catch {
+                                      // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
+                                  }
+                              }
+                              try {
+                                  source.disconnect();
+                              } catch {
+                                  // A source can already be disconnected during repeated teardown.
+                              }
+                          }
+                          try {
+                              gain?.disconnect();
+                          } catch {
+                              // A gain node can already be disconnected during repeated teardown.
+                          }
+                      }
+
+                      private startSource(buffer: AudioBuffer, loop: boolean, offset: number): void {
+                          const context = SoundStore.get().getAudioContext();
+                          const bus = SoundStore.get().getMusicBus();
+                          if (!context || !bus) {
+                              throw new SlickException("Music playback requires Web Audio API");
+                          }
+                          this.stopSource(true);
+                          this.ensureHandle();
+                          void context.resume().catch(() => undefined);
+                          let createdSource: AudioBufferSourceNode | null = null;
+                          let createdGain: GainNode | null = null;
+                          try {
+                              createdSource = context.createBufferSource();
+                              createdGain = context.createGain();
+                              const source = createdSource;
+                              const gain = createdGain;
+                              source.buffer = buffer;
+                              source.loop = loop;
+                              source.playbackRate.value = this.playbackRate;
+                              gain.gain.value = this.volume;
+                              source.connect(gain);
+                              gain.connect(bus);
+                              this.positionOffset = this.normalizeOffset(buffer, offset, loop);
+                              this.startedAt = context.currentTime;
+                              this.stopRequested = false;
+                              this.source = source;
+                              this.gain = gain;
+                              source.onended = () => {
+                                  this.cleanupSourceGraph(source, gain, false);
+                                  if (this.source !== source) {
+                                      return;
+                                  }
+                                  const requested = this.stopRequested;
+                                  this.source = null;
+                                  this.gain = null;
+                                  if (!requested && !loop) {
+                                      this.endPending = true;
+                                  }
+                              };
+                              source.start(0, this.positionOffset);
+                          } catch (error) {
+                              if (createdSource && this.source === createdSource) {
+                                  this.source = null;
+                                  this.gain = null;
+                              }
+                              this.cleanupSourceGraph(createdSource, createdGain, true);
+                              throw error;
+                          }
+                      }
+                  '''
+                  )
+                  replace_once(
+                      music,
+                      '''    private resumeForMusicOn(): void {
+                          if (Music.currentMusic !== this || !this.playingFlag || this.paused || !this.globallySuspended) {
+                              return;
+                          }
+                          this.globallySuspended = false;
+                          this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
+                      }
+                  ''',
+                      '''    private resumeForMusicOn(): void {
+                          if (Music.currentMusic !== this || !this.playingFlag || this.paused || !this.globallySuspended) {
+                              return;
+                          }
+                          this.globallySuspended = false;
+                          this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
+                      }
+                  '''
+                  )
+                  replace_once(
+                      music,
+                      '''            resume: () => this.resumeForMusicOn(),
+                                  playing: () => this.playing()
+                              };
+                              SoundStore.get().track(this.handle);
+                          }
+
+                          private clearHandle(): void {
+                  ''',
+                      '''            resume: () => this.resumeForMusicOn(),
+                                  playing: () => this.isPlaybackActiveForStore()
+                              };
+                              SoundStore.get().track(this.handle);
+                          }
+
+                          private isPlaybackActiveForStore(): boolean {
+                              return Music.currentMusic === this && !this.endPending && (this.playingFlag || this.paused || this.globallySuspended);
+                          }
+
+                          private clearHandle(): void {
+                  '''
+                  )
+
+                  store = "src/slick/openal/SoundStore.ts"
+                  replace_once(
+                      store,
+                      '''    /** Java Slick2D counterpart: SoundStore.init(). */
+                      public init(): void {
+                          if (this.inited) {
+                              return;
+                          }
+                          this.inited = true;
+                          const context = this.getAudioContext();
+                          if (context) {
+                              this.soundWorksFlag = true;
+                              this.soundsEnabled = true;
+                              this.musicEnabled = true;
+                              this.resetSoundSources();
+                          } else {
+                              this.soundWorksFlag = false;
+                              this.soundsEnabled = false;
+                              this.musicEnabled = false;
+                          }
+                      }
+                  ''',
+                      '''    /** Java Slick2D counterpart: SoundStore.init(). */
+                      public init(): void {
+                          if (this.inited) {
+                              return;
+                          }
+                          const context = this.getAudioContext();
+                          if (context) {
+                              this.inited = true;
+                              this.soundWorksFlag = true;
+                              this.soundsEnabled = true;
+                              this.musicEnabled = true;
+                              this.resetSoundSources();
+                          } else {
+                              this.soundWorksFlag = false;
+                              this.soundsEnabled = false;
+                              this.musicEnabled = false;
+                          }
+                      }
+                  '''
+                  )
+                  replace_once(
+                      store,
+                      '''    /** Browser parity helper: returns the lazily-created AudioContext. */
+                      public getAudioContext(): AudioContext | null {
+                          if (this.context) {
+                              if (this.context.state !== "closed") {
+                                  return this.context;
+                              }
+                              this.context = null;
+                              this.soundBus = null;
+                              this.musicBus = null;
+                          }
+                          const Ctor = globalThis.AudioContext ?? (globalThis as WebAudioGlobal).webkitAudioContext;
+                          if (!Ctor) {
+                              return null;
+                          }
+                          try {
+                              this.context = new Ctor();
+                          } catch {
+                              return null;
+                          }
+                          this.soundBus = this.context.createGain();
+                          this.musicBus = this.context.createGain();
+                          this.soundBus.gain.value = 1;
+                          this.musicBus.gain.value = this.musicVolume;
+                          this.soundBus.connect(this.context.destination);
+                          this.musicBus.connect(this.context.destination);
+                          return this.context;
+                      }
+                  ''',
+                      '''    /** Browser parity helper: returns the lazily-created AudioContext. */
+                      public getAudioContext(): AudioContext | null {
+                          if (this.context) {
+                              if (this.context.state !== "closed") {
+                                  return this.context;
+                              }
+                              this.context = null;
+                              this.soundBus = null;
+                              this.musicBus = null;
+                          }
+                          const Ctor = globalThis.AudioContext ?? (globalThis as WebAudioGlobal).webkitAudioContext;
+                          if (!Ctor) {
+                              return null;
+                          }
+                          let context: AudioContext | null = null;
+                          let soundBus: GainNode | null = null;
+                          let musicBus: GainNode | null = null;
+                          try {
+                              context = new Ctor();
+                              soundBus = context.createGain();
+                              musicBus = context.createGain();
+                              soundBus.gain.value = 1;
+                              musicBus.gain.value = this.musicVolume;
+                              soundBus.connect(context.destination);
+                              musicBus.connect(context.destination);
+                          } catch {
+                              try {
+                                  soundBus?.disconnect();
+                              } catch {
+                                  // Ignore cleanup failures while rolling back partial Web Audio initialization.
+                              }
+                              try {
+                                  musicBus?.disconnect();
+                              } catch {
+                                  // Ignore cleanup failures while rolling back partial Web Audio initialization.
+                              }
+                              if (context) {
+                                  try {
+                                      void context.close().catch(() => undefined);
+                                  } catch {
+                                      // Ignore AudioContext close failures during rollback.
+                                  }
+                              }
+                              return null;
+                          }
+                          this.context = context;
+                          this.soundBus = soundBus;
+                          this.musicBus = musicBus;
+                          return context;
+                      }
+                  '''
+                  )
+                  replace_once(
+                      store,
+                      '''        let sourceGain = 0;
+                          let playing = true;
+                          let stopped = false;
+                          let requestedStop = false;
+                          const handle: AudioPlaybackHandle = {
+                  ''',
+                      '''        let sourceGain = 0;
+                          let playing = true;
+                          let stopped = false;
+                          let requestedStop = false;
+                          const cleanupGraph = (targetSource: AudioBufferSourceNode | null, targetGain: GainNode | null, stopSource: boolean): void => {
+                              if (targetSource) {
+                                  targetSource.onended = null;
+                                  if (stopSource) {
+                                      try {
+                                          targetSource.stop();
+                                      } catch {
+                                          // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
+                                      }
+                                  }
+                                  try {
+                                      targetSource.disconnect();
+                                  } catch {
+                                      // A source can already be disconnected during repeated teardown.
+                                  }
+                              }
+                              try {
+                                  targetGain?.disconnect();
+                              } catch {
+                                  // A gain node can already be disconnected during repeated teardown.
+                              }
+                          };
+                          const handle: AudioPlaybackHandle = {
+                  '''
+                  )
+                  replace_once(
+                      store,
+                      '''            stop: () => {
+                                  stopped = true;
+                                  requestedStop = true;
+                                  if (source) {
+                                      const stoppedSource = source;
+                                      source = null;
+                                      stoppedSource.onended = null;
+                                      try {
+                                          stoppedSource.stop();
+                                      } catch {
+                                          // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
+                                      }
+                                      try {
+                                          stoppedSource.disconnect();
+                                      } catch {
+                                          // A source can already be disconnected during repeated teardown.
+                                      }
+                                  }
+                                  try {
+                                      gain?.disconnect();
+                                  } catch {
+                                      // A gain node can already be disconnected during repeated teardown.
+                                  }
+                                  gain = null;
+                                  playing = false;
+                  ''',
+                      '''            stop: () => {
+                                  stopped = true;
+                                  requestedStop = true;
+                                  const stoppedSource = source;
+                                  const stoppedGain = gain;
+                                  source = null;
+                                  gain = null;
+                                  cleanupGraph(stoppedSource, stoppedGain, true);
+                                  playing = false;
+                  '''
+                  )
+                  replace_once(
+                      store,
+                      '''                source.onended = () => {
+                                      startedSource.onended = null;
+                                      try {
+                                          startedSource.disconnect();
+                                      } catch {
+                                          // The source may already have been disconnected by explicit teardown.
+                                      }
+                                      try {
+                                          startedGain.disconnect();
+                                      } catch {
+                                          // The gain may already have been disconnected by explicit teardown.
+                                      }
+                                      if (source !== startedSource) {
+                                          return;
+                                      }
+                  ''',
+                      '''                source.onended = () => {
+                                      cleanupGraph(startedSource, startedGain, false);
+                                      if (source !== startedSource) {
+                                          return;
+                                      }
+                  '''
+                  )
+                  replace_once(
+                      store,
+                      '''            .catch((error) => {
+                                  playing = false;
+                                  this.activeHandles.delete(handle);
+                                  this.musicHandles.delete(handle);
+                                  this.releaseSoundSource(sourceId, handle);
+                                  Log.error(`Failed to play sound: ${ref}`, error);
+                              });
+                  ''',
+                      '''            .catch((error) => {
+                                  const failedSource = source;
+                                  const failedGain = gain;
+                                  source = null;
+                                  gain = null;
+                                  cleanupGraph(failedSource, failedGain, true);
+                                  playing = false;
+                                  this.activeHandles.delete(handle);
+                                  this.musicHandles.delete(handle);
+                                  this.releaseSoundSource(sourceId, handle);
+                                  onEnded?.();
+                                  Log.error(`Failed to play sound: ${ref}`, error);
+                              });
+                  '''
+                  )
+
+                  al = "src/lwjgl/openal/AL.ts"
+                  replace_once(
+                      al,
+                      'import { SoundStore } from "../../slick/openal/SoundStore.js";',
+                      'import { Music } from "../../slick/Music.js";\nimport { SoundStore } from "../../slick/openal/SoundStore.js";'
+                  )
+                  replace_once(
+                      al,
+                      '''    /** Java LWJGL counterpart: AL.create(). */
+                      public static create(): void {
+                          AL.created = true;
+                          SoundStore.get().init();
+                      }
+
+                      /** Java LWJGL counterpart: AL.destroy(). */
+                      public static destroy(): void {
+                          SoundStore.get().destroy();
+                          AL.created = false;
+                      }
+
+                      /** Browser/PWA helper: tears down logical OpenAL state while preserving decoded audio cache. */
+                      public static destroyPreservingAudioCache(): void {
+                          SoundStore.get().destroyPreservingAudioCache();
+                          AL.created = false;
+                      }
+                  ''',
+                      '''    /** Java LWJGL counterpart: AL.create(). */
+                      public static create(): void {
+                          SoundStore.get().init();
+                          AL.created = true;
+                      }
+
+                      /** Java LWJGL counterpart: AL.destroy(). */
+                      public static destroy(): void {
+                          try {
+                              Music.resetPlaybackState();
+                              SoundStore.get().destroy();
+                          } finally {
+                              AL.created = false;
+                          }
+                      }
+
+                      /** Browser/PWA helper: tears down logical OpenAL state while preserving decoded audio cache. */
+                      public static destroyPreservingAudioCache(): void {
+                          try {
+                              Music.resetPlaybackState();
+                              SoundStore.get().destroyPreservingAudioCache();
+                          } finally {
+                              AL.created = false;
+                          }
+                      }
+                  '''
+                  )
+                  PY
+
+                  cat > test/audio-lifecycle-hardening.test.mjs <<'EOF'
+                  import assert from "node:assert/strict";
+                  import { afterEach, test } from "node:test";
+                  import { AL, Music, ResourceLoader, Sound, SoundStore } from "../dist/index.js";
+
+                  class FakeAudioBuffer {
+                      constructor() {
+                          this.duration = 10;
+                      }
+                  }
+
+                  class FakeGain {
+                      static created = [];
+
+                      constructor() {
+                          this.connectCalls = 0;
+                          this.disconnectCalls = 0;
+                          this.gain = { value: 1 };
+                          FakeGain.created.push(this);
+                      }
+
+                      connect() {
+                          this.connectCalls++;
+                      }
+
+                      disconnect() {
+                          this.disconnectCalls++;
+                      }
+                  }
+
+                  class FakeAudioSource {
+                      static created = [];
+                      static startError = null;
+
+                      constructor() {
+                          this.buffer = null;
+                          this.connectCalls = 0;
+                          this.disconnectCalls = 0;
+                          this.loop = false;
+                          this.onended = null;
+                          this.playbackRate = { value: 1 };
+                          this.startCalls = [];
+                          this.stopped = false;
+                          FakeAudioSource.created.push(this);
+                      }
+
+                      connect() {
+                          this.connectCalls++;
+                      }
+
+                      disconnect() {
+                          this.disconnectCalls++;
+                      }
+
+                      start(when = 0, offset = 0) {
+                          this.startCalls.push({ when, offset });
+                          if (FakeAudioSource.startError) {
+                              throw FakeAudioSource.startError;
+                          }
+                      }
+
+                      stop() {
+                          this.stopped = true;
+                          this.onended?.();
+                      }
+
+                      finish() {
+                          this.onended?.();
+                      }
+                  }
+
+                  class FakeAudioContext {
+                      static created = [];
+                      static failCreateGainAt = 0;
+
+                      constructor() {
+                          this.createGainCalls = 0;
+                          this.currentTime = 0;
+                          this.destination = {};
+                          this.state = "suspended";
+                          FakeAudioContext.created.push(this);
+                      }
+
+                      close() {
+                          this.state = "closed";
+                          return Promise.resolve();
+                      }
+
+                      createBufferSource() {
+                          return new FakeAudioSource();
+                      }
+
+                      createGain() {
+                          this.createGainCalls++;
+                          if (FakeAudioContext.failCreateGainAt === this.createGainCalls) {
+                              throw new Error(`injected createGain failure ${this.createGainCalls}`);
+                          }
+                          return new FakeGain();
+                      }
+
+                      decodeAudioData() {
+                          return Promise.resolve(new FakeAudioBuffer());
+                      }
+
+                      resume() {
+                          this.state = "running";
+                          return Promise.resolve();
+                      }
+                  }
+
+                  function installAudioGlobals() {
+                      Object.defineProperty(globalThis, "AudioContext", {
+                          configurable: true,
+                          value: FakeAudioContext,
+                          writable: true
+                      });
+                  }
+
+                  function registerTone() {
+                      ResourceLoader.registerResource("tone.ogg", new Uint8Array([1, 2, 3, 4]));
+                  }
+
+                  async function settleAudioStart() {
+                      for (let i = 0; i < 10; i++) {
+                          await Promise.resolve();
+                      }
+                  }
+
+                  function listenerEvents() {
+                      const events = [];
+                      return {
+                          events,
+                          listener: {
+                              musicEnded: () => events.push("ended"),
+                              musicSwapped: () => events.push("swapped")
+                          }
+                      };
+                  }
+
+                  afterEach(() => {
+                      AL.destroy();
+                      FakeAudioContext.created = [];
+                      FakeAudioContext.failCreateGainAt = 0;
+                      FakeAudioSource.created = [];
+                      FakeAudioSource.startError = null;
+                      FakeGain.created = [];
+                      SoundStore.get().setMaxSources(64);
+                      ResourceLoader.clearCache();
+                      delete globalThis.AudioContext;
+                  });
+
+                  test("idle Music fades do not advance and fresh play clears the dormant fade", async () => {
+                      installAudioGlobals();
+                      registerTone();
+                      AL.create();
+                      const music = new Music("tone.ogg");
+                      await music.ready();
+
+                      music.setVolume(0.8);
+                      music.fade(100, 0, false);
+                      Music.poll(50);
+                      assert.equal(music.getVolume(), 0.8);
+
+                      music.play(1, 0.8);
+                      await settleAudioStart();
+                      Music.poll(50);
+                      assert.equal(music.getVolume(), 0.8);
+                  });
+
+                  test("current Music fades continue while explicitly paused", async () => {
+                      installAudioGlobals();
+                      registerTone();
+                      const store = SoundStore.get();
+                      AL.create();
+                      const music = new Music("tone.ogg");
+                      await music.ready();
+
+                      music.play();
+                      await settleAudioStart();
+                      music.fade(100, 0, false);
+                      music.pause();
+
+                      assert.equal(music.playing(), false);
+                      assert.equal(store.isMusicPlaying(), true);
+
+                      Music.poll(50);
+                      assert.equal(music.getVolume(), 0.5);
+                      Music.poll(50);
+                      assert.equal(music.getVolume(), 0);
+                      assert.equal(music.isPaused(), true);
+                  });
+
+                  test("explicit Music stop reports musicEnded on the next poll", async () => {
+                      installAudioGlobals();
+                      registerTone();
+                      AL.create();
+                      const music = new Music("tone.ogg");
+                      const { events, listener } = listenerEvents();
+                      music.addListener(listener);
+                      await music.ready();
+
+                      music.play();
+                      await settleAudioStart();
+                      music.stop();
+
+                      assert.equal(music.playing(), false);
+                      assert.deepEqual(events, []);
+
+                      Music.poll(1);
+                      assert.deepEqual(events, ["ended"]);
+                  });
+
+                  test("a new Music before the post-stop poll reports swap instead of end", async () => {
+                      installAudioGlobals();
+                      registerTone();
+                      AL.create();
+                      const first = new Music("tone.ogg");
+                      const second = new Music("tone.ogg");
+                      const { events, listener } = listenerEvents();
+                      first.addListener(listener);
+                      await Promise.all([first.ready(), second.ready()]);
+
+                      first.play();
+                      await settleAudioStart();
+                      first.stop();
+                      second.play();
+
+                      assert.deepEqual(events, ["swapped"]);
+                      Music.poll(1);
+                      assert.deepEqual(events, ["swapped"]);
+                  });
+
+                  test("natural non-looping Music completion is reported by the next poll", async () => {
+                      installAudioGlobals();
+                      registerTone();
+                      const store = SoundStore.get();
+                      AL.create();
+                      const music = new Music("tone.ogg");
+                      const { events, listener } = listenerEvents();
+                      music.addListener(listener);
+                      await music.ready();
+
+                      music.play();
+                      await settleAudioStart();
+                      const source = FakeAudioSource.created.at(-1);
+                      source.finish();
+
+                      assert.deepEqual(events, []);
+                      assert.equal(music.playing(), true);
+                      assert.equal(store.isMusicPlaying(), false);
+
+                      Music.poll(1);
+                      assert.deepEqual(events, ["ended"]);
+                      assert.equal(music.playing(), false);
+                  });
+
+                  test("Music startup failure disconnects its partial Web Audio graph", async () => {
+                      installAudioGlobals();
+                      registerTone();
+                      const store = SoundStore.get();
+                      AL.create();
+                      const music = new Music("tone.ogg");
+                      await music.ready();
+                      FakeAudioSource.startError = new Error("injected source.start failure");
+
+                      music.play();
+                      await settleAudioStart();
+
+                      const source = FakeAudioSource.created.at(-1);
+                      const gain = FakeGain.created.at(-1);
+                      assert.equal(source.onended, null);
+                      assert.equal(source.disconnectCalls, 1);
+                      assert.equal(gain.disconnectCalls, 1);
+                      assert.equal(music.source, null);
+                      assert.equal(music.gain, null);
+                      assert.equal(music.playing(), false);
+                      assert.equal(store.isMusicPlaying(), false);
+                  });
+
+                  test("Sound startup failure disconnects its graph and clears the remembered handle", async () => {
+                      installAudioGlobals();
+                      registerTone();
+                      AL.create();
+                      const sound = new Sound("tone.ogg");
+                      await sound.ready();
+                      FakeAudioSource.startError = new Error("injected source.start failure");
+
+                      sound.play();
+                      const handle = sound.active;
+                      assert.notEqual(handle, null);
+                      await settleAudioStart();
+
+                      const source = FakeAudioSource.created.at(-1);
+                      const gain = FakeGain.created.at(-1);
+                      assert.equal(handle.playing(), false);
+                      assert.equal(sound.active, null);
+                      assert.equal(source.onended, null);
+                      assert.equal(source.disconnectCalls, 1);
+                      assert.equal(gain.disconnectCalls, 1);
+                  });
+
+                  test("partial Web Audio initialization rolls back and a later AL.create retries", () => {
+                      installAudioGlobals();
+                      const store = SoundStore.get();
+                      FakeAudioContext.failCreateGainAt = 2;
+
+                      AL.create();
+
+                      const failedContext = FakeAudioContext.created[0];
+                      const partialBus = FakeGain.created[0];
+                      assert.equal(store.soundWorks(), false);
+                      assert.equal(store.inited, false);
+                      assert.equal(store.context, null);
+                      assert.equal(store.soundBus, null);
+                      assert.equal(store.musicBus, null);
+                      assert.equal(failedContext.state, "closed");
+                      assert.equal(partialBus.disconnectCalls, 1);
+
+                      FakeAudioContext.failCreateGainAt = 0;
+                      AL.create();
+
+                      assert.equal(store.soundWorks(), true);
+                      assert.equal(store.inited, true);
+                      assert.notEqual(store.getAudioContext(), failedContext);
+                      assert.notEqual(store.soundBus, null);
+                      assert.notEqual(store.musicBus, null);
+                  });
+
+                  test("AL.create does not publish created state if SoundStore.init throws", () => {
+                      const store = SoundStore.get();
+                      const originalInit = store.init;
+                      store.init = () => {
+                          throw new Error("injected init failure");
+                      };
+                      try {
+                          assert.throws(() => AL.create(), /injected init failure/);
+                          assert.equal(AL.isCreated(), false);
+                      } finally {
+                          store.init = originalInit;
+                      }
+                  });
+
+                  test("AL.destroy clears pending static Music end state without listener callbacks", async () => {
+                      installAudioGlobals();
+                      registerTone();
+                      AL.create();
+                      const first = new Music("tone.ogg");
+                      const { events, listener } = listenerEvents();
+                      first.addListener(listener);
+                      await first.ready();
+                      first.play();
+                      await settleAudioStart();
+                      first.stop();
+
+                      AL.destroy();
+                      assert.deepEqual(events, []);
+
+                      AL.create();
+                      const second = new Music("tone.ogg");
+                      await second.ready();
+                      second.play();
+                      await settleAudioStart();
+
+                      assert.deepEqual(events, []);
+                  });
+                  EOF
+
+                  npx prettier \
+                      src/slick/Music.ts \
+                      src/slick/openal/SoundStore.ts \
+                      src/lwjgl/openal/AL.ts \
+                      test/audio-lifecycle-hardening.test.mjs \
+                      --write
+
+                  git diff --check
+                  npm run build
+
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git add \
+                      src/slick/Music.ts \
+                      src/slick/openal/SoundStore.ts \
+                      src/lwjgl/openal/AL.ts \
+                      test/audio-lifecycle-hardening.test.mjs \
+                      dist
+                  git commit -m "Complete audio lifecycle hardening"
+
+                  npm run verify
+                  npm run verify:browser
+
+                  git push origin HEAD:main
