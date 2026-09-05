@@ -1,3 +1,4 @@
+import { Music } from "../../slick/Music.js";
 import { SoundStore } from "../../slick/openal/SoundStore.js";
 
 /**
@@ -10,20 +11,28 @@ export class AL {
 
     /** Java LWJGL counterpart: AL.create(). */
     public static create(): void {
-        AL.created = true;
         SoundStore.get().init();
+        AL.created = true;
     }
 
     /** Java LWJGL counterpart: AL.destroy(). */
     public static destroy(): void {
-        SoundStore.get().destroy();
-        AL.created = false;
+        try {
+            Music.resetPlaybackState();
+            SoundStore.get().destroy();
+        } finally {
+            AL.created = false;
+        }
     }
 
     /** Browser/PWA helper: tears down logical OpenAL state while preserving decoded audio cache. */
     public static destroyPreservingAudioCache(): void {
-        SoundStore.get().destroyPreservingAudioCache();
-        AL.created = false;
+        try {
+            Music.resetPlaybackState();
+            SoundStore.get().destroyPreservingAudioCache();
+        } finally {
+            AL.created = false;
+        }
     }
 
     /** Java LWJGL counterpart: AL.isCreated(). */

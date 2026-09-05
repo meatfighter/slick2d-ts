@@ -225,7 +225,7 @@ export class Music {
     public setPosition(position: number): boolean {
         this.positionOffset = this.buffer ? this.normalizeOffset(this.buffer, position, this.looped) : this.sanitizeOffset(position);
         if (this.source) {
-            this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
+            this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
         }
         return true;
     }
@@ -249,10 +249,9 @@ export class Music {
             endVolume: Math.max(0, Math.min(1, endVolume)),
             stopAfterFade
         };
-        Music.active.add(this);
     }
 
-    private start(loop: boolean, pitch: number, volume: number, offset: number = 0): void {
+    private start(loop: boolean, pitch: number, volume: number, offset: number = 0, resetFade: boolean = true): void {
         const oldMusic = Music.currentMusic;
         if (oldMusic && oldMusic !== this) {
             oldMusic.stopForSwap(this);
@@ -260,6 +259,10 @@ export class Music {
             this.stopSource(true);
         }
         Music.currentMusic = this;
+        this.endPending = false;
+        if (resetFade) {
+            this.fadeState = null;
+        }
         this.looped = loop;
         this.playbackRate = Math.max(0.25, Math.min(4, pitch));
         this.positionOffset = this.buffer ? this.normalizeOffset(this.buffer, offset, loop) : this.sanitizeOffset(offset);
@@ -288,6 +291,7 @@ export class Music {
                 if (token === this.startToken && Music.currentMusic === this) {
                     this.playingFlag = false;
                     this.globallySuspended = false;
+                    this.endPending = false;
                     Music.currentMusic = null;
                     this.clearHandle();
                 }
@@ -325,13 +329,25 @@ export class Music {
         this.playingFlag = false;
         this.paused = false;
         this.globallySuspended = false;
+        this.endPending = false;
         this.fadeState = null;
-        Music.active.delete(this);
         if (Music.currentMusic === this) {
             Music.currentMusic = null;
         }
         for (const listener of this.listeners) {
             listener.musicSwapped(this, newMusic);
+        }
+    }
+
+    private finishEnded(): void {
+        this.endPending = false;
+        this.playingFlag = false;
+        this.paused = false;
+        this.globallySuspended = false;
+        this.positionOffset = 0;
+        this.clearHandle();
+        for (const listener of this.listeners) {
+            listener.musicEnded(this);
         }
     }
 
@@ -350,16 +366,24 @@ export class Music {
         if (!keepHandle) {
             this.clearHandle();
         }
-        source.onended = null;
-        try {
-            source.stop();
-        } catch {
-            // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
-        }
-        try {
-            source.disconnect();
-        } catch {
-            // A source can already be disconnected during repeated teardown.
+        this.cleanupSourceGraph(source, gain, true);
+    }
+
+    private cleanupSourceGraph(source: AudioBufferSourceNode | null, gain: GainNode | null, stopSource: boolean): void {
+        if (source) {
+            source.onended = null;
+            if (stopSource) {
+                try {
+                    source.stop();
+                } catch {
+                    // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
+                }
+            }
+            try {
+                source.disconnect();
+            } catch {
+                // A source can already be disconnected during repeated teardown.
+            }
         }
         try {
             gain?.disconnect();
@@ -377,53 +401,45 @@ export class Music {
         this.stopSource(true);
         this.ensureHandle();
         void context.resume().catch(() => undefined);
-        const source = context.createBufferSource();
-        this.source = source;
-        const gain = context.createGain();
-        this.gain = gain;
-        source.buffer = buffer;
-        source.loop = loop;
-        source.playbackRate.value = this.playbackRate;
-        gain.gain.value = this.volume;
-        source.connect(gain);
-        gain.connect(bus);
-        this.positionOffset = this.normalizeOffset(buffer, offset, loop);
-        this.startedAt = context.currentTime;
-        this.stopRequested = false;
-        source.onended = () => {
-            source.onended = null;
-            try {
-                source.disconnect();
-            } catch {
-                // The source may already have been disconnected by explicit teardown.
-            }
-            try {
-                gain.disconnect();
-            } catch {
-                // The gain may already have been disconnected by explicit teardown.
-            }
-            if (this.source !== source) {
-                return;
-            }
-            const requested = this.stopRequested;
-            this.source = null;
-            this.gain = null;
-            if (!requested && !loop) {
-                this.clearHandle();
-                this.playingFlag = false;
-                this.globallySuspended = false;
-                this.positionOffset = 0;
-                Music.active.delete(this);
-                if (Music.currentMusic === this) {
-                    Music.currentMusic = null;
+        let createdSource: AudioBufferSourceNode | null = null;
+        let createdGain: GainNode | null = null;
+        try {
+            createdSource = context.createBufferSource();
+            createdGain = context.createGain();
+            const source = createdSource;
+            const gain = createdGain;
+            source.buffer = buffer;
+            source.loop = loop;
+            source.playbackRate.value = this.playbackRate;
+            gain.gain.value = this.volume;
+            source.connect(gain);
+            gain.connect(bus);
+            this.positionOffset = this.normalizeOffset(buffer, offset, loop);
+            this.startedAt = context.currentTime;
+            this.stopRequested = false;
+            this.source = source;
+            this.gain = gain;
+            source.onended = () => {
+                this.cleanupSourceGraph(source, gain, false);
+                if (this.source !== source) {
+                    return;
                 }
-                for (const listener of this.listeners) {
-                    listener.musicEnded(this);
+                const requested = this.stopRequested;
+                this.source = null;
+                this.gain = null;
+                if (!requested && !loop) {
+                    this.endPending = true;
                 }
+            };
+            source.start(0, this.positionOffset);
+        } catch (error) {
+            if (createdSource && this.source === createdSource) {
+                this.source = null;
+                this.gain = null;
             }
-        };
-        source.start(0, this.positionOffset);
-        Music.active.add(this);
+            this.cleanupSourceGraph(createdSource, createdGain, true);
+            throw error;
+        }
     }
 
     private sanitizeOffset(offset: number): number {
@@ -459,7 +475,7 @@ export class Music {
             return;
         }
         this.globallySuspended = false;
-        this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
+        this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
     }
 
     private ensureHandle(): void {
@@ -472,9 +488,13 @@ export class Music {
             pause: () => this.pause(),
             suspend: () => this.suspendForMusicOff(),
             resume: () => this.resumeForMusicOn(),
-            playing: () => this.playing()
+            playing: () => this.isPlaybackActiveForStore()
         };
         SoundStore.get().track(this.handle);
+    }
+
+    private isPlaybackActiveForStore(): boolean {
+        return Music.currentMusic === this && !this.endPending && (this.playingFlag || this.paused || this.globallySuspended);
     }
 
     private clearHandle(): void {

@@ -80,13 +80,16 @@ export declare class Music {
     private poll;
     private loadBuffer;
     private stopForSwap;
+    private finishEnded;
     private stopSource;
+    private cleanupSourceGraph;
     private startSource;
     private sanitizeOffset;
     private normalizeOffset;
     private suspendForMusicOff;
     private resumeForMusicOn;
     private ensureHandle;
+    private isPlaybackActiveForStore;
     private clearHandle;
 }
 //# sourceMappingURL=Music.d.ts.map

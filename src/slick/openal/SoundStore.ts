@@ -193,9 +193,9 @@ export class SoundStore {
         if (this.inited) {
             return;
         }
-        this.inited = true;
         const context = this.getAudioContext();
         if (context) {
+            this.inited = true;
             this.soundWorksFlag = true;
             this.soundsEnabled = true;
             this.musicEnabled = true;
@@ -299,18 +299,41 @@ export class SoundStore {
         if (!Ctor) {
             return null;
         }
+        let context: AudioContext | null = null;
+        let soundBus: GainNode | null = null;
+        let musicBus: GainNode | null = null;
         try {
-            this.context = new Ctor();
+            context = new Ctor();
+            soundBus = context.createGain();
+            musicBus = context.createGain();
+            soundBus.gain.value = 1;
+            musicBus.gain.value = this.musicVolume;
+            soundBus.connect(context.destination);
+            musicBus.connect(context.destination);
         } catch {
+            try {
+                soundBus?.disconnect();
+            } catch {
+                // Ignore cleanup failures while rolling back partial Web Audio initialization.
+            }
+            try {
+                musicBus?.disconnect();
+            } catch {
+                // Ignore cleanup failures while rolling back partial Web Audio initialization.
+            }
+            if (context) {
+                try {
+                    void context.close().catch(() => undefined);
+                } catch {
+                    // Ignore AudioContext close failures during rollback.
+                }
+            }
             return null;
         }
-        this.soundBus = this.context.createGain();
-        this.musicBus = this.context.createGain();
-        this.soundBus.gain.value = 1;
-        this.musicBus.gain.value = this.musicVolume;
-        this.soundBus.connect(this.context.destination);
-        this.musicBus.connect(this.context.destination);
-        return this.context;
+        this.context = context;
+        this.soundBus = soundBus;
+        this.musicBus = musicBus;
+        return context;
     }
 
     /** Browser parity helper: resumes Web Audio from a user gesture before gameplay playback. */
@@ -505,32 +528,38 @@ export class SoundStore {
         let playing = true;
         let stopped = false;
         let requestedStop = false;
+        const cleanupGraph = (targetSource: AudioBufferSourceNode | null, targetGain: GainNode | null, stopSource: boolean): void => {
+            if (targetSource) {
+                targetSource.onended = null;
+                if (stopSource) {
+                    try {
+                        targetSource.stop();
+                    } catch {
+                        // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
+                    }
+                }
+                try {
+                    targetSource.disconnect();
+                } catch {
+                    // A source can already be disconnected during repeated teardown.
+                }
+            }
+            try {
+                targetGain?.disconnect();
+            } catch {
+                // A gain node can already be disconnected during repeated teardown.
+            }
+        };
         const handle: AudioPlaybackHandle = {
             sourceId,
             stop: () => {
                 stopped = true;
                 requestedStop = true;
-                if (source) {
-                    const stoppedSource = source;
-                    source = null;
-                    stoppedSource.onended = null;
-                    try {
-                        stoppedSource.stop();
-                    } catch {
-                        // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
-                    }
-                    try {
-                        stoppedSource.disconnect();
-                    } catch {
-                        // A source can already be disconnected during repeated teardown.
-                    }
-                }
-                try {
-                    gain?.disconnect();
-                } catch {
-                    // A gain node can already be disconnected during repeated teardown.
-                }
+                const stoppedSource = source;
+                const stoppedGain = gain;
+                source = null;
                 gain = null;
+                cleanupGraph(stoppedSource, stoppedGain, true);
                 playing = false;
                 this.activeHandles.delete(handle);
                 this.musicHandles.delete(handle);
@@ -559,17 +588,7 @@ export class SoundStore {
                 const startedSource = source;
                 const startedGain = gain;
                 source.onended = () => {
-                    startedSource.onended = null;
-                    try {
-                        startedSource.disconnect();
-                    } catch {
-                        // The source may already have been disconnected by explicit teardown.
-                    }
-                    try {
-                        startedGain.disconnect();
-                    } catch {
-                        // The gain may already have been disconnected by explicit teardown.
-                    }
+                    cleanupGraph(startedSource, startedGain, false);
                     if (source !== startedSource) {
                         return;
                     }
@@ -588,10 +607,16 @@ export class SoundStore {
                 source.start();
             })
             .catch((error) => {
+                const failedSource = source;
+                const failedGain = gain;
+                source = null;
+                gain = null;
+                cleanupGraph(failedSource, failedGain, true);
                 playing = false;
                 this.activeHandles.delete(handle);
                 this.musicHandles.delete(handle);
                 this.releaseSoundSource(sourceId, handle);
+                onEnded?.();
                 Log.error(`Failed to play sound: ${ref}`, error);
             });
         return handle;
