@@ -31,7 +31,7 @@ jobs:
       - name: Run failure lifecycle probe
         run: |
           cat > /tmp/audio-failure-probe.mjs <<'EOF'
-          import { AL, Music, ResourceLoader, Sound, SoundStore } from `${process.cwd()}/dist/index.js`;
+          const { AL, Music, ResourceLoader, Sound, SoundStore } = await import(`file://${process.cwd()}/dist/index.js`);
 
           class FakeAudioBuffer {
               constructor() {
