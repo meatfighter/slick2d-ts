@@ -94,7 +94,19 @@ jobs:
           '''
           if text.count(old) != 1:
               raise SystemExit('audio lifecycle loop anchor changed')
-          runner.write_text(text.replace(old, new))
+          text = text.replace(old, new)
+          old2 = '''        await runAudioLifecycleCycles(page, method, 8);
+                  const after = await collectBrowserListenerCount(page);
+          '''
+          new2 = '''        await runAudioLifecycleCycles(page, method, 8);
+                  if (method === "runNaturalSoundCycle") {
+                      await new Promise((resolveDelay) => setTimeout(resolveDelay, 2_000));
+                  }
+                  const after = await collectBrowserListenerCount(page);
+          '''
+          if text.count(old2) != 1:
+              raise SystemExit('audio lifecycle measurement anchor changed')
+          runner.write_text(text.replace(old2, new2))
           PY
           npx prettier test/browser/verify.mjs scripts/run-browser-tests.mjs --write
 
