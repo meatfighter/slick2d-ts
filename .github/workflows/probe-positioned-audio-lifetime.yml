@@ -1,0 +1,138 @@
+name: Probe positioned audio lifetime
+
+on:
+  push:
+    paths:
+      - .github/workflows/probe-positioned-audio-lifetime.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Add temporary positioned-audio probe
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          verify = Path('test/browser/verify.mjs')
+          text = verify.read_text()
+          anchor = '''async function runSoundLifecycleCycle() {
+              await prepareAudioLifecycle();
+              const handle = SoundStore.get().playSound(audioLifecycleRef, 1, 1, true);
+              assert(handle !== null, "SoundStore did not create an audio lifecycle test handle");
+              await new Promise((resolve) => setTimeout(resolve, 0));
+              handle.stop();
+              await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          '''
+          replacement = anchor + '''
+          let pannerWeakRefs = [];
+          let pannerTrackingInstalled = false;
+
+          async function runPositionedSoundLifecycleCycle() {
+              await prepareAudioLifecycle();
+              const context = SoundStore.get().getAudioContext();
+              assert(context !== null, "Audio context was unavailable for positioned-audio probe");
+              if (!pannerTrackingInstalled) {
+                  const originalCreatePanner = context.createPanner.bind(context);
+                  context.createPanner = () => {
+                      const panner = originalCreatePanner();
+                      pannerWeakRefs.push(new WeakRef(panner));
+                      return panner;
+                  };
+                  pannerTrackingInstalled = true;
+              }
+              const handle = SoundStore.get().playSound(audioLifecycleRef, 1, 1, true, undefined, { x: 1, y: 2, z: 3 });
+              assert(handle !== null, "SoundStore did not create a positioned audio handle");
+              await new Promise((resolve) => setTimeout(resolve, 0));
+              handle.stop();
+              await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+
+          function resetPannerWeakRefs() {
+              pannerWeakRefs = [];
+          }
+
+          function countLivePanners() {
+              return pannerWeakRefs.reduce((count, reference) => count + (reference.deref() ? 1 : 0), 0);
+          }
+          '''
+          if text.count(anchor) != 1:
+              raise SystemExit('sound lifecycle anchor changed')
+          text = text.replace(anchor, replacement)
+
+          old = '''globalThis.__slickAudioLifecycle = {
+              runMusicCycle: runMusicLifecycleCycle,
+              runSoundCycle: runSoundLifecycleCycle,
+              cleanup: cleanupAudioLifecycle
+          };
+          '''
+          new = '''globalThis.__slickAudioLifecycle = {
+              runMusicCycle: runMusicLifecycleCycle,
+              runSoundCycle: runSoundLifecycleCycle,
+              runPositionedSoundCycle: runPositionedSoundLifecycleCycle,
+              resetPannerWeakRefs,
+              countLivePanners,
+              cleanup: cleanupAudioLifecycle
+          };
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('audio lifecycle export anchor changed')
+          verify.write_text(text.replace(old, new))
+
+          runner = Path('scripts/run-browser-tests.mjs')
+          text = runner.read_text()
+          anchor = '''async function verifyAudioLifecycleListenerCleanup(page) {
+          '''
+          helper = '''async function probePositionedPannerLifetime(page) {
+              await runAudioLifecycleCycles(page, "runPositionedSoundCycle", 1);
+              await page.call("HeapProfiler.collectGarbage");
+              await page.call("Runtime.evaluate", {
+                  expression: "globalThis.__slickAudioLifecycle.resetPannerWeakRefs(); true;",
+                  returnByValue: true
+              });
+              await runAudioLifecycleCycles(page, "runPositionedSoundCycle", 12);
+              await page.call("HeapProfiler.collectGarbage");
+              await new Promise((resolveDelay) => setTimeout(resolveDelay, 150));
+              await page.call("HeapProfiler.collectGarbage");
+              const result = await page.call("Runtime.evaluate", {
+                  expression: "globalThis.__slickAudioLifecycle.countLivePanners()",
+                  returnByValue: true
+              });
+              console.log(`Positioned audio PannerNode wrappers alive after 12 explicit stop + GC cycles: ${result.result?.value}`);
+          }
+
+          '''
+          if text.count(anchor) != 1:
+              raise SystemExit('audio lifecycle verifier anchor changed')
+          text = text.replace(anchor, helper + anchor)
+
+          old = '''    await verifyAudioLifecycleListenerCleanup(page);
+          '''
+          new = '''    await verifyAudioLifecycleListenerCleanup(page);
+              await probePositionedPannerLifetime(page);
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('browser lifecycle call anchor changed')
+          runner.write_text(text.replace(old, new))
+          PY
+          npx prettier test/browser/verify.mjs scripts/run-browser-tests.mjs --write
+
+      - name: Run real Chromium probe
+        run: npm run verify:browser
