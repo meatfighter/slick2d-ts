@@ -1,0 +1,55 @@
+name: Regenerate Web Audio lifecycle dist
+
+on:
+  push:
+    paths:
+      - .github/workflows/regenerate-audio-lifecycle-dist.yml
+
+permissions:
+  contents: write
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify generated scope
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              'dist/slick/Music.d.ts.map',
+              'dist/slick/Music.js',
+              'dist/slick/Music.js.map',
+              'dist/slick/openal/SoundStore.d.ts.map',
+              'dist/slick/openal/SoundStore.js',
+              'dist/slick/openal/SoundStore.js.map',
+          }
+          out = subprocess.check_output(['git', 'status', '--porcelain'], text=True)
+          changed = {line[3:] for line in out.splitlines() if line}
+          unexpected = changed - expected
+          missing = expected - changed
+          if unexpected or missing:
+              raise SystemExit(f'unexpected generated diff; unexpected={sorted(unexpected)}, missing={sorted(missing)}')
+          PY
+
+      - name: Commit generated dist
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dist/slick/Music.d.ts.map dist/slick/Music.js dist/slick/Music.js.map dist/slick/openal/SoundStore.d.ts.map dist/slick/openal/SoundStore.js dist/slick/openal/SoundStore.js.map
+          git commit -m "Regenerate Web Audio lifecycle build"
+          git push
