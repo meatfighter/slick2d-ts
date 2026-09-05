@@ -1,0 +1,82 @@
+name: Expand audio lifecycle regression test
+
+on:
+  push:
+    paths:
+      - .github/workflows/expand-audio-lifecycle-regression-test.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Report both audio lifecycle paths
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/run-browser-tests.mjs')
+          text = p.read_text()
+          old = '''async function verifyAudioLifecycleListenerCleanup(page) {
+              for (const [label, method] of [
+                  ["Music", "runMusicCycle"],
+                  ["SoundStore", "runSoundCycle"]
+              ]) {
+                  await runAudioLifecycleCycles(page, method, 1);
+                  const baseline = await collectBrowserListenerCount(page);
+                  await runAudioLifecycleCycles(page, method, 8);
+                  const after = await collectBrowserListenerCount(page);
+                  const growth = after - baseline;
+                  console.log(`${label} listener lifecycle: ${baseline} -> ${after} (${growth >= 0 ? "+" : ""}${growth})`);
+                  if (growth > 0) {
+                      throw new Error(`${label} leaked ${growth} browser event listener(s) across eight explicit stop cycles.`);
+                  }
+              }
+              await page.call("Runtime.evaluate", {
+                  expression: "globalThis.__slickAudioLifecycle?.cleanup(); true;",
+                  returnByValue: true
+              });
+          }
+          '''
+          new = '''async function verifyAudioLifecycleListenerCleanup(page) {
+              const failures = [];
+              for (const [label, method] of [
+                  ["Music", "runMusicCycle"],
+                  ["SoundStore", "runSoundCycle"]
+              ]) {
+                  await runAudioLifecycleCycles(page, method, 1);
+                  const baseline = await collectBrowserListenerCount(page);
+                  await runAudioLifecycleCycles(page, method, 8);
+                  const after = await collectBrowserListenerCount(page);
+                  const growth = after - baseline;
+                  console.log(`${label} listener lifecycle: ${baseline} -> ${after} (${growth >= 0 ? "+" : ""}${growth})`);
+                  if (growth > 0) {
+                      failures.push(`${label} leaked ${growth} browser event listener(s) across eight explicit stop cycles.`);
+                  }
+              }
+              await page.call("Runtime.evaluate", {
+                  expression: "globalThis.__slickAudioLifecycle?.cleanup(); true;",
+                  returnByValue: true
+              });
+              if (failures.length > 0) {
+                  throw new Error(failures.join("\\n"));
+              }
+          }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('audio lifecycle helper anchor changed')
+          p.write_text(text.replace(old, new))
+          PY
+          npx prettier scripts/run-browser-tests.mjs --write
+
+      - name: Commit isolation improvement
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/run-browser-tests.mjs
+          git commit -m "Report both Web Audio lifecycle leaks"
+          git push
