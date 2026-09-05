@@ -6,7 +6,6 @@ import type { MusicListener } from "./MusicListener.js";
  */
 export declare class Music {
     private static currentMusic;
-    private static readonly active;
     private readonly ref;
     private readonly readyPromise;
     private readonly listeners;
@@ -23,6 +22,7 @@ export declare class Music {
     private playingFlag;
     private globallySuspended;
     private stopRequested;
+    private endPending;
     private startToken;
     private handle;
     constructor(ref: string);
@@ -32,6 +32,8 @@ export declare class Music {
     constructor(input: ArrayBuffer | Blob, ref: string);
     /** Java Slick2D counterpart: Music.poll(int). */
     static poll(delta: number): void;
+    /** Browser lifecycle helper: clears static Music playback state without firing listeners. */
+    static resetPlaybackState(): void;
     /** Browser parity helper: waits for constructor-queued audio decode. */
     ready(): Promise<void>;
     /** Browser parity helper: Java-style explicit load alias. */

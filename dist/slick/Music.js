@@ -9,7 +9,6 @@ import { ResourceLoader } from "./util/ResourceLoader.js";
  */
 export class Music {
     static currentMusic = null;
-    static active = new Set();
     ref;
     readyPromise;
     listeners = [];
@@ -26,6 +25,7 @@ export class Music {
     playingFlag = false;
     globallySuspended = false;
     stopRequested = false;
+    endPending = false;
     startToken = 0;
     handle = null;
     /**
@@ -59,14 +59,34 @@ export class Music {
     }
     /** Java Slick2D counterpart: Music.poll(int). */
     static poll(delta) {
-        if (Music.currentMusic && Music.currentMusic.playingFlag) {
-            Music.currentMusic.poll(delta);
+        const current = Music.currentMusic;
+        if (!current) {
+            return;
         }
-        for (const music of Music.active) {
-            if (music !== Music.currentMusic) {
-                music.poll(delta);
-            }
+        SoundStore.get().poll(delta);
+        if (current.endPending) {
+            Music.currentMusic = null;
+            current.finishEnded();
+            return;
         }
+        current.poll(delta);
+    }
+    /** Browser lifecycle helper: clears static Music playback state without firing listeners. */
+    static resetPlaybackState() {
+        const current = Music.currentMusic;
+        Music.currentMusic = null;
+        if (!current) {
+            return;
+        }
+        current.startToken++;
+        current.stopSource(true);
+        current.positionOffset = 0;
+        current.paused = false;
+        current.playingFlag = false;
+        current.globallySuspended = false;
+        current.stopRequested = false;
+        current.endPending = false;
+        current.fadeState = null;
     }
     /** Browser parity helper: waits for constructor-queued audio decode. */
     ready() {
@@ -106,7 +126,6 @@ export class Music {
         this.paused = true;
         this.playingFlag = false;
         this.globallySuspended = false;
-        Music.active.delete(this);
     }
     /** Java Slick2D counterpart: Music.stop(). */
     stop() {
@@ -116,16 +135,13 @@ export class Music {
         this.paused = false;
         this.playingFlag = false;
         this.globallySuspended = false;
-        Music.active.delete(this);
         this.fadeState = null;
-        if (Music.currentMusic === this) {
-            Music.currentMusic = null;
-        }
+        this.endPending = Music.currentMusic === this;
     }
     /** Java Slick2D counterpart: Music.resume(). */
     resume() {
         if (this.paused) {
-            this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
+            this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
         }
         else if (this.globallySuspended && SoundStore.get().musicOn()) {
             this.resumeForMusicOn();

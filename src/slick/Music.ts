@@ -19,7 +19,6 @@ type FadeState = {
  */
 export class Music {
     private static currentMusic: Music | null = null;
-    private static readonly active = new Set<Music>();
     private readonly ref: string;
     private readonly readyPromise: Promise<void>;
     private readonly listeners: MusicListener[] = [];
@@ -36,6 +35,7 @@ export class Music {
     private playingFlag = false;
     private globallySuspended = false;
     private stopRequested = false;
+    private endPending = false;
     private startToken = 0;
     private handle: AudioPlaybackHandle | null = null;
 
@@ -76,14 +76,35 @@ export class Music {
 
     /** Java Slick2D counterpart: Music.poll(int). */
     public static poll(delta: number): void {
-        if (Music.currentMusic && Music.currentMusic.playingFlag) {
-            Music.currentMusic.poll(delta);
+        const current = Music.currentMusic;
+        if (!current) {
+            return;
         }
-        for (const music of Music.active) {
-            if (music !== Music.currentMusic) {
-                music.poll(delta);
-            }
+        SoundStore.get().poll(delta);
+        if (current.endPending) {
+            Music.currentMusic = null;
+            current.finishEnded();
+            return;
         }
+        current.poll(delta);
+    }
+
+    /** Browser lifecycle helper: clears static Music playback state without firing listeners. */
+    public static resetPlaybackState(): void {
+        const current = Music.currentMusic;
+        Music.currentMusic = null;
+        if (!current) {
+            return;
+        }
+        current.startToken++;
+        current.stopSource(true);
+        current.positionOffset = 0;
+        current.paused = false;
+        current.playingFlag = false;
+        current.globallySuspended = false;
+        current.stopRequested = false;
+        current.endPending = false;
+        current.fadeState = null;
     }
 
     /** Browser parity helper: waits for constructor-queued audio decode. */
@@ -138,7 +159,6 @@ export class Music {
         this.paused = true;
         this.playingFlag = false;
         this.globallySuspended = false;
-        Music.active.delete(this);
     }
 
     /** Java Slick2D counterpart: Music.stop(). */
@@ -149,17 +169,14 @@ export class Music {
         this.paused = false;
         this.playingFlag = false;
         this.globallySuspended = false;
-        Music.active.delete(this);
         this.fadeState = null;
-        if (Music.currentMusic === this) {
-            Music.currentMusic = null;
-        }
+        this.endPending = Music.currentMusic === this;
     }
 
     /** Java Slick2D counterpart: Music.resume(). */
     public resume(): void {
         if (this.paused) {
-            this.start(this.looped, this.playbackRate, this.volume, this.positionOffset);
+            this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
         } else if (this.globallySuspended && SoundStore.get().musicOn()) {
             this.resumeForMusicOn();
         }
