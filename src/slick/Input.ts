@@ -700,8 +700,7 @@ export class Input {
     }
 
     /** Java Slick2D counterpart: Input.poll(int, int). */
-    public poll(_width: number, height: number): void {
-        this.height = height;
+    public poll(_width: number, _height: number): void {
         if (!Input.browserHasInputFocus()) {
             this.clearAllInputState();
             return;
