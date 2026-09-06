@@ -1,0 +1,56 @@
+name: TypeScript Dist Refresh Helper
+
+on:
+  push:
+    branches:
+      - chatgpt/ts-release-cleanup-20260905
+    paths:
+      - .github/workflows/ts-dist-refresh-helper.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: chatgpt/ts-release-cleanup-20260905
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Rebuild committed distribution
+        run: npm run build
+      - name: Verify generated diff is limited to intended Slick modules
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          allowed = {
+              'dist/slick/Graphics.d.ts',
+              'dist/slick/Graphics.d.ts.map',
+              'dist/slick/Graphics.js',
+              'dist/slick/Graphics.js.map',
+              'dist/slick/Input.d.ts',
+              'dist/slick/Input.d.ts.map',
+              'dist/slick/Input.js',
+              'dist/slick/Input.js.map',
+          }
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          unexpected = changed - allowed
+          missing = allowed - changed
+          if unexpected:
+              raise SystemExit(f'unexpected generated files changed: {sorted(unexpected)}')
+          if missing:
+              raise SystemExit(f'expected generated files did not change: {sorted(missing)}')
+          print('Generated diff is limited to the eight intended Graphics/Input dist artifacts.')
+          PY
+      - name: Commit generated distribution
+        run: |
+          git config user.name "zeroone"
+          git config user.email "54445200+meatfighter@users.noreply.github.com"
+          git add dist/slick/Graphics.d.ts dist/slick/Graphics.d.ts.map dist/slick/Graphics.js dist/slick/Graphics.js.map dist/slick/Input.d.ts dist/slick/Input.d.ts.map dist/slick/Input.js dist/slick/Input.js.map
+          git commit -m "Refresh generated Slick distribution"
+          git push origin HEAD:chatgpt/ts-release-cleanup-20260905
