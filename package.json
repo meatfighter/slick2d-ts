@@ -45,6 +45,7 @@
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "check:dist": "node scripts/check-dist-clean.mjs",
         "verify": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run check:dist",
+        "qualify": "npm run verify && npm run verify:browser",
         "clean": "node scripts/clean-dist.mjs",
         "test:browser": "node scripts/run-browser-tests.mjs",
         "verify:browser": "npm run build && npm run test:browser",

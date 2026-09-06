@@ -82,6 +82,7 @@ On Windows PowerShell, use `npm.cmd` if execution policy blocks `npm.ps1`.
 | Check committed distribution        | `npm run check:dist`                      | Requires no staged, unstaged, or untracked changes under `dist/`            |
 | Run complete source verification    | `npm run verify`                          | Formatting, lint, types, behavioral tests, and committed-distribution check |
 | Run browser verification            | `npm run verify:browser`                  | Rebuilds and runs the real Chromium suite                                   |
+| Qualify local commit                | `npm run qualify`                         | Full local pre-push verification, including browser tests                   |
 
 For browser tests, install Chrome or Chromium and set `CHROMIUM_PATH` when it is not found in the runner's Linux locations. For example, in PowerShell, adjust this path to your installation:
 
@@ -90,7 +91,7 @@ $env:CHROMIUM_PATH = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 npm run verify:browser
 ```
 
-The runner uses headless mode on Windows and macOS. On Linux it can use an existing display or Xvfb; `CHROMIUM_HEADLESS=1` selects headless mode. Browser coverage lives in [test/browser/](test/browser/) and [scripts/run-browser-tests.mjs](scripts/run-browser-tests.mjs). These checks run locally without GitHub Actions.
+The runner uses headless mode on Windows and macOS. On Linux it can use an existing display or Xvfb; `CHROMIUM_HEADLESS=1` selects headless mode. Browser coverage lives in [test/browser/](test/browser/) and [scripts/run-browser-tests.mjs](scripts/run-browser-tests.mjs). Run `npm run qualify` before pushing release-affecting changes; GitHub Actions is an optional manual Linux check.
 
 ## Maintaining the engine
 
