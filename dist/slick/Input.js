@@ -8,7 +8,6 @@ function isAccepting(listener) {
  * Browser keyboard, mouse, and Gamepad API adapter using Slick/LWJGL constants.
  */
 export class Input {
-    height;
     static ANY_CONTROLLER = -1;
     static MOUSE_LEFT_BUTTON = 0;
     static MOUSE_RIGHT_BUTTON = 1;
@@ -234,7 +233,7 @@ export class Input {
     }
     /** Java Slick2D counterpart: Input(int height). */
     constructor(height) {
-        this.height = height;
+        void height;
         this.additionalControllerAxisBaselines.fill(Number.NaN);
     }
     /**
@@ -612,8 +611,7 @@ export class Input {
         this.considerDoubleClickAt(button, x, y, this.dispatchingEvent ? this.dispatchedEventTime : Input.now());
     }
     /** Java Slick2D counterpart: Input.poll(int, int). */
-    poll(_width, height) {
-        this.height = height;
+    poll(_width, _height) {
         if (!Input.browserHasInputFocus()) {
             this.clearAllInputState();
             return;
