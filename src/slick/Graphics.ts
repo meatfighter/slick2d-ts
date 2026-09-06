@@ -836,15 +836,6 @@ export class Graphics {
         this.applyWorldClipValues(renderer, clip.x, clip.y, clip.width, clip.height);
     }
 
-    private withRenderTarget<T>(callback: () => T): T {
-        const renderer = this.beginRenderTarget();
-        try {
-            return callback();
-        } finally {
-            this.endRenderTarget(renderer);
-        }
-    }
-
     private beginRenderTarget(activateDrawMode: boolean = true): WebGLRenderer {
         const renderer = Renderer.getBackend();
         this.renderTarget?.markModified?.();

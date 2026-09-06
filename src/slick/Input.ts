@@ -255,7 +255,8 @@ export class Input {
     }
 
     /** Java Slick2D counterpart: Input(int height). */
-    public constructor(private height: number) {
+    public constructor(height: number) {
+        void height;
         this.additionalControllerAxisBaselines.fill(Number.NaN);
     }
 
