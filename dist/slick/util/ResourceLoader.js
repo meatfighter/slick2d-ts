@@ -122,16 +122,25 @@ export class ResourceLoader {
                 phase: "resolve"
             });
         }
+        const timeoutMs = options.timeoutMs ?? 30_000;
+        if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+            throw new RangeError("Resource timeout must be a positive finite timer duration.");
+        }
+        const controller = new AbortController();
+        const forwardAbort = () => controller.abort(options.signal?.reason);
+        options.signal?.addEventListener("abort", forwardAbort, { once: true });
+        const timeout = setTimeout(() => controller.abort(new DOMException(`Resource timed out: ${ref}`, "TimeoutError")), timeoutMs);
+        const signal = controller.signal;
         const record = { ref };
-        const promise = ResourceLoader.fetchFromCandidates(urls, ref, options.signal)
+        const promise = ResourceLoader.fetchFromCandidates(urls, ref, signal)
             .then(async (response) => {
-            ResourceLoader.throwIfAborted(options.signal, ref, response.url || null, "read");
+            ResourceLoader.throwIfAborted(signal, ref, response.url || null, "read");
             let data;
             try {
                 data = await response.arrayBuffer();
             }
             catch (cause) {
-                if (ResourceLoader.isAbortError(cause) || options.signal?.aborted) {
+                if (ResourceLoader.isAbortError(cause) || signal.aborted) {
                     throw ResourceLoader.abortException(ref, response.url || null, "read", cause);
                 }
                 throw new ResourceLoadException(`Failed to read resource ${ref}`, {
@@ -142,13 +151,17 @@ export class ResourceLoader {
                     cause
                 });
             }
-            ResourceLoader.throwIfAborted(options.signal, ref, response.url || null, "read");
+            ResourceLoader.throwIfAborted(signal, ref, response.url || null, "read");
             record.data = data;
             return data.slice(0);
         })
             .catch((error) => {
             record.error = error;
             throw error;
+        })
+            .finally(() => {
+            clearTimeout(timeout);
+            options.signal?.removeEventListener("abort", forwardAbort);
         });
         record.promise = promise;
         ResourceLoader.records.set(ref, record);

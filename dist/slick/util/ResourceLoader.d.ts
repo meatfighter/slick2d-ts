@@ -25,6 +25,8 @@ export declare class ResourceLoadException extends SlickException {
 }
 export interface ResourceLoadOptions {
     readonly signal?: AbortSignal;
+    /** Deadline for an uncached fetch and its body, including retries. Default: 30 seconds. */
+    readonly timeoutMs?: number;
 }
 export type ResourcePreloadProgress = {
     ref: string;

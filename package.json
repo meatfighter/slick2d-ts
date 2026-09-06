@@ -47,7 +47,8 @@
         "verify": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run check:dist",
         "clean": "node scripts/clean-dist.mjs",
         "test:browser": "node scripts/run-browser-tests.mjs",
-        "verify:browser": "npm run build && npm run test:browser"
+        "verify:browser": "npm run build && npm run test:browser",
+        "release:archive": "node scripts/archive-release.mjs"
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
