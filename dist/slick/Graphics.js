@@ -686,15 +686,6 @@ export class Graphics {
         }
         this.applyWorldClipValues(renderer, clip.x, clip.y, clip.width, clip.height);
     }
-    withRenderTarget(callback) {
-        const renderer = this.beginRenderTarget();
-        try {
-            return callback();
-        }
-        finally {
-            this.endRenderTarget(renderer);
-        }
-    }
     beginRenderTarget(activateDrawMode = true) {
         const renderer = Renderer.getBackend();
         this.renderTarget?.markModified?.();

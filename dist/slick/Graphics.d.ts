@@ -206,7 +206,6 @@ export declare class Graphics {
     private fillPatternRect;
     private applyWorldClipValues;
     private applyWorldClip;
-    private withRenderTarget;
     private beginRenderTarget;
     private endRenderTarget;
     private applyDrawModeForContext;

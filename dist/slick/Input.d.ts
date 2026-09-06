@@ -13,7 +13,6 @@ export interface ControllerDirectionAxisPair {
  * Browser keyboard, mouse, and Gamepad API adapter using Slick/LWJGL constants.
  */
 export declare class Input {
-    private height;
     static readonly ANY_CONTROLLER = -1;
     static readonly MOUSE_LEFT_BUTTON = 0;
     static readonly MOUSE_RIGHT_BUTTON = 1;
@@ -357,7 +356,7 @@ export declare class Input {
     /** Java Slick2D counterpart: Input.considerDoubleClick(int, int, int). */
     considerDoubleClick(button: number, x: number, y: number): void;
     /** Java Slick2D counterpart: Input.poll(int, int). */
-    poll(_width: number, height: number): void;
+    poll(_width: number, _height: number): void;
     /** Java Slick2D counterpart: Input.enableKeyRepeat(int, int). */
     enableKeyRepeat(_initial: number, _interval: number): void;
     /** Java Slick2D counterpart: Input.enableKeyRepeat(). */
