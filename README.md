@@ -1,39 +1,34 @@
 # slick2d-ts
 
-`slick2d-ts` is a TypeScript/WebGL2 compatibility layer for porting Java games built on Slick2D and LWJGL-style APIs to modern browsers.
+A TypeScript/WebGL2 compatibility layer for bringing Java games built on selected Slick2D and LWJGL APIs to browsers. It supports the behavior required by the maintained game ports; it is not a complete Slick2D implementation or a desktop runtime.
 
-The project focuses on the APIs and behaviors needed by maintained Java-to-TypeScript game ports. It is not a complete Slick2D implementation, a desktop runtime, or a general-purpose browser game engine.
+See [COMPATIBILITY.md](COMPATIBILITY.md) for supported browser extensions, intentional no-ops, and differences from Java APIs. Integration examples are available in [Ms. Pac-Man](https://github.com/meatfighter/ms-pac-man-2010-js), [Stickvania](https://github.com/meatfighter/stickvania-js), and [Jackal](https://github.com/meatfighter/jackal-js).
 
-## What it provides
+## Repository layout
 
-- Slick-style `Game`, `BasicGame`, and `AppGameContainer` lifecycle behavior.
-- WebGL2 rendering with Java/Slick-style `Graphics`, `Image`, sprite-sheet, shape, transform, clip, and draw-mode APIs.
-- Native-resolution buffered rendering with Smooth, Crisp, and Pixel Perfect presentation modes.
-- High-DPI canvas backing stores while gameplay coordinates remain logical CSS pixels.
-- Web Audio-backed `Sound`, `Music`, and `SoundStore` compatibility.
-- Keyboard, mouse, pointer, and Gamepad API input support.
-- Resource preloading and browser-cache helpers for Java-style resource references.
-- Java numeric, random-number, binary-read, bitmap-text, and sprite-drawing helpers used by parity-sensitive ports.
-- Exact Java `Random` state capture and restoration.
-- Browser lifecycle support for same-page container recreation and WebGL context loss/restoration.
+| Path                   | Purpose                                                        |
+| ---------------------- | -------------------------------------------------------------- |
+| `src/index.ts`         | Public package exports                                         |
+| `src/slick/`           | Slick-style lifecycle, graphics, images, input, and audio APIs |
+| `src/slick/rendering/` | WebGL rendering implementation                                 |
+| `src/slick/util/`      | Resource loading and Java-port utilities                       |
+| `src/lwjgl/`           | Selected LWJGL-style compatibility APIs                        |
+| `dist/`                | Committed JavaScript, TypeScript declarations, and source maps |
+| `test/`                | Node-based behavioral and regression tests                     |
+| `test/browser/`        | Real-browser integration fixtures                              |
+| `scripts/`             | Build checks, browser-test runner, and release archiving       |
 
-## Installation
+## Using the library
 
-The repository is not published to npm. For experimentation, install directly from GitHub:
+The package is not published to npm. Install an immutable archive of a qualified engine commit, replacing the placeholder with its full 40-character SHA:
 
 ```sh
-npm install git+https://github.com/meatfighter/slick2d-ts.git#main
+npm install "https://codeload.github.com/meatfighter/slick2d-ts/tar.gz/<commit-sha>"
 ```
 
-Production game repositories should pin an **exact qualified commit**, not a moving branch. For example:
+Keep `package.json` and `package-lock.json` on the same revision. The archive contains the committed `dist/` files; consumers do not need to compile the engine. Use a browser application with ES-module/bundler support and WebGL2.
 
-```text
-https://codeload.github.com/meatfighter/slick2d-ts/tar.gz/<40-character-commit-sha>
-```
-
-The package and lockfile should agree on the same immutable revision.
-
-## Minimal example
+A minimal game in a browser module:
 
 ```ts
 import { AppGameContainer, BasicGame, Color, type GameContainer, type Graphics } from "slick2d-ts";
@@ -57,94 +52,54 @@ const app = new AppGameContainer(new DemoGame(), 640, 480, false);
 await app.start();
 ```
 
-If `Display.setParent(...)` is not used, the container creates a canvas and appends it to `document.body`.
+Run after the document body exists. Without `Display.setParent(...)`, the container creates a canvas in `document.body`. Use `BufferedScalableGame` when a fixed-resolution scene should be rendered to a native-size framebuffer and scaled as a whole; its modes are described in [COMPATIBILITY.md](COMPATIBILITY.md).
 
-For a fixed-resolution game that should scale as one scene, wrap it with `BufferedScalableGame`:
+Browser resource loading is asynchronous. Preload image/data resources with `ResourceLoader.preloadResources(...)` and audio with `SoundStore.get().preloadAudioBuffers(...)` before synchronous gameplay consumes them. Use cancellation, bounded concurrency, and progress callbacks as needed. Individual resource requests have a finite default deadline; see [ResourceLoader.ts](src/slick/util/ResourceLoader.ts) for load options and structured failure details.
 
-```ts
-import { BufferedScalableGame, BufferedScalingMode } from "slick2d-ts";
+Each preload batch settles its own started work before rejecting. If a host starts several batches together, it must also coordinate cancellation and settlement across those batches before allowing Retry. See the shared-request cancellation rules in [COMPATIBILITY.md](COMPATIBILITY.md). Request audio unlock from a user gesture and follow browser fullscreen and lifecycle restrictions.
 
-const game = new BufferedScalableGame(new DemoGame(), 640, 480, {
-    maintainAspect: true,
-    scalingMode: BufferedScalingMode.Integer
-});
-```
+## Local development
 
-## Resource preloading
+Use Node.js 24 and Git. JDK tools are not required to build this TypeScript library.
 
-Browser APIs are asynchronous in places where Java Slick2D APIs were synchronous. Image, audio, XML, atlas, and binary resources should therefore be preloaded before synchronous game code consumes them.
-
-Resource and audio batches accept an `AbortSignal`, a concurrency limit, and progress reporting. Batch work settles before rejection so a host can safely present Retry without leaving an earlier load attempt running underneath it.
-
-```ts
-import { ResourceLoader, SoundStore } from "slick2d-ts";
-
-const controller = new AbortController();
-await Promise.all([
-    ResourceLoader.preloadResources(imageAndDataRefs, {
-        signal: controller.signal,
-        concurrency: 8,
-        onProgress: ({ loaded, total }) => updateProgress(loaded, total)
-    }),
-    SoundStore.get().preloadAudioBuffers(audioRefs, {
-        signal: controller.signal,
-        concurrency: 3
-    })
-]);
-```
-
-`ResourceLoadException` exposes structured failure information such as failure kind, phase, HTTP status, resource reference, and URL.
-
-## Deterministic Java random state
-
-`JavaRandom.getState()`, `setState(...)`, and `JavaRandom.fromState(...)` preserve the internal 48-bit Java LCG state exactly. The saved state is deliberately different from the public Java constructor seed: restoring it must not apply Java's seed scrambling a second time.
-
-## Browser boundaries
-
-Fullscreen, audio unlock, canvas sizing, context loss, and resource loading follow browser security and lifecycle rules. Host applications should unlock audio from a user gesture when reliable first-play sound matters.
-
-See [`COMPATIBILITY.md`](COMPATIBILITY.md) for intentional compatibility no-ops and browser-specific boundaries.
-
-## Development
-
-Install dependencies from the lockfile:
+Run commands from the repository root:
 
 ```sh
 npm ci
+npm run build
 ```
 
-Run the normal source/build verification gate:
+On Windows PowerShell, use `npm.cmd` if execution policy blocks `npm.ps1`.
 
-```sh
-npm run verify
-```
+| Task                                | Command                                   | Behavior                                                                    |
+| ----------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------- |
+| Build distribution                  | `npm run build`                           | Cleans and regenerates `dist/` from TypeScript                              |
+| Check formatting / apply formatting | `npm run format:check` / `npm run format` | Repository Prettier rules                                                   |
+| Lint / check types                  | `npm run lint` / `npm run typecheck`      | Source checks                                                               |
+| Run behavioral tests                | `npm test`                                | Rebuilds `dist/`, then runs `test/*.mjs`                                    |
+| Check committed distribution        | `npm run check:dist`                      | Requires no staged, unstaged, or untracked changes under `dist/`            |
+| Run complete source verification    | `npm run verify`                          | Formatting, lint, types, behavioral tests, and committed-distribution check |
+| Run browser verification            | `npm run verify:browser`                  | Rebuilds and runs the real Chromium suite                                   |
 
-Run the real-browser suite separately:
+For browser tests, install Chrome or Chromium and set `CHROMIUM_PATH` when it is not found in the runner's Linux locations. For example, in PowerShell, adjust this path to your installation:
 
-```sh
+```powershell
+$env:CHROMIUM_PATH = "C:\Program Files\Google\Chrome\Application\chrome.exe"
 npm run verify:browser
 ```
 
-Useful focused commands include:
+The runner uses headless mode on Windows and macOS. On Linux it can use an existing display or Xvfb; `CHROMIUM_HEADLESS=1` selects headless mode. Browser coverage lives in [test/browser/](test/browser/) and [scripts/run-browser-tests.mjs](scripts/run-browser-tests.mjs). These checks run locally without GitHub Actions.
 
-```sh
-npm run format:check
-npm run lint
-npm run typecheck
-npm test
-npm run check:dist
-```
+## Maintaining the engine
 
-Use `npm run format` to apply the repository's Prettier rules.
+- Preserve observable Java/Slick2D behavior, including numeric semantics, random state, timing, event ordering, and resource ownership. Java-shaped APIs should not be rewritten solely for style.
+- Keep browser-only extensions and compatibility limitations documented in [COMPATIBILITY.md](COMPATIBILITY.md). Prefer explicit supported APIs over requiring consumers to use reflection or reach into internals.
+- Avoid unnecessary allocations and repeated work in rendering, input polling, and other frequently executed paths. Add focused regression coverage for changed behavior.
+- Build after source changes, review the generated `dist/` diff, and commit source and distribution together. Do not edit generated files directly. The `check:dist` step intentionally fails until changed distribution files are committed; staging them is not sufficient.
+- Run the full source verification on the resulting commit and run real-browser checks for browser-facing changes. Validate affected features in the consuming games before advancing their engine pins; engine tests alone do not establish game compatibility.
 
-## Compatibility philosophy
+## Releases and attribution
 
-The goal is behavioral compatibility for the Java games that depend on this project. Java-shaped APIs and seemingly unusual semantics should not be “cleaned up” merely for style when they encode observable Slick2D/LWJGL behavior.
+See [RELEASING.md](RELEASING.md) for exact-commit qualification, local build archives, checksums, release tags, retention, and rollback. Archiving requires a clean checkout and Node.js, Git, and tar.
 
-Engine changes should be qualified in both `slick2d-ts` and the downstream games that exercise the affected feature. Rendering, input, timing, audio, lifecycle, and persistence-related changes are behavioral dependencies, not ordinary package bumps.
-
-## License
-
-`slick2d-ts` is licensed under the **BSD 3-Clause License**. See [`LICENSE`](LICENSE).
-
-Upstream Slick2D attribution is included in [`NOTICE.md`](NOTICE.md).
+The source is licensed under the [BSD 3-Clause License](LICENSE). Upstream Slick2D attribution is in [NOTICE.md](NOTICE.md).
