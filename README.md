@@ -1,8 +1,10 @@
-# slick2d-ts
+# Slick2D-ts
 
-A TypeScript/WebGL2 compatibility layer for bringing Java games built on selected Slick2D and LWJGL APIs to browsers. It supports the behavior required by the maintained game ports; it is not a complete Slick2D implementation or a desktop runtime.
+A TypeScript/WebGL2 compatibility layer for bringing Java games built on selected [Slick2D](https://github.com/nguillaumin/slick2d-maven) and [LWJGL](https://www.lwjgl.org/) APIs to browsers. It supports the behavior required by the maintained game ports; it is not a complete Slick2D implementation or a desktop runtime.
 
 See [COMPATIBILITY.md](COMPATIBILITY.md) for supported browser extensions, intentional no-ops, and differences from Java APIs. Integration examples are available in [Ms. Pac-Man](https://github.com/meatfighter/ms-pac-man-2010-js), [Stickvania](https://github.com/meatfighter/stickvania-js), and [Jackal](https://github.com/meatfighter/jackal-js).
+
+The game about pages also reference [JInput](https://jinput.github.io/jinput/), the controller library used by their Java implementations.
 
 ## Repository layout
 
