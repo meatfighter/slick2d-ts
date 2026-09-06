@@ -1,0 +1,38 @@
+name: TypeScript Input Height Cleanup Helper
+
+on:
+  push:
+    branches:
+      - chatgpt/ts-release-cleanup-20260905
+    paths:
+      - .github/workflows/ts-input-height-cleanup-helper.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: chatgpt/ts-release-cleanup-20260905
+      - name: Remove dead Input height write
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/slick/Input.ts')
+          text = path.read_text()
+          old = '''    public poll(_width: number, height: number): void {\n        this.height = height;\n'''
+          new = '''    public poll(_width: number, _height: number): void {\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one dead poll height write, found {text.count(old)}')
+          path.write_text(text.replace(old, new))
+          PY
+      - name: Commit Input cleanup
+        run: |
+          git config user.name "zeroone"
+          git config user.email "54445200+meatfighter@users.noreply.github.com"
+          git add src/slick/Input.ts
+          git commit -m "Remove dead Input height state"
+          git push origin HEAD:chatgpt/ts-release-cleanup-20260905
