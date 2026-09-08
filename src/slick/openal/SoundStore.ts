@@ -1,3 +1,4 @@
+import { AudioContextLifecycle } from "./AudioContextLifecycle.js";
 import { ResourceLoadException, ResourceLoader, type ResourceLoadOptions } from "../util/ResourceLoader.js";
 import { runSettledBatch } from "../util/BatchLoader.js";
 import { Log } from "../util/Log.js";
@@ -353,13 +354,11 @@ export class SoundStore {
             this.musicEnabled = true;
             this.resetSoundSources();
         }
-        try {
-            await context.resume?.();
-            return context.state !== "closed";
-        } catch (error) {
-            Log.warn("Unable to unlock Web Audio", error);
-            return false;
+        const resumed = await AudioContextLifecycle.resume(context);
+        if (!resumed) {
+            Log.warn("Unable to unlock Web Audio");
         }
+        return resumed;
     }
 
     /** Browser parity helper: returns the global sound-effect gain bus. */
@@ -571,11 +570,16 @@ export class SoundStore {
         this.activeHandles.add(handle);
         this.soundSources[sourceId] = handle;
         void this.loadAudioBuffer(ref)
-            .then((buffer) => {
+            .then(async (buffer) => {
                 if (stopped) {
                     return;
                 }
-                void context.resume().catch(() => undefined);
+                if (!(await AudioContextLifecycle.resume(context)) || stopped || !this.soundsEnabled) {
+                    if (!stopped) {
+                        handle.stop();
+                    }
+                    return;
+                }
                 gain = context.createGain();
                 source = context.createBufferSource();
                 source.buffer = buffer;
