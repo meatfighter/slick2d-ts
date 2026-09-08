@@ -354,7 +354,7 @@ export class SoundStore {
             this.musicEnabled = true;
             this.resetSoundSources();
         }
-        const resumed = await AudioContextLifecycle.resume(context);
+        const resumed = await AudioContextLifecycle.resumeFromUserGesture(context);
         if (!resumed) {
             Log.warn("Unable to unlock Web Audio");
         }
