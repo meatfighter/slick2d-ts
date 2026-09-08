@@ -128,15 +128,15 @@ afterEach(() => {
     delete globalThis.AudioContext;
 });
 
-test("AudioContext lifecycle shares one native resume operation between concurrent callers", async () => {
+test("AudioContext lifecycle starts the first resume synchronously and shares it with concurrent callers", async () => {
     const context = new FakeAudioContext();
     context.resumeDeferred = new Deferred();
 
     const first = AudioContextLifecycle.resume(context);
-    const second = AudioContextLifecycle.resume(context);
-    await settle();
-
     assert.equal(context.resumeCalls, 1);
+    const second = AudioContextLifecycle.resume(context);
+    assert.equal(context.resumeCalls, 1);
+
     context.resumeDeferred.resolve();
     assert.equal(await first, true);
     assert.equal(await second, true);
@@ -150,7 +150,6 @@ test("AudioContext lifecycle serializes suspend behind an in-flight resume", asy
 
     const resumed = AudioContextLifecycle.resume(context);
     const suspended = AudioContextLifecycle.suspend(context);
-    await settle();
     assert.equal(context.resumeCalls, 1);
     assert.equal(context.suspendCalls, 0);
 
