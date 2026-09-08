@@ -13,12 +13,22 @@ type ContextTransitionState = {
 export class AudioContextLifecycle {
     private static readonly states = new WeakMap<AudioContext, ContextTransitionState>();
 
+    /** Normal playback/lifecycle resume: avoid a redundant native resume while already running. */
     public static resume(context: AudioContext): Promise<boolean> {
-        return AudioContextLifecycle.enqueue(context, "running");
+        return AudioContextLifecycle.enqueue(context, "running", false);
+    }
+
+    /**
+     * User-gesture resume: always call the browser's native resume(), even if the
+     * context reports running. This preserves an explicit recovery poke for WebKit
+     * contexts that can report running while audio output is still silent.
+     */
+    public static resumeFromUserGesture(context: AudioContext): Promise<boolean> {
+        return AudioContextLifecycle.enqueue(context, "running", true);
     }
 
     public static suspend(context: AudioContext): Promise<boolean> {
-        return AudioContextLifecycle.enqueue(context, "suspended");
+        return AudioContextLifecycle.enqueue(context, "suspended", false);
     }
 
     public static isRunning(context: AudioContext): boolean {
@@ -29,7 +39,7 @@ export class AudioContextLifecycle {
         return String(context.state) === "suspended";
     }
 
-    private static enqueue(context: AudioContext, desired: DesiredAudioContextState): Promise<boolean> {
+    private static enqueue(context: AudioContext, desired: DesiredAudioContextState, forceNativeCall: boolean): Promise<boolean> {
         let state = AudioContextLifecycle.states.get(context);
         if (state === undefined) {
             state = { tail: null };
@@ -38,10 +48,10 @@ export class AudioContextLifecycle {
 
         const transition =
             state.tail === null
-                ? AudioContextLifecycle.apply(context, desired)
+                ? AudioContextLifecycle.apply(context, desired, forceNativeCall)
                 : state.tail.then(
-                      () => AudioContextLifecycle.apply(context, desired),
-                      () => AudioContextLifecycle.apply(context, desired)
+                      () => AudioContextLifecycle.apply(context, desired, forceNativeCall),
+                      () => AudioContextLifecycle.apply(context, desired, forceNativeCall)
                   );
         const tail = transition.then(
             () => undefined,
@@ -56,12 +66,12 @@ export class AudioContextLifecycle {
         return transition;
     }
 
-    private static async apply(context: AudioContext, desired: DesiredAudioContextState): Promise<boolean> {
+    private static async apply(context: AudioContext, desired: DesiredAudioContextState, forceNativeCall: boolean): Promise<boolean> {
         const current = String(context.state);
         if (current === "closed") {
             return false;
         }
-        if (current === desired) {
+        if (current === desired && !forceNativeCall) {
             return true;
         }
         try {
