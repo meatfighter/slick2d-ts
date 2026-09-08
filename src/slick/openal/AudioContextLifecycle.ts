@@ -1,8 +1,7 @@
 type DesiredAudioContextState = "running" | "suspended";
 
 type ContextTransitionState = {
-    desired: DesiredAudioContextState;
-    transition: Promise<boolean> | null;
+    tail: Promise<void>;
 };
 
 /**
@@ -15,11 +14,11 @@ export class AudioContextLifecycle {
     private static readonly states = new WeakMap<AudioContext, ContextTransitionState>();
 
     public static resume(context: AudioContext): Promise<boolean> {
-        return AudioContextLifecycle.setDesired(context, "running");
+        return AudioContextLifecycle.enqueue(context, "running");
     }
 
     public static suspend(context: AudioContext): Promise<boolean> {
-        return AudioContextLifecycle.setDesired(context, "suspended");
+        return AudioContextLifecycle.enqueue(context, "suspended");
     }
 
     public static isRunning(context: AudioContext): boolean {
@@ -30,58 +29,40 @@ export class AudioContextLifecycle {
         return String(context.state) === "suspended";
     }
 
-    private static setDesired(context: AudioContext, desired: DesiredAudioContextState): Promise<boolean> {
+    private static enqueue(context: AudioContext, desired: DesiredAudioContextState): Promise<boolean> {
         let state = AudioContextLifecycle.states.get(context);
         if (state === undefined) {
-            state = { desired, transition: null };
+            state = { tail: Promise.resolve() };
             AudioContextLifecycle.states.set(context, state);
-        } else {
-            state.desired = desired;
         }
-        return AudioContextLifecycle.reconcile(context, state);
-    }
-
-    private static reconcile(context: AudioContext, state: ContextTransitionState): Promise<boolean> {
-        if (state.transition !== null) {
-            return state.transition;
-        }
-        const transition = AudioContextLifecycle.runTransitions(context, state);
-        state.transition = transition;
-        void transition.finally(() => {
-            if (state.transition === transition) {
-                state.transition = null;
-            }
-        });
+        const transition = state.tail.then(
+            () => AudioContextLifecycle.apply(context, desired),
+            () => AudioContextLifecycle.apply(context, desired)
+        );
+        state.tail = transition.then(
+            () => undefined,
+            () => undefined
+        );
         return transition;
     }
 
-    private static async runTransitions(context: AudioContext, state: ContextTransitionState): Promise<boolean> {
-        for (;;) {
-            const desired = state.desired;
-            const current = String(context.state);
-            if (current === "closed") {
-                return false;
-            }
-            if (AudioContextLifecycle.matches(current, desired)) {
-                return true;
-            }
-            try {
-                if (desired === "running") {
-                    await context.resume();
-                } else {
-                    await context.suspend();
-                }
-            } catch {
-                return false;
-            }
-            if (desired !== state.desired) {
-                continue;
-            }
-            return AudioContextLifecycle.matches(String(context.state), desired);
+    private static async apply(context: AudioContext, desired: DesiredAudioContextState): Promise<boolean> {
+        const current = String(context.state);
+        if (current === "closed") {
+            return false;
         }
-    }
-
-    private static matches(current: string, desired: DesiredAudioContextState): boolean {
-        return current === desired;
+        if (current === desired) {
+            return true;
+        }
+        try {
+            if (desired === "running") {
+                await context.resume();
+            } else {
+                await context.suspend();
+            }
+        } catch {
+            return false;
+        }
+        return String(context.state) === desired;
     }
 }
