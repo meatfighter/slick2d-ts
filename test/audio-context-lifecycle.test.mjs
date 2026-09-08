@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { AL, AudioContextLifecycle, Music, ResourceLoader, Sound, SoundStore } from "../dist/index.js";
+import { AL, AudioContextLifecycle, Music, ResourceLoader, Sound } from "../dist/index.js";
 
 class Deferred {
     constructor() {
@@ -128,12 +128,13 @@ afterEach(() => {
     delete globalThis.AudioContext;
 });
 
-test("AudioContext lifecycle shares one resume operation between concurrent callers", async () => {
+test("AudioContext lifecycle shares one native resume operation between concurrent callers", async () => {
     const context = new FakeAudioContext();
     context.resumeDeferred = new Deferred();
 
     const first = AudioContextLifecycle.resume(context);
     const second = AudioContextLifecycle.resume(context);
+    await settle();
 
     assert.equal(context.resumeCalls, 1);
     context.resumeDeferred.resolve();
@@ -142,22 +143,23 @@ test("AudioContext lifecycle shares one resume operation between concurrent call
     assert.equal(context.state, "running");
 });
 
-test("AudioContext lifecycle serializes a desired suspend behind an in-flight resume", async () => {
+test("AudioContext lifecycle serializes suspend behind an in-flight resume", async () => {
     const context = new FakeAudioContext();
     context.resumeDeferred = new Deferred();
     context.suspendDeferred = new Deferred();
 
     const resumed = AudioContextLifecycle.resume(context);
     const suspended = AudioContextLifecycle.suspend(context);
+    await settle();
     assert.equal(context.resumeCalls, 1);
     assert.equal(context.suspendCalls, 0);
 
     context.resumeDeferred.resolve();
+    assert.equal(await resumed, true);
     await settle();
     assert.equal(context.suspendCalls, 1);
 
     context.suspendDeferred.resolve();
-    assert.equal(await resumed, true);
     assert.equal(await suspended, true);
     assert.equal(context.state, "suspended");
 });
