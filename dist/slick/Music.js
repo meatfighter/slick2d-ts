@@ -1,4 +1,5 @@
 import { SlickException } from "./SlickException.js";
+import { AudioContextLifecycle } from "./openal/AudioContextLifecycle.js";
 import { SoundStore } from "./openal/SoundStore.js";
 import { Log } from "./util/Log.js";
 import { ResourceLoader } from "./util/ResourceLoader.js";
@@ -230,7 +231,7 @@ export class Music {
         const token = ++this.startToken;
         void this.readyPromise
             .then(() => this.loadBuffer())
-            .then((buffer) => {
+            .then(async (buffer) => {
             if (token !== this.startToken || Music.currentMusic !== this || !this.playingFlag) {
                 return;
             }
@@ -238,6 +239,13 @@ export class Music {
             this.positionOffset = this.normalizeOffset(buffer, this.positionOffset, loop);
             if (!SoundStore.get().musicOn()) {
                 this.globallySuspended = true;
+                return;
+            }
+            const context = SoundStore.get().getAudioContext();
+            if (context === null || !(await AudioContextLifecycle.resume(context))) {
+                throw new SlickException("Music playback could not resume Web Audio");
+            }
+            if (token !== this.startToken || Music.currentMusic !== this || !this.playingFlag || !SoundStore.get().musicOn()) {
                 return;
             }
             this.globallySuspended = false;
@@ -347,12 +355,11 @@ export class Music {
     startSource(buffer, loop, offset) {
         const context = SoundStore.get().getAudioContext();
         const bus = SoundStore.get().getMusicBus();
-        if (!context || !bus) {
-            throw new SlickException("Music playback requires Web Audio API");
+        if (!context || !bus || !AudioContextLifecycle.isRunning(context)) {
+            throw new SlickException("Music playback requires a running Web Audio context");
         }
         this.stopSource(true);
         this.ensureHandle();
-        void context.resume().catch(() => undefined);
         let createdSource = null;
         let createdGain = null;
         try {
