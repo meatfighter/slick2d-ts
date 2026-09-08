@@ -31,12 +31,20 @@ export class BrowserAudioLifecycle {
 
     public async resume(): Promise<boolean> {
         this.install();
-        const context = SoundStore.get().getAudioContext();
+        const store = SoundStore.get();
+        if (!store.soundWorks()) {
+            return true;
+        }
+        const context = store.getAudioContext();
         return context === null ? false : AudioContextLifecycle.resume(context);
     }
 
     public async suspend(): Promise<boolean> {
-        const context = SoundStore.get().getAudioContext();
+        const store = SoundStore.get();
+        if (!store.soundWorks()) {
+            return true;
+        }
+        const context = store.getAudioContext();
         return context === null ? true : AudioContextLifecycle.suspend(context);
     }
 
