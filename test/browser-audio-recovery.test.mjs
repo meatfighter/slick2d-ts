@@ -42,11 +42,36 @@ class FakeAudioContext {
         this.state = "suspended";
         this.resumeCalls = 0;
         this.suspendCalls = 0;
+        this.listeners = new Map();
         context = this;
     }
 
+    addEventListener(type, listener) {
+        let listeners = this.listeners.get(type);
+        if (listeners === undefined) {
+            listeners = new Set();
+            this.listeners.set(type, listeners);
+        }
+        listeners.add(listener);
+    }
+
+    removeEventListener(type, listener) {
+        this.listeners.get(type)?.delete(listener);
+    }
+
+    emit(type) {
+        for (const listener of this.listeners.get(type) ?? []) {
+            listener();
+        }
+    }
+
+    setState(state) {
+        this.state = state;
+        this.emit("statechange");
+    }
+
     close() {
-        this.state = "closed";
+        this.setState("closed");
         return Promise.resolve();
     }
 
@@ -64,13 +89,13 @@ class FakeAudioContext {
 
     resume() {
         this.resumeCalls++;
-        this.state = "running";
+        this.setState("running");
         return Promise.resolve();
     }
 
     suspend() {
         this.suspendCalls++;
-        this.state = "suspended";
+        this.setState("suspended");
         return Promise.resolve();
     }
 }
@@ -104,13 +129,14 @@ after(() => {
     delete globalThis.window;
 });
 
-test("background recovery uses automatic resume plus a real-gesture graph refresh", async () => {
+test("background and visible interrupted states recover through the shared audio lifecycle", async () => {
     const lifecycle = BrowserAudioLifecycle.get();
     lifecycle.install();
     ResourceLoader.registerResource("tone.ogg", new Uint8Array([1, 2, 3, 4]));
     AL.create();
     assert.ok(context);
     await SoundStore.get().unlock();
+    lifecycle.observeActiveContext();
 
     const music = new Music("tone.ogg");
     await music.ready();
@@ -118,6 +144,16 @@ test("background recovery uses automatic resume plus a real-gesture graph refres
     await settle();
     assert.equal(sources.length, 1);
     assert.equal(sources[0].started, true);
+
+    const resumeCallsBeforeInterrupt = context.resumeCalls;
+    const sourcesBeforeInterrupt = sources.length;
+    context.setState("interrupted");
+    documentListeners.get("pointerdown")();
+    assert.equal(context.resumeCalls, resumeCallsBeforeInterrupt + 1, "visible interrupted audio must preserve the next gesture for native resume");
+    await settle();
+    assert.equal(context.state, "running");
+    assert.ok(sources.length > sourcesBeforeInterrupt, "interrupted recovery should rebuild the current music source");
+    assert.equal(music.playing(), true);
 
     globalThis.document.visibilityState = "hidden";
     documentListeners.get("visibilitychange")();
@@ -146,7 +182,7 @@ test("background recovery uses automatic resume plus a real-gesture graph refres
     await settle();
     assert.equal(context.suspendCalls, suspendCallsBeforePageHide + 1, "pagehide must suspend even while visibilityState still says visible");
 
-    context.state = "running";
+    context.setState("running");
     SoundStore.get().destroyPreservingAudioCache();
     assert.equal(SoundStore.get().soundWorks(), false);
     const idleSuspendCallsBeforePageHide = context.suspendCalls;
