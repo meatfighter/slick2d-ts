@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { AL, AudioContextLifecycle, Music, ResourceLoader, Sound } from "../dist/index.js";
+import { AL, AudioContextLifecycle, Music, ResourceLoader, Sound, SoundStore } from "../dist/index.js";
 
 class Deferred {
     constructor() {
@@ -59,6 +59,7 @@ class FakeAudioContext {
         this.suspendCalls = 0;
         this.resumeDeferred = null;
         this.suspendDeferred = null;
+        this.resumeError = null;
         FakeAudioContext.created.push(this);
     }
 
@@ -81,11 +82,15 @@ class FakeAudioContext {
 
     resume() {
         this.resumeCalls++;
+        if (this.resumeError !== null) {
+            return Promise.reject(this.resumeError);
+        }
         if (this.resumeDeferred === null) {
             this.state = "running";
             return Promise.resolve();
         }
-        return this.resumeDeferred.promise.then(() => {
+        const deferred = this.resumeDeferred;
+        return deferred.promise.then(() => {
             this.state = "running";
         });
     }
@@ -96,7 +101,8 @@ class FakeAudioContext {
             this.state = "suspended";
             return Promise.resolve();
         }
-        return this.suspendDeferred.promise.then(() => {
+        const deferred = this.suspendDeferred;
+        return deferred.promise.then(() => {
             this.state = "suspended";
         });
     }
@@ -163,6 +169,65 @@ test("AudioContext lifecycle serializes suspend behind an in-flight resume", asy
     assert.equal(context.state, "suspended");
 });
 
+test("user-gesture resume bypasses an older pending automatic resume", async () => {
+    const context = new FakeAudioContext();
+    const stalledResume = new Deferred();
+    context.resumeDeferred = stalledResume;
+
+    const automatic = AudioContextLifecycle.resume(context);
+    assert.equal(context.resumeCalls, 1);
+
+    context.resumeDeferred = null;
+    const gesture = AudioContextLifecycle.resumeFromUserGesture(context);
+    assert.equal(context.resumeCalls, 2, "the real gesture must reach native resume synchronously");
+    assert.equal(await gesture, true);
+    assert.equal(context.state, "running");
+
+    stalledResume.resolve();
+    assert.equal(await automatic, true);
+});
+
+test("late stale native suspension is reconciled to the newest desired state", async () => {
+    const context = new FakeAudioContext();
+    context.state = "running";
+    const stalledSuspend = new Deferred();
+    context.suspendDeferred = stalledSuspend;
+
+    const oldSuspend = AudioContextLifecycle.suspend(context);
+    assert.equal(context.suspendCalls, 1);
+
+    const gesture = AudioContextLifecycle.resumeFromUserGesture(context);
+    assert.equal(context.resumeCalls, 1);
+    assert.equal(await gesture, true);
+    assert.equal(context.state, "running");
+
+    stalledSuspend.resolve();
+    assert.equal(await oldSuspend, true);
+    await settle();
+    assert.equal(context.resumeCalls, 2, "the late stale suspend should trigger a corrective resume");
+    assert.equal(context.state, "running");
+});
+
+test("a native transition timeout does not poison a later user-gesture recovery", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (callback) => realSetTimeout(callback, 0);
+    try {
+        const context = new FakeAudioContext();
+        context.resumeDeferred = new Deferred();
+
+        assert.equal(await AudioContextLifecycle.resume(context), false);
+        assert.equal(context.resumeCalls, 1);
+
+        context.resumeDeferred = null;
+        const gesture = AudioContextLifecycle.resumeFromUserGesture(context);
+        assert.equal(context.resumeCalls, 2);
+        assert.equal(await gesture, true);
+        assert.equal(context.state, "running");
+    } finally {
+        globalThis.setTimeout = realSetTimeout;
+    }
+});
+
 test("Music does not create a source until Web Audio resume completes", async () => {
     installAudioGlobals();
     registerTone();
@@ -179,6 +244,33 @@ test("Music does not create a source until Web Audio resume completes", async ()
 
     context.resumeDeferred.resolve();
     await settle();
+    assert.equal(FakeAudioSource.created.length, 1);
+    assert.equal(FakeAudioSource.created[0].startCalls, 1);
+});
+
+test("Music remains logically recoverable when Web Audio resume fails transiently", async () => {
+    installAudioGlobals();
+    registerTone();
+    AL.create();
+    const context = FakeAudioContext.created[0];
+    context.resumeError = new Error("temporary resume failure");
+    const music = new Music("tone.ogg");
+    await music.ready();
+
+    music.loop(1.25, 0.6);
+    await settle();
+    assert.equal(music.playing(), true);
+    assert.equal(music.isLooped(), true);
+    assert.equal(music.getPlaybackRate(), 1.25);
+    assert.equal(music.getVolume(), 0.6);
+    assert.equal(FakeAudioSource.created.length, 0);
+
+    context.resumeError = null;
+    SoundStore.get().setMusicOn(false);
+    SoundStore.get().setMusicOn(true);
+    await settle();
+
+    assert.equal(music.playing(), true);
     assert.equal(FakeAudioSource.created.length, 1);
     assert.equal(FakeAudioSource.created[0].startCalls, 1);
 });
