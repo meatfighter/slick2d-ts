@@ -57,23 +57,26 @@ export class AudioContextLifecycle {
 
     private static enqueue(context: AudioContext, desired: DesiredAudioContextState, forceNativeCall: boolean, bypassPending: boolean): Promise<boolean> {
         const state = AudioContextLifecycle.getState(context);
+        const pendingBeforeRequest = state.tail !== null;
         const desiredChanged = state.desired !== desired;
         if (desiredChanged || bypassPending) {
             state.desired = desired;
             state.generation++;
         }
         const generation = state.generation;
+        const forceForStateReversal = desiredChanged && pendingBeforeRequest;
 
         const start = (): Promise<boolean> => {
             if (generation !== state.generation || state.desired !== desired) {
                 return Promise.resolve(String(context.state) === desired);
             }
-            return AudioContextLifecycle.apply(context, state, desired, forceNativeCall, generation);
+            return AudioContextLifecycle.apply(context, state, desired, forceNativeCall || forceForStateReversal, generation);
         };
 
         // A browser lifecycle reversal must not wait behind a native Promise for
-        // the state we no longer want. Generations make the older settlement stale
-        // and reconcile it if it eventually completes out of order.
+        // the state we no longer want. Force the new native call even when the
+        // context still reports that state, because the obsolete operation may
+        // complete later and flip it underneath us.
         const supersedePending = desiredChanged || bypassPending;
         const transition = supersedePending || state.tail === null ? start() : state.tail.then(start, start);
         const tail = transition.then(
