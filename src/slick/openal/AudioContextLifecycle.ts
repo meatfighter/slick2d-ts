@@ -11,10 +11,10 @@ const AUDIO_CONTEXT_TRANSITION_TIMEOUT_MS = 2000;
 /**
  * Browser Web Audio lifecycle helper.
  *
- * Ordinary transitions are serialized, but every logical wait is bounded so a
- * browser Promise that never settles cannot poison later recovery. A real
- * user-gesture resume bypasses an older pending transition and reaches the
- * browser synchronously. Late stale native transitions are reconciled back to
+ * Same-direction transitions are serialized, but every logical wait is bounded
+ * so a browser Promise that never settles cannot poison later recovery. A real
+ * user-gesture resume and an opposite desired-state transition both supersede an
+ * older pending transition. Late stale native transitions are reconciled back to
  * the newest desired state when they eventually settle.
  */
 export class AudioContextLifecycle {
@@ -57,7 +57,8 @@ export class AudioContextLifecycle {
 
     private static enqueue(context: AudioContext, desired: DesiredAudioContextState, forceNativeCall: boolean, bypassPending: boolean): Promise<boolean> {
         const state = AudioContextLifecycle.getState(context);
-        if (state.desired !== desired || bypassPending) {
+        const desiredChanged = state.desired !== desired;
+        if (desiredChanged || bypassPending) {
             state.desired = desired;
             state.generation++;
         }
@@ -70,7 +71,11 @@ export class AudioContextLifecycle {
             return AudioContextLifecycle.apply(context, state, desired, forceNativeCall, generation);
         };
 
-        const transition = bypassPending || state.tail === null ? start() : state.tail.then(start, start);
+        // A browser lifecycle reversal must not wait behind a native Promise for
+        // the state we no longer want. Generations make the older settlement stale
+        // and reconcile it if it eventually completes out of order.
+        const supersedePending = desiredChanged || bypassPending;
+        const transition = supersedePending || state.tail === null ? start() : state.tail.then(start, start);
         const tail = transition.then(
             () => undefined,
             () => undefined
@@ -111,10 +116,7 @@ export class AudioContextLifecycle {
             () => AudioContextLifecycle.reconcileAfterStaleSettlement(context, state, generation)
         );
 
-        const settled = await AudioContextLifecycle.waitForNativeTransition(nativeTransition);
-        if (!settled) {
-            return String(context.state) === desired;
-        }
+        await AudioContextLifecycle.waitForNativeTransition(nativeTransition);
         return String(context.state) === desired;
     }
 
