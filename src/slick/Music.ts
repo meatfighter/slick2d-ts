@@ -286,8 +286,17 @@ export class Music {
                     return;
                 }
                 const context = SoundStore.get().getAudioContext();
-                if (context === null || !(await AudioContextLifecycle.resume(context))) {
-                    throw new SlickException("Music playback could not resume Web Audio");
+                if (context === null) {
+                    throw new SlickException("Music playback could not access Web Audio");
+                }
+                if (!(await AudioContextLifecycle.resume(context))) {
+                    if (token === this.startToken && Music.currentMusic === this && this.playingFlag) {
+                        // A backgrounded WebKit context can leave resume() rejected or
+                        // pending indefinitely. Preserve the logical music state so a
+                        // later browser/user-gesture recovery can restart this track.
+                        this.globallySuspended = true;
+                    }
+                    return;
                 }
                 if (token !== this.startToken || Music.currentMusic !== this || !this.playingFlag || !SoundStore.get().musicOn()) {
                     return;
