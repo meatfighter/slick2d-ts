@@ -9,11 +9,13 @@ import { Graphics } from "./Graphics.js";
 import { Image } from "./Image.js";
 import { Music } from "./Music.js";
 import { SpriteSheet } from "./SpriteSheet.js";
+import { BrowserAudioLifecycle } from "./openal/BrowserAudioLifecycle.js";
 import { SoundStore } from "./openal/SoundStore.js";
 import type { ImageData as SlickImageData } from "./opengl/ImageData.js";
 import { InternalTextureLoader } from "./opengl/InternalTextureLoader.js";
 import { Renderer } from "./opengl/renderer/Renderer.js";
 import { SlickException } from "./SlickException.js";
+import { DevicePixelRatioMonitor } from "./util/DevicePixelRatioMonitor.js";
 import { Log } from "./util/Log.js";
 import { ResourceLoader } from "./util/ResourceLoader.js";
 
@@ -86,6 +88,7 @@ export class AppGameContainer extends GameContainer {
     private contextLost = false;
     private ownsCanvas = false;
     private canvasWithContextHandlers: HTMLCanvasElement | null = null;
+    private readonly devicePixelRatioMonitor = new DevicePixelRatioMonitor(this.handleDevicePixelRatioChange);
 
     public constructor(game: Game);
     public constructor(game: Game, width: number, height: number, fullscreen: boolean);
@@ -340,6 +343,7 @@ export class AppGameContainer extends GameContainer {
             Display.setTitle(this.title);
             window.addEventListener("resize", this.handleWindowResize);
             window.visualViewport?.addEventListener("resize", this.handleWindowResize);
+            this.devicePixelRatioMonitor.start();
             document.addEventListener("fullscreenchange", this.handleFullscreenChange);
             document.addEventListener("visibilitychange", this.handleVisibilityChange);
             Renderer.getBackend().initialize(
@@ -457,6 +461,7 @@ export class AppGameContainer extends GameContainer {
         this.input.setPreventDefaultElement(null);
         void Mouse.setGrabbed(false).catch(() => {});
         Mouse.setElement(null);
+        this.devicePixelRatioMonitor.stop();
         if (typeof window !== "undefined") {
             window.removeEventListener("resize", this.handleWindowResize);
             window.visualViewport?.removeEventListener("resize", this.handleWindowResize);
@@ -469,6 +474,9 @@ export class AppGameContainer extends GameContainer {
         InternalTextureLoader.get().clear();
         Renderer.getBackend().dispose();
         if (this.preserveAudioCacheOnDestroy) {
+            // Suspend while SoundStore still reports active audio, then preserve the
+            // decoded buffers/context for a later user-gesture unlock.
+            void BrowserAudioLifecycle.get().suspend();
             AL.destroyPreservingAudioCache();
         } else {
             AL.destroy();
@@ -703,6 +711,16 @@ export class AppGameContainer extends GameContainer {
     private readonly handleWindowResize = (): void => {
         try {
             this.handleBrowserResize();
+        } catch (error) {
+            this.reportError(error);
+        }
+    };
+
+    private readonly handleDevicePixelRatioChange = (): void => {
+        try {
+            // DPR changes alter only the backing-store density. Logical PWA layout
+            // remains owned by the host element/ResizeObserver/window resize path.
+            this.refreshCurrentCanvasBacking();
         } catch (error) {
             this.reportError(error);
         }
