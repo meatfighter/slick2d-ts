@@ -36,6 +36,7 @@ export declare class AppGameContainer extends GameContainer {
     private contextLost;
     private ownsCanvas;
     private canvasWithContextHandlers;
+    private readonly devicePixelRatioMonitor;
     constructor(game: Game);
     constructor(game: Game, width: number, height: number, fullscreen: boolean);
     /** Java Slick2D counterpart: AppGameContainer.supportsAlphaInBackBuffer(). */
