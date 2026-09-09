@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 import { DevicePixelRatioMonitor } from "../dist/index.js";
 
@@ -77,4 +78,13 @@ test("DPR monitor start and stop are idempotent", () => {
     monitor.stop();
     monitor.stop();
     assert.equal(queries[0].removeCalls, 1);
+});
+
+test("AppGameContainer owns DPR monitoring without synthetic window resize", () => {
+    const source = readFileSync("src/slick/AppGameContainer.ts", "utf8");
+    assert.match(source, /new DevicePixelRatioMonitor\(this\.handleDevicePixelRatioChange\)/);
+    assert.match(source, /this\.devicePixelRatioMonitor\.start\(\)/);
+    assert.match(source, /this\.devicePixelRatioMonitor\.stop\(\)/);
+    assert.match(source, /handleDevicePixelRatioChange[\s\S]*this\.refreshCurrentCanvasBacking\(\)/);
+    assert.doesNotMatch(source, /DevicePixelRatioMonitor[\s\S]*dispatchEvent\(new Event\("resize"\)\)/);
 });
