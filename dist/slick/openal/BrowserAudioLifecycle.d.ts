@@ -14,13 +14,17 @@ export declare class BrowserAudioLifecycle {
     private rememberedContext;
     static get(): BrowserAudioLifecycle;
     install(): void;
+    /** Observes the already-created active context without creating Web Audio. */
+    observeActiveContext(): void;
     /** Arms the next visible pointer/keyboard gesture as a forced Web Audio retry. */
     armRecovery(): void;
     resume(): Promise<boolean>;
     resumeFromUserGesture(): Promise<boolean>;
     suspend(): Promise<boolean>;
     private remember;
+    private setRememberedContext;
     private getRememberedContext;
+    private readonly handleContextStateChange;
     private readonly handleVisibilityChange;
     private readonly handlePageHide;
     private readonly handlePageShow;

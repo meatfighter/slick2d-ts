@@ -1,10 +1,10 @@
 /**
  * Browser Web Audio lifecycle helper.
  *
- * Ordinary transitions are serialized, but every logical wait is bounded so a
- * browser Promise that never settles cannot poison later recovery. A real
- * user-gesture resume bypasses an older pending transition and reaches the
- * browser synchronously. Late stale native transitions are reconciled back to
+ * Same-direction transitions are serialized, but every logical wait is bounded
+ * so a browser Promise that never settles cannot poison later recovery. A real
+ * user-gesture resume and an opposite desired-state transition both supersede an
+ * older pending transition. Late stale native transitions are reconciled back to
  * the newest desired state when they eventually settle.
  */
 export declare class AudioContextLifecycle {
