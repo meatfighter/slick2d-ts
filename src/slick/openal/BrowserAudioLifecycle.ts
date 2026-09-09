@@ -32,6 +32,16 @@ export class BrowserAudioLifecycle {
         window.addEventListener("pageshow", this.handlePageShow);
     }
 
+    /** Observes the already-created active context without creating Web Audio. */
+    public observeActiveContext(): void {
+        this.install();
+        const store = SoundStore.get();
+        if (!store.soundWorks()) {
+            return;
+        }
+        this.remember(store.getAudioContext());
+    }
+
     /** Arms the next visible pointer/keyboard gesture as a forced Web Audio retry. */
     public armRecovery(): void {
         this.install();
@@ -92,14 +102,26 @@ export class BrowserAudioLifecycle {
     }
 
     private remember(context: AudioContext | null): AudioContext | null {
-        if (context !== null && String(context.state) !== "closed") {
-            this.rememberedContext = context;
-            return context;
+        if (context === null) {
+            return null;
         }
-        if (context !== null && this.rememberedContext === context) {
-            this.rememberedContext = null;
+        if (String(context.state) === "closed") {
+            if (this.rememberedContext === context) {
+                this.setRememberedContext(null);
+            }
+            return null;
         }
-        return null;
+        this.setRememberedContext(context);
+        return context;
+    }
+
+    private setRememberedContext(context: AudioContext | null): void {
+        if (this.rememberedContext === context) {
+            return;
+        }
+        this.rememberedContext?.removeEventListener("statechange", this.handleContextStateChange);
+        this.rememberedContext = context;
+        this.rememberedContext?.addEventListener("statechange", this.handleContextStateChange);
     }
 
     private getRememberedContext(): AudioContext | null {
@@ -108,11 +130,35 @@ export class BrowserAudioLifecycle {
             return null;
         }
         if (String(context.state) === "closed") {
-            this.rememberedContext = null;
+            this.setRememberedContext(null);
             return null;
         }
         return context;
     }
+
+    private readonly handleContextStateChange = (): void => {
+        const context = this.getRememberedContext();
+        if (context === null || typeof document === "undefined" || document.visibilityState !== "visible") {
+            return;
+        }
+        const store = SoundStore.get();
+        if (!store.soundWorks()) {
+            // Cache-preserving teardown intentionally leaves an idle context but
+            // clears active-audio state. Do not arm recovery for that suspension.
+            return;
+        }
+        if (String(context.state) !== "running") {
+            // WebKit can enter a non-standard `interrupted` state while visible.
+            // Preserve the next real activation event as a forced recovery chance.
+            this.recoveryArmed = true;
+            return;
+        }
+        if (store.musicOn()) {
+            // A context may return to running without the application's pending
+            // Music handle having rebuilt its source yet.
+            store.setMusicOn(true);
+        }
+    };
 
     private readonly handleVisibilityChange = (): void => {
         if (document.visibilityState === "visible") {
