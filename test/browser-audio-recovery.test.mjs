@@ -145,4 +145,16 @@ test("background recovery uses automatic resume plus a real-gesture graph refres
     windowListeners.get("pagehide")();
     await settle();
     assert.equal(context.suspendCalls, suspendCallsBeforePageHide + 1, "pagehide must suspend even while visibilityState still says visible");
+
+    context.state = "running";
+    SoundStore.get().destroyPreservingAudioCache();
+    assert.equal(SoundStore.get().soundWorks(), false);
+    const idleSuspendCallsBeforePageHide = context.suspendCalls;
+    windowListeners.get("pagehide")();
+    await settle();
+    assert.equal(
+        context.suspendCalls,
+        idleSuspendCallsBeforePageHide + 1,
+        "pagehide must retry suspension of an already-existing preserved context without recreating Web Audio"
+    );
 });
