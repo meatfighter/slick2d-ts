@@ -35,6 +35,7 @@ after(() => {
 test("browser audio lifecycle does not create Web Audio before activation", async () => {
     const lifecycle = BrowserAudioLifecycle.get();
     lifecycle.install();
+    lifecycle.armRecovery();
 
     assert.equal(documentListeners.has("visibilitychange"), true);
     assert.equal(documentListeners.has("pointerdown"), true);
