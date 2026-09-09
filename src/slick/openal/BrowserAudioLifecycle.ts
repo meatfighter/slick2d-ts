@@ -14,6 +14,7 @@ export class BrowserAudioLifecycle {
     private static readonly instance = new BrowserAudioLifecycle();
     private installed = false;
     private recoveryArmed = false;
+    private rememberedContext: AudioContext | null = null;
 
     public static get(): BrowserAudioLifecycle {
         return BrowserAudioLifecycle.instance;
@@ -45,7 +46,7 @@ export class BrowserAudioLifecycle {
         if (!store.soundWorks()) {
             return true;
         }
-        const context = store.getAudioContext();
+        const context = this.remember(store.getAudioContext());
         if (context === null) {
             return false;
         }
@@ -65,7 +66,7 @@ export class BrowserAudioLifecycle {
             this.recoveryArmed = false;
             return true;
         }
-        const context = store.getAudioContext();
+        const context = this.remember(store.getAudioContext());
         if (context === null) {
             return false;
         }
@@ -86,11 +87,31 @@ export class BrowserAudioLifecycle {
 
     public async suspend(): Promise<boolean> {
         const store = SoundStore.get();
-        if (!store.soundWorks()) {
-            return true;
-        }
-        const context = store.getAudioContext();
+        const context = store.soundWorks() ? this.remember(store.getAudioContext()) : this.getRememberedContext();
         return context === null ? true : AudioContextLifecycle.suspend(context);
+    }
+
+    private remember(context: AudioContext | null): AudioContext | null {
+        if (context !== null && String(context.state) !== "closed") {
+            this.rememberedContext = context;
+            return context;
+        }
+        if (context !== null && this.rememberedContext === context) {
+            this.rememberedContext = null;
+        }
+        return null;
+    }
+
+    private getRememberedContext(): AudioContext | null {
+        const context = this.rememberedContext;
+        if (context === null) {
+            return null;
+        }
+        if (String(context.state) === "closed") {
+            this.rememberedContext = null;
+            return null;
+        }
+        return context;
     }
 
     private readonly handleVisibilityChange = (): void => {
