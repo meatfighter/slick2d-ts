@@ -82,9 +82,9 @@ test("DPR monitor start and stop are idempotent", () => {
 
 test("AppGameContainer owns DPR monitoring without synthetic window resize", () => {
     const source = readFileSync("src/slick/AppGameContainer.ts", "utf8");
-    assert.match(source, /new DevicePixelRatioMonitor\(this\.handleDevicePixelRatioChange\)/);
+    assert.match(source, /new DevicePixelRatioMonitor\(\(\) => \{/);
+    assert.match(source, /new DevicePixelRatioMonitor\([\s\S]*this\.refreshCurrentCanvasBacking\(\)/);
     assert.match(source, /this\.devicePixelRatioMonitor\.start\(\)/);
     assert.match(source, /this\.devicePixelRatioMonitor\.stop\(\)/);
-    assert.match(source, /handleDevicePixelRatioChange[\s\S]*this\.refreshCurrentCanvasBacking\(\)/);
-    assert.doesNotMatch(source, /DevicePixelRatioMonitor[\s\S]*dispatchEvent\(new Event\("resize"\)\)/);
+    assert.doesNotMatch(source, /dispatchEvent\(new Event\("resize"\)\)/);
 });
