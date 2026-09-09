@@ -55,12 +55,7 @@ export class AudioContextLifecycle {
         return state;
     }
 
-    private static enqueue(
-        context: AudioContext,
-        desired: DesiredAudioContextState,
-        forceNativeCall: boolean,
-        bypassPending: boolean
-    ): Promise<boolean> {
+    private static enqueue(context: AudioContext, desired: DesiredAudioContextState, forceNativeCall: boolean, bypassPending: boolean): Promise<boolean> {
         const state = AudioContextLifecycle.getState(context);
         if (state.desired !== desired || bypassPending) {
             state.desired = desired;
