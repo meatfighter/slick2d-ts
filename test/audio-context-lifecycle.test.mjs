@@ -202,7 +202,7 @@ test("late stale native suspension is reconciled to the newest desired state", a
     assert.equal(context.state, "running");
 
     stalledSuspend.resolve();
-    assert.equal(await oldSuspend, true);
+    assert.equal(await oldSuspend, false, "the superseded suspend must not report success after corrective resume wins");
     await settle();
     assert.equal(context.resumeCalls, 2, "the late stale suspend should trigger a corrective resume");
     assert.equal(context.state, "running");
