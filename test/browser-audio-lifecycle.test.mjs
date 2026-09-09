@@ -37,10 +37,14 @@ test("browser audio lifecycle does not create Web Audio before activation", asyn
     lifecycle.install();
 
     assert.equal(documentListeners.has("visibilitychange"), true);
+    assert.equal(documentListeners.has("pointerdown"), true);
+    assert.equal(documentListeners.has("keydown"), true);
     assert.equal(windowListeners.has("pagehide"), true);
     assert.equal(windowListeners.has("pageshow"), true);
 
     documentListeners.get("visibilitychange")();
+    documentListeners.get("pointerdown")();
+    documentListeners.get("keydown")();
     windowListeners.get("pageshow")();
     globalThis.document.visibilityState = "hidden";
     documentListeners.get("visibilitychange")();
