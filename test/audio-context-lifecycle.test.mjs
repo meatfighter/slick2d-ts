@@ -159,13 +159,14 @@ test("automatic resume supersedes an older pending suspend without waiting", asy
     assert.equal(context.suspendCalls, 1);
 
     const resumed = AudioContextLifecycle.resume(context);
+    assert.equal(context.resumeCalls, 1, "foreground reversal must reach native resume immediately");
     assert.equal(await resumed, true, "foreground recovery must not wait behind the obsolete suspend promise");
     assert.equal(context.state, "running");
 
     stalledSuspend.resolve();
     assert.equal(await oldSuspend, false);
     await settle();
-    assert.equal(context.resumeCalls, 1, "a late stale suspend must be corrected back to running");
+    assert.equal(context.resumeCalls, 2, "a late stale suspend must be corrected back to running");
     assert.equal(context.state, "running");
 });
 
@@ -178,13 +179,14 @@ test("automatic suspend supersedes an older pending resume without waiting", asy
     assert.equal(context.resumeCalls, 1);
 
     const suspended = AudioContextLifecycle.suspend(context);
+    assert.equal(context.suspendCalls, 1, "background reversal must reach native suspend immediately");
     assert.equal(await suspended, true, "background suspension must not wait behind the obsolete resume promise");
     assert.equal(context.state, "suspended");
 
     stalledResume.resolve();
     assert.equal(await oldResume, false);
     await settle();
-    assert.equal(context.suspendCalls, 1, "a late stale resume must be corrected back to suspended");
+    assert.equal(context.suspendCalls, 2, "a late stale resume must be corrected back to suspended");
     assert.equal(context.state, "suspended");
 });
 
