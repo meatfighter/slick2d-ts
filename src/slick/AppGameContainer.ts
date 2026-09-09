@@ -88,7 +88,15 @@ export class AppGameContainer extends GameContainer {
     private contextLost = false;
     private ownsCanvas = false;
     private canvasWithContextHandlers: HTMLCanvasElement | null = null;
-    private readonly devicePixelRatioMonitor = new DevicePixelRatioMonitor(this.handleDevicePixelRatioChange);
+    private readonly devicePixelRatioMonitor = new DevicePixelRatioMonitor(() => {
+        try {
+            // DPR changes alter only the backing-store density. Logical PWA layout
+            // remains owned by the host element/ResizeObserver/window resize path.
+            this.refreshCurrentCanvasBacking();
+        } catch (error) {
+            this.reportError(error);
+        }
+    });
 
     public constructor(game: Game);
     public constructor(game: Game, width: number, height: number, fullscreen: boolean);
@@ -711,16 +719,6 @@ export class AppGameContainer extends GameContainer {
     private readonly handleWindowResize = (): void => {
         try {
             this.handleBrowserResize();
-        } catch (error) {
-            this.reportError(error);
-        }
-    };
-
-    private readonly handleDevicePixelRatioChange = (): void => {
-        try {
-            // DPR changes alter only the backing-store density. Logical PWA layout
-            // remains owned by the host element/ResizeObserver/window resize path.
-            this.refreshCurrentCanvasBacking();
         } catch (error) {
             this.reportError(error);
         }
