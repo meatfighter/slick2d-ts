@@ -31,6 +31,14 @@ export class BrowserAudioLifecycle {
         window.addEventListener("pageshow", this.handlePageShow);
     }
 
+    /** Arms the next visible pointer/keyboard gesture as a forced Web Audio retry. */
+    public armRecovery(): void {
+        this.install();
+        if (SoundStore.get().soundWorks()) {
+            this.recoveryArmed = true;
+        }
+    }
+
     public async resume(): Promise<boolean> {
         this.install();
         const store = SoundStore.get();
@@ -90,12 +98,12 @@ export class BrowserAudioLifecycle {
             void this.resume();
             return;
         }
-        this.armRecoveryIfAudioIsActive();
+        this.armRecovery();
         this.scheduleSuspendAfterApplicationHandlers(false);
     };
 
     private readonly handlePageHide = (): void => {
-        this.armRecoveryIfAudioIsActive();
+        this.armRecovery();
         // pagehide is the fallback lifecycle signal. Do not require a matching
         // visibilityState transition before honoring it.
         this.scheduleSuspendAfterApplicationHandlers(true);
@@ -115,12 +123,6 @@ export class BrowserAudioLifecycle {
         // before its first await, preserving this DOM user-activation event.
         void this.resumeFromUserGesture();
     };
-
-    private armRecoveryIfAudioIsActive(): void {
-        if (SoundStore.get().soundWorks()) {
-            this.recoveryArmed = true;
-        }
-    }
 
     private scheduleSuspendAfterApplicationHandlers(force: boolean): void {
         queueMicrotask(() => {
