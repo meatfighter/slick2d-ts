@@ -481,6 +481,7 @@ export class Music {
                 this.source = null;
                 this.gain = null;
                 if (!requested && !loop) {
+                    this.playingFlag = false;
                     this.endPending = true;
                 }
             };
