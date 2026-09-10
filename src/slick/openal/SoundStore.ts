@@ -126,6 +126,13 @@ export class SoundStore {
             this.endPlaybackGeneration();
         }
 
+        // Logical defaults must survive a first hardware-context failure.
+        if (!this.inited) {
+            this.inited = true;
+            this.musicEnabled = true;
+            this.soundsEnabled = true;
+        }
+
         const Ctor = globalThis.AudioContext ?? (globalThis as WebAudioGlobal).webkitAudioContext;
         if (!Ctor) {
             this.soundWorksFlag = false;
@@ -152,16 +159,10 @@ export class SoundStore {
         }
 
         const generation = ++this.playbackGeneration;
-        const firstInitialization = !this.inited;
         this.context = context;
         this.soundBus = soundBus;
         this.musicBus = musicBus;
-        this.inited = true;
         this.soundWorksFlag = false;
-        if (firstInitialization) {
-            this.musicEnabled = true;
-            this.soundsEnabled = true;
-        }
         this.resetSoundSources();
 
         let resumeOperation: Promise<void>;
