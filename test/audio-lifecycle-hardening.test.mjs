@@ -245,7 +245,7 @@ test("natural non-looping Music completion is reported by the next poll", async 
     source.finish();
 
     assert.deepEqual(events, []);
-    assert.equal(music.playing(), true);
+    assert.equal(music.playing(), false);
     assert.equal(store.isMusicPlaying(), false);
 
     Music.poll(1);
