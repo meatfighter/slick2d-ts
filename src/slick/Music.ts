@@ -153,7 +153,7 @@ export class Music {
 
     /** Java Slick2D counterpart: Music.pause(). */
     public pause(): void {
-        if (Music.currentMusic !== this || (!this.source && !this.playingFlag)) {
+        if (this.endPending || Music.currentMusic !== this || (!this.source && !this.playingFlag)) {
             return;
         }
         this.startToken++;
@@ -180,6 +180,9 @@ export class Music {
 
     /** Java Slick2D counterpart: Music.resume(). */
     public resume(): void {
+        if (this.endPending) {
+            return;
+        }
         if (this.paused) {
             this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
         } else if (this.globallySuspended && SoundStore.get().musicOn()) {
@@ -512,7 +515,7 @@ export class Music {
     }
 
     private suspendForMusicOff(): void {
-        if (Music.currentMusic !== this || !this.playingFlag || this.globallySuspended) {
+        if (this.endPending || Music.currentMusic !== this || !this.playingFlag || this.globallySuspended) {
             return;
         }
         this.startToken++;
@@ -522,7 +525,7 @@ export class Music {
     }
 
     private resumeForMusicOn(): void {
-        if (Music.currentMusic !== this || !this.playingFlag || this.paused || !this.globallySuspended) {
+        if (this.endPending || Music.currentMusic !== this || !this.playingFlag || this.paused || !this.globallySuspended) {
             return;
         }
         this.globallySuspended = false;
@@ -535,7 +538,7 @@ export class Music {
     }
 
     private detachPlaybackGeneration(): void {
-        if (Music.currentMusic !== this || (!this.playingFlag && !this.paused && !this.globallySuspended)) {
+        if (this.endPending || Music.currentMusic !== this || (!this.playingFlag && !this.paused && !this.globallySuspended)) {
             return;
         }
         this.startToken++;
@@ -547,7 +550,7 @@ export class Music {
     }
 
     private attachPlaybackGeneration(): void {
-        if (Music.currentMusic !== this || !this.generationDetached) {
+        if (this.endPending || Music.currentMusic !== this || !this.generationDetached) {
             return;
         }
         if (this.paused || this.globallySuspended || !this.playingFlag || !SoundStore.get().musicOn()) {
