@@ -307,7 +307,7 @@ test("PWA retirement cannot resurrect a naturally ended track before the next Mu
     await settleAudioStart();
 
     assert.equal(FakeAudioSource.created.length, sourceCount);
-    assert.equal(music.playing(), true);
+    assert.equal(music.playing(), false);
     Music.poll(0);
     assert.equal(music.playing(), false);
 });
