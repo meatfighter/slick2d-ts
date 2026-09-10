@@ -31,5 +31,11 @@ export default tseslint.config(
                 }
             ]
         }
+    },
+    {
+        files: ["src/slick/openal/PwaAudioManager.ts"],
+        rules: {
+            "no-empty": ["error", { allowEmptyCatch: true }]
+        }
     }
 );
