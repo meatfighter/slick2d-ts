@@ -20,6 +20,8 @@ import { ResourceLoader } from "./util/ResourceLoader.js";
 
 type DomImageData = ImageData;
 export type AppGameContainerErrorHandler = (error: Error) => void;
+export type GraphicsLifecycleHandler = (state: "lost" | "restored") => void;
+type DisplayOperation = Readonly<{ lifetime: number; operation: number }>;
 type DisplaySnapshot = {
     width: number;
     height: number;
@@ -36,13 +38,8 @@ type DisplaySnapshot = {
     canvasStyleWidth: string;
     canvasStyleHeight: string;
 };
-type WindowedDisplayMode = {
-    width: number;
-    height: number;
-};
-type ResizeAwareGame = Game & {
-    containerSizeChanged(container: GameContainer): void;
-};
+type WindowedDisplayMode = { width: number; height: number };
+type ResizeAwareGame = Game & { containerSizeChanged(container: GameContainer): void };
 
 function isCanvas(value: unknown): value is HTMLCanvasElement {
     return typeof HTMLCanvasElement !== "undefined" && value instanceof HTMLCanvasElement;
@@ -56,16 +53,17 @@ function isResizeAwareGame(game: Game): game is ResizeAwareGame {
     return typeof (game as Partial<ResizeAwareGame>).containerSizeChanged === "function";
 }
 
-/**
- * Java Slick2D counterpart: org.newdawn.slick.AppGameContainer.
- *
- * Browser RAF-backed application container for Slick-style games.
- */
+/** Browser RAF-backed Slick container. A destroyed instance is terminal. */
 export class AppGameContainer extends GameContainer {
+    private static resourceOwner: AppGameContainer | null = null;
     protected canvas: HTMLCanvasElement | null = null;
     private title = "";
     private started = false;
     private destroyed = false;
+    private lifetime = 0;
+    private displayOperation = 0;
+    private resourceWait = 0;
+    private lifetimeController = new AbortController();
     private animationFrame = 0;
     private loopReady = false;
     private loopSuspended = false;
@@ -82,15 +80,17 @@ export class AppGameContainer extends GameContainer {
     private waitingForResources = false;
     private resourceError: unknown = null;
     private errorHandler: AppGameContainerErrorHandler | null = null;
+    private graphicsLifecycleHandler: GraphicsLifecycleHandler | null = null;
     private lastWindowedDisplayMode!: WindowedDisplayMode;
     private preserveAudioCacheOnDestroy = false;
     private contextLost = false;
     private ownsCanvas = false;
     private canvasWithContextHandlers: HTMLCanvasElement | null = null;
     private readonly devicePixelRatioMonitor = new DevicePixelRatioMonitor(() => {
+        if (!this.ownsSharedResources()) {
+            return;
+        }
         try {
-            // DPR changes alter only the backing-store density. Logical PWA layout
-            // remains owned by the host element/ResizeObserver/window resize path.
             this.refreshCurrentCanvasBacking();
         } catch (error) {
             this.reportError(error);
@@ -99,8 +99,7 @@ export class AppGameContainer extends GameContainer {
 
     public constructor(game: Game);
     public constructor(game: Game, width: number, height: number, fullscreen: boolean);
-    /** Java Slick2D counterpart: AppGameContainer constructors. */
-    public constructor(game: Game, width: number = 640, height: number = 480, fullscreen: boolean = false) {
+    public constructor(game: Game, width = 640, height = 480, fullscreen = false) {
         super(game);
         this.title = game.getTitle();
         this.fullscreen = fullscreen;
@@ -111,57 +110,74 @@ export class AppGameContainer extends GameContainer {
         this.lastWindowedDisplayMode = { width, height };
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.supportsAlphaInBackBuffer(). */
     public supportsAlphaInBackBuffer(): boolean {
         return this.alphaInBackBuffer;
     }
 
-    /** Browser parity helper: reports async frame/resource errors to the host page. */
     public setErrorHandler(handler: AppGameContainerErrorHandler | null): void {
         this.errorHandler = handler;
     }
 
-    /** Browser rendering helper: controls whether the canvas backing store uses device pixels. */
+    /** Graphics recovery prepares rendering; a PWA handler decides when gameplay may resume. */
+    public setGraphicsLifecycleHandler(handler: GraphicsLifecycleHandler | null): void {
+        this.graphicsLifecycleHandler = handler;
+    }
+
+    public isGraphicsContextLost(): boolean {
+        return this.contextLost;
+    }
+
+    /** Async game initialization may use this signal before publishing resources or state. */
+    public getBrowserLifetimeSignal(): AbortSignal {
+        return this.lifetimeController.signal;
+    }
+
+    public isBrowserLifetimeCurrent(signal: AbortSignal): boolean {
+        return !this.destroyed && signal === this.lifetimeController.signal && !signal.aborted;
+    }
+
+    public isDestroyed(): boolean {
+        return this.destroyed;
+    }
+
     public setHighDpiEnabled(enabled: boolean): void {
-        if (this.highDpiEnabled === enabled) {
+        if (this.destroyed || this.highDpiEnabled === enabled) {
             return;
         }
         this.highDpiEnabled = enabled;
         this.refreshCurrentCanvasBacking();
     }
 
-    /** Browser rendering helper: reports whether high-DPI backing-store rendering is enabled. */
     public isHighDpiEnabled(): boolean {
         return this.highDpiEnabled;
     }
 
-    /** Browser rendering helper: caps the effective device pixel ratio used for the canvas backing store. */
     public setMaxDevicePixelRatio(maxDevicePixelRatio: number): void {
         const normalized = Number.isFinite(maxDevicePixelRatio) ? Math.max(1, maxDevicePixelRatio) : 1;
-        if (this.maxDevicePixelRatio === normalized) {
+        if (this.destroyed || this.maxDevicePixelRatio === normalized) {
             return;
         }
         this.maxDevicePixelRatio = normalized;
         this.refreshCurrentCanvasBacking();
     }
 
-    /** Browser rendering helper: returns the effective device pixel ratio used by the current canvas. */
     public getDevicePixelRatio(): number {
         return this.displayPixelRatio;
     }
 
-    /** Browser rendering helper: returns the current canvas backing-store width in device pixels. */
     public getBackingWidth(): number {
         return this.backingWidth;
     }
 
-    /** Browser rendering helper: returns the current canvas backing-store height in device pixels. */
     public getBackingHeight(): number {
         return this.backingHeight;
     }
 
-    /** Browser lifecycle helper: stops the RAF-backed loop without changing Java pause state. */
+    /** Stops RAF without changing the game's own pause state. */
     public setLoopSuspended(suspended: boolean): void {
+        if (this.destroyed) {
+            return;
+        }
         if (suspended) {
             this.loopSuspended = true;
             this.cancelScheduledFrame();
@@ -176,39 +192,38 @@ export class AppGameContainer extends GameContainer {
         this.scheduleNextFrame();
     }
 
-    /** Browser lifecycle helper: reports whether the RAF-backed loop is suspended. */
     public isLoopSuspended(): boolean {
         return this.loopSuspended;
     }
 
-    /** Browser lifecycle helper: shorthand for setLoopSuspended(true). */
     public suspendLoop(): void {
         this.setLoopSuspended(true);
     }
 
-    /** Browser lifecycle helper: shorthand for setLoopSuspended(false). */
     public resumeLoop(): void {
         this.setLoopSuspended(false);
     }
 
-    /** Browser/PWA helper: controls whether destroy() preserves decoded audio assets. */
     public setPreserveAudioCacheOnDestroy(preserve: boolean): void {
         this.preserveAudioCacheOnDestroy = preserve;
     }
 
-    /** Browser/PWA helper: reports whether destroy() preserves decoded audio assets. */
     public isPreservingAudioCacheOnDestroy(): boolean {
         return this.preserveAudioCacheOnDestroy;
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.setTitle(String). */
     public setTitle(title: string): void {
         this.title = title;
-        Display.setTitle(title);
+        if (!this.destroyed && (!this.started || this.ownsSharedResources())) {
+            Display.setTitle(title);
+        }
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.setDisplayMode(int, int, boolean). */
     public setDisplayMode(width: number, height: number, fullscreen: boolean): void | Promise<void> {
+        if (this.destroyed) {
+            return;
+        }
+        const operation = this.beginDisplayOperation();
         const snapshot = this.captureDisplaySnapshot();
         this.setDimensions(width, height);
         if (!this.canvas) {
@@ -222,8 +237,11 @@ export class AppGameContainer extends GameContainer {
         if (this.canvas) {
             this.applyCanvasSize(width, height);
         }
-        const fullscreenResult = this.setFullscreenInternal(fullscreen);
-        const completeDisplayMode = (): void => {
+        const result = this.setFullscreenInternal(fullscreen, operation);
+        const complete = (): void => {
+            if (!this.isDisplayOperationCurrent(operation)) {
+                return;
+            }
             if (fullscreen) {
                 if (this.isFullscreen()) {
                     this.applyBrowserDisplaySize();
@@ -233,114 +251,168 @@ export class AppGameContainer extends GameContainer {
                 this.applyWindowedDisplayMode(width, height);
             }
         };
-        if (fullscreenResult instanceof Promise) {
-            const operation = fullscreenResult.then(completeDisplayMode).catch((error) => {
+        if (result instanceof Promise) {
+            const pending = result.then(complete).catch((error) => {
+                if (!this.isDisplayOperationCurrent(operation)) {
+                    return;
+                }
                 this.restoreDisplaySnapshot(snapshot);
                 throw error instanceof SlickException
                     ? error
                     : new SlickException(`Failed to set display mode: ${width}x${height} fullscreen=${fullscreen}`, error);
             });
-            return this.observeAsyncFailure(operation);
+            return this.observeAsyncFailure(pending, operation);
         }
-        completeDisplayMode();
+        complete();
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.isFullscreen(). */
     public override isFullscreen(): boolean {
         return typeof document !== "undefined" && this.canvas ? document.fullscreenElement === this.canvas : this.fullscreen;
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.setFullscreen(boolean). */
     public override setFullscreen(fullscreen: boolean): void | Promise<void> {
-        const operation = this.setFullscreenInternal(fullscreen);
-        return operation instanceof Promise ? this.observeAsyncFailure(operation) : operation;
-    }
-
-    private setFullscreenInternal(fullscreen: boolean): void | Promise<void> {
-        const previousFullscreen = this.fullscreen;
-        this.fullscreen = fullscreen;
-        if (!this.canvas || typeof document === "undefined") {
+        if (this.destroyed) {
             return;
         }
-        if (fullscreen && document.fullscreenElement !== this.canvas && this.canvas.requestFullscreen) {
-            return this.canvas
-                .requestFullscreen()
-                .then(() => {
+        const token = this.beginDisplayOperation();
+        const operation = this.setFullscreenInternal(fullscreen, token);
+        return operation instanceof Promise ? this.observeAsyncFailure(operation, token) : operation;
+    }
+
+    private beginDisplayOperation(): DisplayOperation {
+        return { lifetime: this.lifetime, operation: ++this.displayOperation };
+    }
+
+    private isDisplayOperationCurrent(token: DisplayOperation): boolean {
+        return !this.destroyed && token.lifetime === this.lifetime && token.operation === this.displayOperation;
+    }
+
+    private setFullscreenInternal(fullscreen: boolean, token: DisplayOperation): void | Promise<void> {
+        const previousFullscreen = this.fullscreen;
+        this.fullscreen = fullscreen;
+        const canvas = this.canvas;
+        if (canvas === null || typeof document === "undefined") {
+            return;
+        }
+        if (fullscreen && document.fullscreenElement !== canvas && canvas.requestFullscreen) {
+            return canvas.requestFullscreen().then(
+                () => {
+                    if (!this.isDisplayOperationCurrent(token)) {
+                        if (this.destroyed && document.fullscreenElement === canvas) {
+                            void document.exitFullscreen?.().catch(() => undefined);
+                        }
+                        return;
+                    }
                     this.fullscreen = true;
                     this.applyBrowserDisplaySize();
-                })
-                .catch((error) => {
+                },
+                (error) => {
+                    if (!this.isDisplayOperationCurrent(token)) {
+                        return;
+                    }
                     this.fullscreen = previousFullscreen;
-                    if (document.fullscreenElement !== this.canvas) {
+                    if (document.fullscreenElement !== canvas) {
                         Mouse.restoreNativeCursorAfterForcedFullscreenExit();
                     }
                     throw new SlickException("Failed to enter fullscreen", error);
-                });
+                }
+            );
         }
-        if (!fullscreen && document.fullscreenElement === this.canvas && document.exitFullscreen) {
-            return document
-                .exitFullscreen()
-                .then(() => {
+        if (!fullscreen && document.fullscreenElement === canvas && document.exitFullscreen) {
+            return document.exitFullscreen().then(
+                () => {
+                    if (!this.isDisplayOperationCurrent(token)) {
+                        return;
+                    }
                     this.fullscreen = false;
                     this.applyWindowedDisplayMode();
                     Mouse.restoreNativeCursorAfterForcedFullscreenExit();
-                })
-                .catch((error) => {
+                },
+                (error) => {
+                    if (!this.isDisplayOperationCurrent(token)) {
+                        return;
+                    }
                     this.fullscreen = previousFullscreen;
                     throw new SlickException("Failed to exit fullscreen", error);
-                });
+                }
+            );
         }
-        if (fullscreen && document.fullscreenElement === this.canvas) {
+        if (fullscreen && document.fullscreenElement === canvas) {
             this.applyBrowserDisplaySize();
         } else if (!fullscreen) {
             this.applyWindowedDisplayMode();
-            Mouse.restoreNativeCursorAfterForcedFullscreenExit();
+            if (this.ownsSharedResources()) {
+                Mouse.restoreNativeCursorAfterForcedFullscreenExit();
+            }
         }
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.reinit(). */
     public override async reinit(): Promise<void> {
-        const shouldResumeLoop = this.started && !this.destroyed;
+        if (this.destroyed || !this.ownsSharedResources()) {
+            return;
+        }
+        const shouldResumeLoop = this.started;
+        const lifetime = ++this.lifetime;
+        this.lifetimeController.abort();
+        this.lifetimeController = new AbortController();
+        this.resourceWait++;
         this.loopReady = false;
         this.cancelScheduledFrame();
         try {
             this.rebuildSystemForReinit();
             await this.game.init(this);
+            if (!this.isLifetimeCurrent(lifetime)) {
+                return;
+            }
             await ResourceLoader.waitForAll();
+            if (!this.isLifetimeCurrent(lifetime)) {
+                return;
+            }
             this.resetFrameBookkeeping();
             this.loopReady = shouldResumeLoop;
-            if (shouldResumeLoop && !this.destroyed) {
-                this.scheduleNextFrame();
-            }
+            this.scheduleNextFrame();
         } catch (error) {
+            if (!this.isLifetimeCurrent(lifetime)) {
+                return;
+            }
             const reported = this.toError(error, "Failed to reinitialize AppGameContainer");
+            const handler = this.errorHandler;
             this.destroy();
-            if (this.errorHandler) {
-                this.errorHandler(reported);
+            if (handler) {
+                handler(reported);
                 return;
             }
             throw reported;
         }
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.start(). */
     public async start(): Promise<void> {
+        if (this.destroyed) {
+            throw new SlickException("A destroyed AppGameContainer cannot be restarted; create a new instance.");
+        }
         if (this.started) {
             return;
         }
         if (typeof document === "undefined") {
             throw new SlickException("AppGameContainer.start requires a browser document");
         }
-        this.destroyed = false;
+        if (AppGameContainer.resourceOwner !== null && AppGameContainer.resourceOwner !== this) {
+            throw new SlickException("Destroy the previous AppGameContainer before starting another one.");
+        }
+        const lifetime = ++this.lifetime;
         this.started = true;
         this.loopReady = false;
         this.contextLost = false;
+        AppGameContainer.resourceOwner = this;
         try {
             this.canvas = this.resolveCanvas();
             this.addCanvasContextListeners(this.canvas);
             this.applySizedCanvas(this.width, this.height, `${this.width}px`, `${this.height}px`, false);
             this.canvas.tabIndex = this.canvas.tabIndex < 0 ? 0 : this.canvas.tabIndex;
             this.canvas.focus();
+            if (!this.isLifetimeCurrent(lifetime)) {
+                return;
+            }
             Mouse.setElement(this.canvas);
             this.input.bindToElement(window);
             this.input.setBrowserInputCaptureDefault(this.ownsCanvas);
@@ -355,11 +427,7 @@ export class AppGameContainer extends GameContainer {
             document.addEventListener("visibilitychange", this.handleVisibilityChange);
             Renderer.getBackend().initialize(
                 this.canvas,
-                {
-                    alpha: true,
-                    antialias: this.multiSample > 0,
-                    stencil: GameContainer.stencil
-                },
+                { alpha: true, antialias: this.multiSample > 0, stencil: GameContainer.stencil },
                 this.width,
                 this.height,
                 this.backingWidth,
@@ -367,38 +435,44 @@ export class AppGameContainer extends GameContainer {
             );
             AL.create();
             await this.game.init(this);
+            if (!this.isLifetimeCurrent(lifetime)) {
+                return;
+            }
             await ResourceLoader.waitForAll();
+            if (!this.isLifetimeCurrent(lifetime)) {
+                return;
+            }
             this.resetFrameBookkeeping();
             this.loopReady = true;
             this.scheduleNextFrame();
         } catch (error) {
+            if (!this.isLifetimeCurrent(lifetime)) {
+                return;
+            }
             const reported = this.toError(error, "Failed to start AppGameContainer");
+            const handler = this.errorHandler;
             this.destroy();
-            if (this.errorHandler) {
-                this.errorHandler(reported);
+            if (handler) {
+                handler(reported);
                 return;
             }
             throw reported;
         }
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.setUpdateOnlyWhenVisible(boolean). */
     public override setUpdateOnlyWhenVisible(updateOnlyWhenVisible: boolean): void {
         super.setUpdateOnlyWhenVisible(updateOnlyWhenVisible);
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.isUpdatingOnlyWhenVisible(). */
     public override isUpdatingOnlyWhenVisible(): boolean {
         return super.isUpdatingOnlyWhenVisible();
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.setIcon(String). */
     public override setIcon(ref: string): void {
         super.setIcon(ref);
         this.applyFavicon(ref);
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.setIcons(String[]). */
     public override setIcons(refs: string[]): void {
         super.setIcons(refs);
         if (refs.length > 0) {
@@ -410,68 +484,63 @@ export class AppGameContainer extends GameContainer {
     public override setMouseCursor(data: DomImageData | SlickImageData, hotSpotX: number, hotSpotY: number): void | Promise<void>;
     public override setMouseCursor(image: Image, hotSpotX: number, hotSpotY: number): void | Promise<void>;
     public override setMouseCursor(cursor: Cursor, hotSpotX: number, hotSpotY: number): void | Promise<void>;
-    /** Java Slick2D counterpart: AppGameContainer.setMouseCursor(...). */
-    public override setMouseCursor(
-        cursorLike: string | DomImageData | SlickImageData | Image | Cursor,
-        hotSpotX: number,
-        hotSpotY: number
-    ): void | Promise<void> {
-        return this.setMouseCursorImpl(cursorLike, hotSpotX, hotSpotY);
+    public override setMouseCursor(cursor: string | DomImageData | SlickImageData | Image | Cursor, x: number, y: number): void | Promise<void> {
+        if (!this.destroyed) {
+            return this.setMouseCursorImpl(cursor, x, y);
+        }
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.setAnimatedMouseCursor(...). */
-    public override setAnimatedMouseCursor(ref: string, x: number, y: number, width: number, height: number, cursorDelays: number[]): void | Promise<void> {
-        return super.setAnimatedMouseCursor(ref, x, y, width, height, cursorDelays);
+    public override setAnimatedMouseCursor(ref: string, x: number, y: number, width: number, height: number, delays: number[]): void | Promise<void> {
+        if (!this.destroyed) {
+            return super.setAnimatedMouseCursor(ref, x, y, width, height, delays);
+        }
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.setMouseGrabbed(boolean). */
     public override setMouseGrabbed(grabbed: boolean): void | Promise<void> {
-        return super.setMouseGrabbed(grabbed);
+        if (!this.destroyed) {
+            return super.setMouseGrabbed(grabbed);
+        }
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.isMouseGrabbed(). */
     public override isMouseGrabbed(): boolean {
         return super.isMouseGrabbed();
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.hasFocus(). */
     public override hasFocus(): boolean {
         return typeof document === "undefined" || document.hasFocus();
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.getScreenHeight(). */
     public override getScreenHeight(): number {
         return this.screenHeight;
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.getScreenWidth(). */
     public override getScreenWidth(): number {
         return this.screenWidth;
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.destroy(). */
+    /** Terminal, idempotent, exception-safe teardown. Global resources have one owner. */
     public destroy(): void {
         if (this.destroyed) {
             return;
         }
         const canvas = this.canvas;
+        const ownsShared = AppGameContainer.resourceOwner === this;
         this.destroyed = true;
+        this.lifetime++;
+        this.displayOperation++;
+        this.resourceWait++;
         this.started = false;
         this.loopReady = false;
-        this.loopSuspended = false;
+        this.loopSuspended = true;
         this.contextLost = false;
         this.waitingForResources = false;
         this.resourceError = null;
+        this.lifetimeController.abort();
         this.cancelScheduledFrame();
-        if (typeof document !== "undefined") {
-            this.exitBrowserFullscreenForDestroy();
-        }
-        this.removeCanvasContextListeners();
-        this.input.unbind();
-        this.input.setPreventDefaultElement(null);
-        void Mouse.setGrabbed(false).catch(() => {});
-        Mouse.setElement(null);
-        this.devicePixelRatioMonitor.stop();
+        this.cleanup("canvas listeners", () => this.removeCanvasContextListeners());
+        this.cleanup("input binding", () => this.input.unbind());
+        this.cleanup("input capture", () => this.input.setPreventDefaultElement(null));
+        this.cleanup("DPR monitor", () => this.devicePixelRatioMonitor.stop());
         if (typeof window !== "undefined") {
             window.removeEventListener("resize", this.handleWindowResize);
             window.visualViewport?.removeEventListener("resize", this.handleWindowResize);
@@ -480,27 +549,45 @@ export class AppGameContainer extends GameContainer {
             document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
             document.removeEventListener("visibilitychange", this.handleVisibilityChange);
         }
-        this.resetRenderingLifecycleState();
-        InternalTextureLoader.get().clear();
-        Renderer.getBackend().dispose();
-        if (this.preserveAudioCacheOnDestroy) {
-            AL.destroyPreservingAudioCache();
-        } else {
-            AL.destroy();
+        if (ownsShared) {
+            this.cleanup("fullscreen", () => this.exitBrowserFullscreenForDestroy());
+            this.cleanup("mouse capture", () => {
+                void Mouse.setGrabbed(false).catch(() => undefined);
+                Mouse.setElement(null);
+            });
+            this.cleanup("rendering state", () => this.resetRenderingLifecycleState());
+            this.cleanup("textures", () => InternalTextureLoader.get().clear());
+            this.cleanup("renderer", () => Renderer.getBackend().dispose());
+            this.cleanup("audio", () => {
+                if (this.preserveAudioCacheOnDestroy) {
+                    AL.destroyPreservingAudioCache();
+                } else {
+                    AL.destroy();
+                }
+            });
+            this.cleanup("display", () => {
+                Display.destroy();
+                Display.setActiveContainer(null);
+            });
+            if (AppGameContainer.resourceOwner === this) {
+                AppGameContainer.resourceOwner = null;
+            }
         }
-        Display.destroy();
-        Display.setActiveContainer(null);
-        this.removeOwnedCanvas(canvas);
+        this.cleanup("owned canvas", () => this.removeOwnedCanvas(canvas));
         this.canvas = null;
+        this.graphicsLifecycleHandler = null;
     }
 
-    /** Java Slick2D counterpart: AppGameContainer.setDefaultMouseCursor(). */
     public override setDefaultMouseCursor(): void {
-        super.setDefaultMouseCursor();
+        if (!this.destroyed) {
+            super.setDefaultMouseCursor();
+        }
     }
 
-    /** Browser parity helper used by Display.setDisplayMode. */
     public override setDisplayModeFromDisplay(mode: import("../lwjgl/opengl/DisplayMode.js").DisplayMode): void {
+        if (this.destroyed) {
+            return;
+        }
         super.setDisplayModeFromDisplay(mode);
         if (!this.isFullscreen()) {
             this.setLastWindowedDisplayMode(mode.getWidth(), mode.getHeight());
@@ -515,14 +602,30 @@ export class AppGameContainer extends GameContainer {
     }
 
     protected override setCssCursor(cursor: string): void {
-        if (this.canvas) {
+        if (!this.destroyed && this.canvas) {
             this.canvas.style.cursor = cursor;
+        }
+    }
+
+    private ownsSharedResources(): boolean {
+        return !this.destroyed && AppGameContainer.resourceOwner === this;
+    }
+
+    private isLifetimeCurrent(lifetime: number): boolean {
+        return this.ownsSharedResources() && lifetime === this.lifetime;
+    }
+
+    private cleanup(label: string, operation: () => void): void {
+        try {
+            operation();
+        } catch (error) {
+            Log.error(`Unable to clean up AppGameContainer ${label}`, error);
         }
     }
 
     private readonly loop = (time: number): void => {
         this.animationFrame = 0;
-        if (this.destroyed || this.loopSuspended || this.contextLost || !this.loopReady) {
+        if (!this.ownsSharedResources() || this.loopSuspended || this.contextLost || !this.loopReady) {
             return;
         }
         try {
@@ -559,7 +662,7 @@ export class AppGameContainer extends GameContainer {
         Music.poll(delta);
         SoundStore.get().poll(delta);
         this.updateGame(delta);
-        if (this.destroyed || this.loopSuspended || this.contextLost) {
+        if (!this.ownsSharedResources() || this.loopSuspended || this.contextLost) {
             return;
         }
         let waitForResources = ResourceLoader.hasPending();
@@ -598,10 +701,7 @@ export class AppGameContainer extends GameContainer {
     }
 
     private shouldProcessTargetFrame(time: number): boolean {
-        if (this.targetFrameRate <= 0) {
-            return true;
-        }
-        return time - this.lastFrameTime >= 1000 / this.targetFrameRate;
+        return this.targetFrameRate <= 0 || time - this.lastFrameTime >= 1000 / this.targetFrameRate;
     }
 
     private updateGame(delta: number): void {
@@ -617,6 +717,9 @@ export class AppGameContainer extends GameContainer {
             const cycles = Math.trunc(this.storedDelta / this.maximumLogicUpdateInterval);
             for (let i = 0; i < cycles; i++) {
                 this.game.update(this, this.maximumLogicUpdateInterval);
+                if (this.destroyed || this.loopSuspended || this.contextLost) {
+                    return;
+                }
             }
             const remainder = this.storedDelta % this.maximumLogicUpdateInterval;
             if (remainder > this.minimumLogicUpdateInterval) {
@@ -637,16 +740,17 @@ export class AppGameContainer extends GameContainer {
         ResourceLoader.clearFailures();
         this.resetRenderingLifecycleState();
         InternalTextureLoader.get().clear();
-        SoundStore.get().clear();
+        Music.resetPlaybackState();
+        if (this.preserveAudioCacheOnDestroy) {
+            SoundStore.get().stopAllPlayback();
+        } else {
+            SoundStore.get().clear();
+        }
         Renderer.getBackend().dispose();
         if (this.canvas) {
             Renderer.getBackend().initialize(
                 this.canvas,
-                {
-                    alpha: true,
-                    antialias: this.multiSample > 0,
-                    stencil: GameContainer.stencil
-                },
+                { alpha: true, antialias: this.multiSample > 0, stencil: GameContainer.stencil },
                 this.width,
                 this.height,
                 this.backingWidth,
@@ -659,8 +763,10 @@ export class AppGameContainer extends GameContainer {
         Display.setActiveContainer(this);
         Display.create();
         Display.setTitle(this.title);
-        this.setMusicVolume(1);
-        this.setSoundVolume(1);
+        if (!SoundStore.get().isUsingExplicitPlaybackGenerations()) {
+            this.setMusicVolume(1);
+            this.setSoundVolume(1);
+        }
         this.graphics = new Graphics(this.width, this.height);
         this.defaultFont = this.graphics.getFont();
         Renderer.get().enterOrtho(this.width, this.height);
@@ -674,12 +780,7 @@ export class AppGameContainer extends GameContainer {
     }
 
     private resetFrameBookkeeping(): void {
-        this.lastFrameTime = this.now();
-        this.storedDelta = 0;
-        this.framesThisSecond = 0;
-        this.fpsWindowStart = this.lastFrameTime;
-        this.fps = 0;
-        this.fpsDisplayText = "FPS: 0";
+        this.resetLoopResumeTiming();
         this.waitingForResources = false;
         this.resourceError = null;
     }
@@ -694,15 +795,7 @@ export class AppGameContainer extends GameContainer {
     }
 
     private scheduleNextFrame(): void {
-        if (
-            this.destroyed ||
-            this.loopSuspended ||
-            this.contextLost ||
-            !this.started ||
-            !this.loopReady ||
-            this.waitingForResources ||
-            this.animationFrame !== 0
-        ) {
+        if (!this.ownsSharedResources() || this.loopSuspended || this.contextLost || !this.started || !this.loopReady || this.waitingForResources || this.animationFrame !== 0) {
             return;
         }
         this.animationFrame = requestAnimationFrame(this.loop);
@@ -716,6 +809,9 @@ export class AppGameContainer extends GameContainer {
     }
 
     private readonly handleWindowResize = (): void => {
+        if (!this.ownsSharedResources()) {
+            return;
+        }
         try {
             this.handleBrowserResize();
         } catch (error) {
@@ -723,10 +819,6 @@ export class AppGameContainer extends GameContainer {
         }
     };
 
-    /**
-     * Browser resize policy hook shared by window and VisualViewport events.
-     * ApplicationGameContainer overrides this for resizable-window semantics.
-     */
     protected handleBrowserResize(): void {
         if (this.isFullscreen()) {
             this.applyBrowserDisplaySize();
@@ -736,10 +828,10 @@ export class AppGameContainer extends GameContainer {
     }
 
     private readonly handleFullscreenChange = (): void => {
+        if (!this.ownsSharedResources() || !this.canvas || typeof document === "undefined") {
+            return;
+        }
         try {
-            if (!this.canvas || typeof document === "undefined") {
-                return;
-            }
             if (document.fullscreenElement === this.canvas) {
                 this.fullscreen = true;
                 this.applyBrowserDisplaySize();
@@ -754,28 +846,42 @@ export class AppGameContainer extends GameContainer {
     };
 
     private readonly handleVisibilityChange = (): void => {
-        if (typeof document !== "undefined" && document.visibilityState !== "hidden") {
+        if (!this.ownsSharedResources() || typeof document === "undefined" || document.visibilityState === "hidden") {
+            return;
+        }
+        try {
             this.lastFrameTime = this.now();
             this.refreshCurrentCanvasBacking();
+        } catch (error) {
+            this.reportError(error);
         }
     };
 
     private readonly handleWebGLContextLost = (event: Event): void => {
         event.preventDefault();
-        if (this.contextLost) {
+        if (!this.ownsSharedResources() || this.contextLost) {
             return;
         }
         this.contextLost = true;
         this.cancelScheduledFrame();
         this.storedDelta = 0;
-        Image.__resetUseState();
-        SpriteSheet.__resetUseState();
-        Renderer.getBackend().handleContextLost();
-        InternalTextureLoader.get().invalidate();
+        if (this.graphicsLifecycleHandler !== null) {
+            this.loopSuspended = true;
+        }
+        this.cleanup("lost image state", () => Image.__resetUseState());
+        this.cleanup("lost sprite state", () => SpriteSheet.__resetUseState());
+        this.cleanup("lost renderer", () => Renderer.getBackend().handleContextLost());
+        this.cleanup("lost textures", () => InternalTextureLoader.get().invalidate());
+        try {
+            this.graphicsLifecycleHandler?.("lost");
+        } catch (error) {
+            SoundStore.get().endPlaybackGeneration();
+            this.reportError(error);
+        }
     };
 
     private readonly handleWebGLContextRestored = (): void => {
-        if (!this.canvas || this.destroyed || !this.contextLost) {
+        if (!this.ownsSharedResources() || !this.canvas || !this.contextLost) {
             return;
         }
         try {
@@ -783,7 +889,8 @@ export class AppGameContainer extends GameContainer {
             this.contextLost = false;
             this.refreshCurrentCanvasBacking();
             this.resetLoopResumeTiming();
-            this.scheduleNextFrame();
+            this.graphicsLifecycleHandler?.("restored");
+            this.scheduleNextFrame(); // A PWA remains loopSuspended until explicit Continue.
         } catch (error) {
             this.reportError(error);
         }
@@ -819,24 +926,22 @@ export class AppGameContainer extends GameContainer {
     }
 
     private removeCanvasContextListeners(): void {
-        if (!this.canvasWithContextHandlers) {
-            return;
+        if (this.canvasWithContextHandlers) {
+            this.canvasWithContextHandlers.removeEventListener("webglcontextlost", this.handleWebGLContextLost);
+            this.canvasWithContextHandlers.removeEventListener("webglcontextrestored", this.handleWebGLContextRestored);
+            this.canvasWithContextHandlers = null;
         }
-        this.canvasWithContextHandlers.removeEventListener("webglcontextlost", this.handleWebGLContextLost);
-        this.canvasWithContextHandlers.removeEventListener("webglcontextrestored", this.handleWebGLContextRestored);
-        this.canvasWithContextHandlers = null;
     }
 
     private removeOwnedCanvas(canvas: HTMLCanvasElement | null): void {
-        if (!this.ownsCanvas || !canvas) {
-            return;
+        if (this.ownsCanvas && canvas) {
+            canvas.parentNode?.removeChild(canvas);
+            this.ownsCanvas = false;
         }
-        canvas.parentNode?.removeChild(canvas);
-        this.ownsCanvas = false;
     }
 
     private applyFavicon(ref: string): void {
-        if (typeof document === "undefined") {
+        if (this.destroyed || typeof document === "undefined") {
             return;
         }
         const href = ResourceLoader.getResource(ref)?.toString() ?? ref;
@@ -864,10 +969,9 @@ export class AppGameContainer extends GameContainer {
     }
 
     private applyCanvasSize(width: number, height: number): void {
-        if (!this.canvas) {
-            return;
+        if (this.canvas) {
+            this.applySizedCanvas(width, height, `${width}px`, `${height}px`, true);
         }
-        this.applySizedCanvas(width, height, `${width}px`, `${height}px`, true);
     }
 
     private applyBrowserDisplaySize(): void {
@@ -880,11 +984,7 @@ export class AppGameContainer extends GameContainer {
         this.applySizedCanvas(width, height, "100vw", "100vh", true);
     }
 
-    private applyWindowedDisplayMode(
-        width: number = this.lastWindowedDisplayMode.width,
-        height: number = this.lastWindowedDisplayMode.height,
-        notify: boolean = true
-    ): void {
+    private applyWindowedDisplayMode(width = this.lastWindowedDisplayMode.width, height = this.lastWindowedDisplayMode.height, notify = true): void {
         if (!this.canvas) {
             this.setDimensions(width, height);
             this.displayPixelRatio = 1;
@@ -896,7 +996,7 @@ export class AppGameContainer extends GameContainer {
     }
 
     private applySizedCanvas(width: number, height: number, styleWidth: string, styleHeight: string, notify: boolean): void {
-        if (!this.canvas) {
+        if (!this.canvas || AppGameContainer.resourceOwner !== this) {
             return;
         }
         const logicalWidth = Math.max(1, Math.trunc(width));
@@ -919,23 +1019,23 @@ export class AppGameContainer extends GameContainer {
         this.canvas.style.width = styleWidth;
         this.canvas.style.height = styleHeight;
         Renderer.getBackend().initDisplay(logicalWidth, logicalHeight, backingWidth, backingHeight);
-        if (notify && logicalOrStyleChanged) {
+        if (notify && logicalOrStyleChanged && !this.destroyed) {
             Display.markResized(logicalWidth, logicalHeight);
             this.notifyContainerSizeChanged();
         }
     }
 
     private refreshCurrentCanvasBacking(): void {
+        if (this.destroyed) {
+            return;
+        }
         if (!this.canvas) {
             this.displayPixelRatio = 1;
             this.backingWidth = this.width;
             this.backingHeight = this.height;
-            Renderer.getBackend().initDisplay(this.width, this.height, this.backingWidth, this.backingHeight);
-            return;
+            return; // A not-yet-started container does not own the global renderer.
         }
-        const styleWidth = this.canvas.style.width || `${this.width}px`;
-        const styleHeight = this.canvas.style.height || `${this.height}px`;
-        this.applySizedCanvas(this.width, this.height, styleWidth, styleHeight, false);
+        this.applySizedCanvas(this.width, this.height, this.canvas.style.width || `${this.width}px`, this.canvas.style.height || `${this.height}px`, false);
     }
 
     private resolveDisplayPixelRatio(): number {
@@ -947,10 +1047,7 @@ export class AppGameContainer extends GameContainer {
     }
 
     private setLastWindowedDisplayMode(width: number, height: number): void {
-        this.lastWindowedDisplayMode = {
-            width: Math.max(1, Math.trunc(width)),
-            height: Math.max(1, Math.trunc(height))
-        };
+        this.lastWindowedDisplayMode = { width: Math.max(1, Math.trunc(width)), height: Math.max(1, Math.trunc(height)) };
     }
 
     private exitBrowserFullscreenForDestroy(): void {
@@ -958,37 +1055,48 @@ export class AppGameContainer extends GameContainer {
             return;
         }
         this.fullscreen = false;
-        this.applyWindowedDisplayMode(undefined, undefined, false);
         Mouse.restoreNativeCursorAfterForcedFullscreenExit();
         if (document.fullscreenElement === this.canvas && document.exitFullscreen) {
-            void document.exitFullscreen().catch(() => {});
+            void document.exitFullscreen().catch(() => undefined);
         }
     }
 
     private waitForQueuedResources(): void {
+        const lifetime = this.lifetime;
+        const wait = ++this.resourceWait;
         this.waitingForResources = true;
-        void ResourceLoader.waitForAll()
-            .then(() => {
-                this.waitingForResources = false;
-                if (!this.destroyed) {
-                    this.lastFrameTime = this.now();
-                    this.scheduleNextFrame();
+        void ResourceLoader.waitForAll().then(
+            () => {
+                if (!this.isLifetimeCurrent(lifetime) || wait !== this.resourceWait) {
+                    return;
                 }
-            })
-            .catch((error) => {
+                this.waitingForResources = false;
+                this.lastFrameTime = this.now();
+                this.scheduleNextFrame();
+            },
+            (error) => {
+                if (!this.isLifetimeCurrent(lifetime) || wait !== this.resourceWait) {
+                    return;
+                }
                 this.waitingForResources = false;
                 this.reportError(error);
-            });
+            }
+        );
     }
 
-    private observeAsyncFailure(operation: Promise<void>): Promise<void> {
+    private observeAsyncFailure(operation: Promise<void>, token: DisplayOperation): Promise<void> {
         void operation.catch((error) => {
-            this.reportRecoverableError(error);
+            if (this.isDisplayOperationCurrent(token)) {
+                this.reportRecoverableError(error);
+            }
         });
         return operation;
     }
 
     private reportRecoverableError(error: unknown): void {
+        if (this.destroyed) {
+            return;
+        }
         const reported = this.toError(error, "Failed to complete AppGameContainer asynchronous operation");
         if (this.errorHandler) {
             try {
@@ -996,22 +1104,24 @@ export class AppGameContainer extends GameContainer {
             } catch (handlerError) {
                 Log.error("AppGameContainer error handler failed", handlerError);
             }
-            return;
+        } else {
+            Log.error(reported);
         }
-        Log.error(reported);
     }
 
     private reportError(error: unknown): void {
-        this.resourceError = null;
-        const reported = this.toError(error, "Failed to run AppGameContainer frame");
-        this.destroy();
-        if (this.errorHandler) {
-            this.errorHandler(reported);
+        if (this.destroyed) {
             return;
         }
-        setTimeout(() => {
-            throw reported;
-        }, 0);
+        this.resourceError = null;
+        const reported = this.toError(error, "Failed to run AppGameContainer frame");
+        const handler = this.errorHandler;
+        this.destroy();
+        if (handler) {
+            handler(reported);
+        } else {
+            Log.error(reported); // Do not throw into a later replacement session's global handler.
+        }
     }
 
     private toError(error: unknown, message: string): Error {
@@ -1038,6 +1148,9 @@ export class AppGameContainer extends GameContainer {
     }
 
     private restoreDisplaySnapshot(snapshot: DisplaySnapshot): void {
+        if (this.destroyed) {
+            return;
+        }
         this.width = snapshot.width;
         this.height = snapshot.height;
         this.screenWidth = snapshot.screenWidth;
@@ -1048,7 +1161,7 @@ export class AppGameContainer extends GameContainer {
         this.fullscreen = snapshot.fullscreen;
         this.setLastWindowedDisplayMode(snapshot.lastWindowedWidth, snapshot.lastWindowedHeight);
         this.graphics.setDimensions(this.width, this.height);
-        if (this.canvas) {
+        if (this.canvas && this.ownsSharedResources()) {
             this.canvas.width = snapshot.canvasWidth;
             this.canvas.height = snapshot.canvasHeight;
             this.canvas.style.width = snapshot.canvasStyleWidth;
@@ -1060,7 +1173,7 @@ export class AppGameContainer extends GameContainer {
     }
 
     private notifyContainerSizeChanged(): void {
-        if (isResizeAwareGame(this.game)) {
+        if (!this.destroyed && isResizeAwareGame(this.game)) {
             this.game.containerSizeChanged(this);
         }
     }
