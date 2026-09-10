@@ -40,7 +40,12 @@ class FakeAudioSource {
 }
 
 class FakeOfflineAudioContext {
+    static created = 0;
     static decodes = 0;
+
+    constructor() {
+        FakeOfflineAudioContext.created++;
+    }
 
     decodeAudioData(_bytes, ok) {
         FakeOfflineAudioContext.decodes++;
@@ -83,11 +88,25 @@ class FakeAudioContext {
     }
 }
 
-function installAudioGlobals({ offline = true } = {}) {
+class DeferredResumeAudioContext extends FakeAudioContext {
+    static pending = [];
+
+    resume() {
+        FakeAudioContext.resumed++;
+        return new Promise((resolve) => {
+            DeferredResumeAudioContext.pending.push(() => {
+                this.state = "running";
+                resolve();
+            });
+        });
+    }
+}
+
+function installAudioGlobals({ offline = true, audioContext = FakeAudioContext } = {}) {
     if (offline) {
         Object.defineProperty(globalThis, "OfflineAudioContext", { configurable: true, value: FakeOfflineAudioContext });
     }
-    Object.defineProperty(globalThis, "AudioContext", { configurable: true, value: FakeAudioContext });
+    Object.defineProperty(globalThis, "AudioContext", { configurable: true, value: audioContext });
 }
 
 async function settleAudioStart() {
@@ -100,11 +119,13 @@ afterEach(() => {
     Music.resetPlaybackState();
     SoundStore.get().destroy();
     ResourceLoader.clearCache();
+    FakeOfflineAudioContext.created = 0;
     FakeOfflineAudioContext.decodes = 0;
     FakeAudioContext.created = 0;
     FakeAudioContext.closed = 0;
     FakeAudioContext.resumed = 0;
     FakeAudioSource.created = [];
+    DeferredResumeAudioContext.pending = [];
     delete globalThis.OfflineAudioContext;
     delete globalThis.AudioContext;
 });
@@ -122,6 +143,26 @@ test("PWA mode decodes without creating or lazily exposing a playback context", 
     assert.equal(FakeAudioContext.created, 0);
     assert.equal(manager.hasPlaybackGeneration(), false);
     assert.equal(SoundStore.get().getAudioContext(), null);
+    assert.equal(FakeAudioContext.created, 0);
+});
+
+test("PWA preload batch reuses one OfflineAudioContext and releases it after the batch", async () => {
+    installAudioGlobals();
+    const manager = PwaAudioManager.get();
+    manager.install();
+    ResourceLoader.registerResource("first.ogg", new Uint8Array([1]));
+    ResourceLoader.registerResource("second.ogg", new Uint8Array([2]));
+    ResourceLoader.registerResource("later.ogg", new Uint8Array([3]));
+
+    await SoundStore.get().preloadAudioBuffers(["first.ogg", "second.ogg"], { concurrency: 1 });
+
+    assert.equal(FakeOfflineAudioContext.created, 1);
+    assert.equal(FakeOfflineAudioContext.decodes, 2);
+
+    await SoundStore.get().preloadAudioBuffer("later.ogg");
+
+    assert.equal(FakeOfflineAudioContext.created, 2);
+    assert.equal(FakeOfflineAudioContext.decodes, 3);
     assert.equal(FakeAudioContext.created, 0);
 });
 
@@ -165,6 +206,28 @@ test("PWA menu retirement preserves logical audio flags while replacing the phys
     assert.notEqual(SoundStore.get().getAudioContext(), firstContext);
     assert.equal(SoundStore.get().musicOn(), false);
     assert.equal(SoundStore.get().soundsOn(), false);
+});
+
+test("late resume settlement from a retired playback generation cannot reclaim ownership", async () => {
+    installAudioGlobals({ audioContext: DeferredResumeAudioContext });
+    const manager = PwaAudioManager.get();
+    manager.install();
+
+    const activation = manager.beginPlaybackGeneration();
+    const oldContext = SoundStore.get().getAudioContext();
+    assert.equal(DeferredResumeAudioContext.pending.length, 1);
+    assert.equal(manager.hasPlaybackGeneration(), true);
+
+    manager.endPlaybackGeneration();
+    assert.equal(manager.hasPlaybackGeneration(), false);
+    assert.equal(SoundStore.get().getAudioContext(), null);
+
+    DeferredResumeAudioContext.pending[0]();
+
+    assert.equal(await activation, false);
+    assert.equal(SoundStore.get().getAudioContext(), null);
+    assert.equal(manager.hasPlaybackGeneration(), false);
+    assert.equal(oldContext.state, "running");
 });
 
 test("PWA Continue rebuilds looping music at its preserved position on the fresh generation", async () => {
