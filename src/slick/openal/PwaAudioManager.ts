@@ -6,7 +6,7 @@ type WebAudioGlobal = typeof globalThis & {
     webkitOfflineAudioContext?: typeof OfflineAudioContext;
 };
 
-type SoundStoreInternals = SoundStore & {
+type SoundStoreInternals = {
     inited: boolean;
     soundWorksFlag: boolean;
     musicEnabled: boolean;
@@ -21,6 +21,7 @@ type SoundStoreInternals = SoundStore & {
     soundSources: Array<unknown | null>;
     maxSources: number;
     loadAudioBuffer(ref: string, options?: ResourceLoadOptions): Promise<AudioBuffer>;
+    stopSoundEffects(): void;
 };
 
 /**
