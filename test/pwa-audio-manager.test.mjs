@@ -33,6 +33,10 @@ class FakeAudioSource {
     }
 
     stop() {}
+
+    finish() {
+        this.onended?.();
+    }
 }
 
 class FakeOfflineAudioContext {
@@ -191,6 +195,58 @@ test("PWA Continue rebuilds looping music at its preserved position on the fresh
     assert.notEqual(resumedSource, firstSource);
     assert.equal(resumedSource.startCalls[0].offset, 3.25);
     assert.equal(music.playing(), true);
+});
+
+test("PWA generation replacement preserves an explicitly paused Music without restarting it", async () => {
+    installAudioGlobals();
+    const manager = PwaAudioManager.get();
+    manager.install();
+    ResourceLoader.registerResource("paused.ogg", new Uint8Array([1, 2, 3, 4]));
+    await SoundStore.get().preloadAudioBuffer("paused.ogg");
+    assert.equal(await manager.beginPlaybackGeneration(), true);
+
+    const music = new Music("paused.ogg");
+    await music.ready();
+    music.loop();
+    await settleAudioStart();
+    music.pause();
+    const sourceCount = FakeAudioSource.created.length;
+
+    manager.endPlaybackGeneration();
+    assert.equal(await manager.beginPlaybackGeneration(), true);
+    await settleAudioStart();
+
+    assert.equal(music.isPaused(), true);
+    assert.equal(music.playing(), false);
+    assert.equal(FakeAudioSource.created.length, sourceCount);
+});
+
+test("PWA retirement cannot resurrect a naturally ended track before the next Music poll", async () => {
+    installAudioGlobals();
+    const manager = PwaAudioManager.get();
+    manager.install();
+    ResourceLoader.registerResource("ended.ogg", new Uint8Array([1, 2, 3, 4]));
+    await SoundStore.get().preloadAudioBuffer("ended.ogg");
+    assert.equal(await manager.beginPlaybackGeneration(), true);
+
+    const music = new Music("ended.ogg");
+    await music.ready();
+    music.play();
+    await settleAudioStart();
+    FakeAudioSource.created.at(-1).finish();
+    const sourceCount = FakeAudioSource.created.length;
+
+    SoundStore.get().setMusicOn(false);
+    manager.endPlaybackGeneration();
+    assert.equal(await manager.beginPlaybackGeneration(), true);
+    SoundStore.get().setMusicOn(true);
+    music.resume();
+    await settleAudioStart();
+
+    assert.equal(FakeAudioSource.created.length, sourceCount);
+    assert.equal(music.playing(), true);
+    Music.poll(0);
+    assert.equal(music.playing(), false);
 });
 
 test("AppGameContainer teardown is idempotent and does not invoke legacy audio recovery", () => {
