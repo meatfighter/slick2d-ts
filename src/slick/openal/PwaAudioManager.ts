@@ -23,7 +23,6 @@ type SoundStoreInternals = {
     loadAudioBuffer(ref: string, options?: ResourceLoadOptions): Promise<AudioBuffer>;
     stopSoundEffects(): void;
 };
-
 /**
  * PWA-specific Web Audio generation owner used by the three browser games.
  *
