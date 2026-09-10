@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 import { Music } from "../dist/slick/Music.js";
 import { PwaAudioManager } from "../dist/slick/openal/PwaAudioManager.js";
@@ -190,4 +191,11 @@ test("PWA Continue rebuilds looping music at its preserved position on the fresh
     assert.notEqual(resumedSource, firstSource);
     assert.equal(resumedSource.startCalls[0].offset, 3.25);
     assert.equal(music.playing(), true);
+});
+
+test("AppGameContainer teardown is idempotent and does not invoke legacy audio recovery", () => {
+    const source = readFileSync(new URL("../src/slick/AppGameContainer.ts", import.meta.url), "utf8");
+    const destroy = source.slice(source.indexOf("public destroy(): void"), source.indexOf("public override setDefaultMouseCursor"));
+    assert.match(destroy, /if \(this\.destroyed\) \{\s*return;\s*\}/);
+    assert.doesNotMatch(source, /BrowserAudioLifecycle/);
 });
