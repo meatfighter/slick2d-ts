@@ -5,6 +5,7 @@ import { Log } from "../util/Log.js";
 
 type WebAudioGlobal = typeof globalThis & {
     webkitAudioContext?: typeof AudioContext;
+    webkitOfflineAudioContext?: typeof OfflineAudioContext;
 };
 
 type AudioPosition = {
@@ -38,6 +39,10 @@ export interface AudioPlaybackHandle {
     suspend?(): void;
     /** Resumes playback when supported by the handle. */
     resume?(): void;
+    /** Detaches context-bound playback while preserving logical music state. */
+    detachPlaybackGeneration?(): void;
+    /** Rebuilds context-bound playback for a newly created generation. */
+    attachPlaybackGeneration?(): void;
     /** Returns true while the source is active. */
     playing(): boolean;
     /** Browser parity helper: returns the fixed per-source gain assigned when playback started. */
@@ -66,10 +71,129 @@ export class SoundStore {
     private activeHandles = new Set<AudioPlaybackHandle>();
     private musicHandles = new Set<AudioPlaybackHandle>();
     private soundSources: Array<AudioPlaybackHandle | null> = new Array<AudioPlaybackHandle | null>(64).fill(null);
+    private explicitPlaybackGenerationMode = false;
+    private playbackGeneration = 0;
+    private offlineDecoder: BaseAudioContext | null = null;
+    private activeOfflineDecodes = 0;
 
     /** Java Slick2D counterpart: SoundStore.get(). */
     public static get(): SoundStore {
         return SoundStore.instance;
+    }
+
+    /** Enable PWA playback-generation ownership. This mode lasts for the page lifetime. */
+    public enableExplicitPlaybackGenerations(): void {
+        if (this.explicitPlaybackGenerationMode) {
+            return;
+        }
+        this.explicitPlaybackGenerationMode = true;
+        if (this.context !== null) {
+            this.endPlaybackGeneration();
+        }
+    }
+
+    /** Reports whether lazy persistent-context behavior has been disabled for a PWA. */
+    public isUsingExplicitPlaybackGenerations(): boolean {
+        return this.explicitPlaybackGenerationMode;
+    }
+
+    /** Current generation token used to reject stale asynchronous playback work. */
+    public getPlaybackGeneration(): number {
+        return this.playbackGeneration;
+    }
+
+    /** True only while the application owns a usable physical playback context. */
+    public hasPlaybackGeneration(): boolean {
+        return this.context !== null && String(this.context.state) !== "closed";
+    }
+
+    /** Checks that asynchronous work still belongs to the current PWA playback generation. */
+    public isPlaybackGenerationCurrent(generation: number, context?: AudioContext | null): boolean {
+        if (!this.explicitPlaybackGenerationMode || generation !== this.playbackGeneration || !this.hasPlaybackGeneration()) {
+            return false;
+        }
+        return context === undefined || context === this.context;
+    }
+
+    /**
+     * Creates a brand-new playback generation. AudioContext construction and the
+     * native resume() call happen synchronously before this method returns.
+     */
+    public beginPlaybackGenerationFromUserGesture(): Promise<boolean> {
+        this.enableExplicitPlaybackGenerations();
+        if (this.context !== null) {
+            this.endPlaybackGeneration();
+        }
+
+        const Ctor = globalThis.AudioContext ?? (globalThis as WebAudioGlobal).webkitAudioContext;
+        if (!Ctor) {
+            this.soundWorksFlag = false;
+            return Promise.resolve(false);
+        }
+
+        let context: AudioContext | null = null;
+        let soundBus: GainNode | null = null;
+        let musicBus: GainNode | null = null;
+        try {
+            context = new Ctor();
+            soundBus = context.createGain();
+            musicBus = context.createGain();
+            soundBus.gain.value = 1;
+            musicBus.gain.value = this.musicVolume;
+            soundBus.connect(context.destination);
+            musicBus.connect(context.destination);
+        } catch {
+            SoundStore.cleanupBus(soundBus);
+            SoundStore.cleanupBus(musicBus);
+            SoundStore.closeContext(context);
+            this.soundWorksFlag = false;
+            return Promise.resolve(false);
+        }
+
+        const generation = ++this.playbackGeneration;
+        const firstInitialization = !this.inited;
+        this.context = context;
+        this.soundBus = soundBus;
+        this.musicBus = musicBus;
+        this.inited = true;
+        this.soundWorksFlag = false;
+        if (firstInitialization) {
+            this.musicEnabled = true;
+            this.soundsEnabled = true;
+        }
+        this.resetSoundSources();
+
+        let resumeOperation: Promise<void>;
+        try {
+            resumeOperation = Promise.resolve(context.resume());
+        } catch {
+            resumeOperation = Promise.reject(new Error("AudioContext.resume() failed synchronously."));
+        }
+
+        return resumeOperation.then(
+            () => this.completePlaybackGenerationStart(generation, context),
+            () => {
+                if (this.isGenerationContext(generation, context)) {
+                    this.invalidateAndRetirePlaybackContext();
+                }
+                return false;
+            }
+        );
+    }
+
+    /**
+     * Retires physical Web Audio ownership while preserving decoded buffers and
+     * logical music state. SFX are discarded and cannot attach to a later generation.
+     */
+    public endPlaybackGeneration(): void {
+        this.enableExplicitPlaybackGenerations();
+        for (const handle of Array.from(this.musicHandles)) {
+            handle.detachPlaybackGeneration?.();
+        }
+        this.stopSoundEffects();
+        this.playbackGeneration++;
+        this.retirePlaybackContext();
+        this.resetSoundSources();
     }
 
     /** Java Slick2D counterpart: SoundStore.clear(). */
@@ -80,20 +204,23 @@ export class SoundStore {
 
     /** Browser parity helper: resets the Web Audio/OpenAL lifecycle for AL.destroy(). */
     public destroy(): void {
-        this.clear();
-        void this.context?.close?.().catch(() => undefined);
-        this.context = null;
-        this.soundBus = null;
-        this.musicBus = null;
+        this.stopAllPlayback();
+        this.clearDecodedBuffers();
+        this.playbackGeneration++;
+        this.retirePlaybackContext();
+        this.offlineDecoder = null;
+        this.activeOfflineDecodes = 0;
         this.inited = false;
         this.soundWorksFlag = false;
         this.musicEnabled = false;
         this.soundsEnabled = false;
     }
 
-    /** Browser/PWA helper: resets playback and flags while preserving decoded buffers and the AudioContext. */
+    /** Browser/PWA helper: fully resets playback while preserving decoded audio assets only. */
     public destroyPreservingAudioCache(): void {
         this.stopAllPlayback();
+        this.playbackGeneration++;
+        this.retirePlaybackContext();
         this.inited = false;
         this.soundWorksFlag = false;
         this.musicEnabled = false;
@@ -121,19 +248,17 @@ export class SoundStore {
 
     /** Java Slick2D counterpart: SoundStore.setMusicOn(boolean). */
     public setMusicOn(music: boolean): void {
-        if (!this.soundWorksFlag) {
+        if (!this.soundWorksFlag && !(this.explicitPlaybackGenerationMode && this.inited)) {
             return;
         }
         this.musicEnabled = music;
         for (const handle of this.musicHandles) {
             if (music) {
                 handle.resume?.();
+            } else if (handle.suspend) {
+                handle.suspend();
             } else {
-                if (handle.suspend) {
-                    handle.suspend();
-                } else {
-                    handle.pause?.();
-                }
+                handle.pause?.();
             }
         }
     }
@@ -168,7 +293,7 @@ export class SoundStore {
 
     /** Java Slick2D counterpart: SoundStore.setSoundsOn(boolean). */
     public setSoundsOn(sounds: boolean): void {
-        if (!this.soundWorksFlag) {
+        if (!this.soundWorksFlag && !(this.explicitPlaybackGenerationMode && this.inited)) {
             return;
         }
         this.soundsEnabled = sounds;
@@ -191,6 +316,15 @@ export class SoundStore {
 
     /** Java Slick2D counterpart: SoundStore.init(). */
     public init(): void {
+        if (this.explicitPlaybackGenerationMode) {
+            if (this.context !== null && String(this.context.state) !== "closed") {
+                this.inited = true;
+                this.soundWorksFlag = String(this.context.state) === "running";
+            } else {
+                this.soundWorksFlag = false;
+            }
+            return;
+        }
         if (this.inited) {
             return;
         }
@@ -229,7 +363,7 @@ export class SoundStore {
 
     /** Browser/PWA helper: stops active sound effects without clearing music or decoded buffers. */
     public stopSoundEffects(): void {
-        for (const handle of this.activeHandles) {
+        for (const handle of Array.from(this.activeHandles)) {
             if (!this.musicHandles.has(handle)) {
                 handle.stop();
             }
@@ -238,7 +372,7 @@ export class SoundStore {
 
     /** Browser/PWA helper: stops active music and sound effects without clearing decoded buffers. */
     public stopAllPlayback(): void {
-        for (const handle of this.activeHandles) {
+        for (const handle of Array.from(this.activeHandles)) {
             handle.stop();
         }
         this.resetPlaybackState();
@@ -286,59 +420,28 @@ export class SoundStore {
         this.soundSources = nextSources;
     }
 
-    /** Browser parity helper: returns the lazily-created AudioContext. */
+    /** Browser parity helper: returns the active AudioContext; PWA generation mode never creates one lazily. */
     public getAudioContext(): AudioContext | null {
         if (this.context) {
-            if (this.context.state !== "closed") {
+            if (String(this.context.state) !== "closed") {
                 return this.context;
             }
             this.context = null;
             this.soundBus = null;
             this.musicBus = null;
+            this.soundWorksFlag = false;
         }
-        const Ctor = globalThis.AudioContext ?? (globalThis as WebAudioGlobal).webkitAudioContext;
-        if (!Ctor) {
+        if (this.explicitPlaybackGenerationMode) {
             return null;
         }
-        let context: AudioContext | null = null;
-        let soundBus: GainNode | null = null;
-        let musicBus: GainNode | null = null;
-        try {
-            context = new Ctor();
-            soundBus = context.createGain();
-            musicBus = context.createGain();
-            soundBus.gain.value = 1;
-            musicBus.gain.value = this.musicVolume;
-            soundBus.connect(context.destination);
-            musicBus.connect(context.destination);
-        } catch {
-            try {
-                soundBus?.disconnect();
-            } catch {
-                // Ignore cleanup failures while rolling back partial Web Audio initialization.
-            }
-            try {
-                musicBus?.disconnect();
-            } catch {
-                // Ignore cleanup failures while rolling back partial Web Audio initialization.
-            }
-            if (context) {
-                try {
-                    void context.close().catch(() => undefined);
-                } catch {
-                    // Ignore AudioContext close failures during rollback.
-                }
-            }
-            return null;
-        }
-        this.context = context;
-        this.soundBus = soundBus;
-        this.musicBus = musicBus;
-        return context;
+        return this.createLegacyPlaybackContext();
     }
 
-    /** Browser parity helper: resumes Web Audio from a user gesture before gameplay playback. */
+    /** Browser parity helper: resumes legacy Web Audio or starts a fresh explicit PWA generation. */
     public async unlock(): Promise<boolean> {
+        if (this.explicitPlaybackGenerationMode) {
+            return this.beginPlaybackGenerationFromUserGesture();
+        }
         const context = this.getAudioContext();
         if (!context) {
             this.soundWorksFlag = false;
@@ -363,64 +466,37 @@ export class SoundStore {
 
     /** Browser parity helper: returns the global sound-effect gain bus. */
     public getSoundBus(): GainNode | null {
+        if (this.explicitPlaybackGenerationMode) {
+            return this.soundBus;
+        }
         this.init();
         return this.soundBus;
     }
 
     /** Browser parity helper: returns the global music gain bus. */
     public getMusicBus(): GainNode | null {
+        if (this.explicitPlaybackGenerationMode) {
+            return this.musicBus;
+        }
         this.init();
         return this.musicBus;
     }
 
-    /** Browser parity helper: loads and decodes an audio buffer through Web Audio. */
+    /** Browser parity helper: loads and decodes an audio buffer. */
     public loadAudioBuffer(ref: string, options: ResourceLoadOptions = {}): Promise<AudioBuffer> {
         const existing = this.buffers.get(ref);
         if (existing) {
             return SoundStore.waitForAudioPromise(existing, options.signal, ref);
         }
-        this.init();
-        const context = this.getAudioContext();
-        if (!context || !this.soundWorksFlag) {
-            return Promise.reject(
-                new ResourceLoadException(`Failed to decode audio ${ref}: Web Audio API is not available`, {
-                    ref,
-                    url: ResourceLoader.getResource(ref)?.href ?? null,
-                    kind: "decode",
-                    phase: "decode"
-                })
-            );
-        }
-        const promise = (async (): Promise<AudioBuffer> => {
-            const bytes = await ResourceLoader.loadResource(ref, options);
-            SoundStore.throwIfAborted(options.signal, ref);
-            try {
-                const buffer = await context.decodeAudioData(bytes);
-                SoundStore.throwIfAborted(options.signal, ref);
-                return buffer;
-            } catch (error) {
-                if (error instanceof ResourceLoadException) {
-                    throw error;
-                }
-                if (SoundStore.isAbortError(error) || options.signal?.aborted) {
-                    throw SoundStore.abortException(ref, options.signal?.reason ?? error);
-                }
-                throw new ResourceLoadException(`Failed to load audio: ${ref}`, {
-                    ref,
-                    url: ResourceLoader.getResource(ref)?.href ?? null,
-                    kind: "decode",
-                    phase: "decode",
-                    cause: error
-                });
-            }
-        })().catch((error) => {
+        const operation = this.explicitPlaybackGenerationMode ? this.loadAudioBufferOffline(ref, options) : this.loadAudioBufferLegacy(ref, options);
+        const promise = operation.catch((error) => {
             if (this.buffers.get(ref) === promise) {
                 this.buffers.delete(ref);
             }
             throw error;
         });
         this.buffers.set(ref, promise);
-        return promise;
+        return SoundStore.waitForAudioPromise(promise, options.signal, ref);
     }
 
     /** Browser parity helper: queues audio decode work into ResourceLoader.waitForAll(). */
@@ -459,53 +535,6 @@ export class SoundStore {
         }
     }
 
-    private static async waitForAudioPromise(promise: Promise<AudioBuffer>, signal: AbortSignal | undefined, ref: string): Promise<AudioBuffer> {
-        if (!signal) {
-            return promise;
-        }
-        SoundStore.throwIfAborted(signal, ref);
-        return new Promise<AudioBuffer>((resolve, reject) => {
-            const abort = (): void => {
-                signal.removeEventListener("abort", abort);
-                reject(SoundStore.abortException(ref, signal.reason));
-            };
-            signal.addEventListener("abort", abort, { once: true });
-            void promise.then(
-                (value) => {
-                    signal.removeEventListener("abort", abort);
-                    resolve(value);
-                },
-                (error) => {
-                    signal.removeEventListener("abort", abort);
-                    reject(error);
-                }
-            );
-        });
-    }
-
-    private static throwIfAborted(signal: AbortSignal | undefined, ref: string): void {
-        if (signal?.aborted) {
-            throw SoundStore.abortException(ref, signal.reason);
-        }
-    }
-
-    private static abortException(ref: string, cause?: unknown): ResourceLoadException {
-        return new ResourceLoadException(`Resource load aborted: ${ref}`, {
-            ref,
-            url: ResourceLoader.getResource(ref)?.href ?? null,
-            kind: "abort",
-            phase: "decode",
-            cause
-        });
-    }
-
-    private static isAbortError(error: unknown): boolean {
-        return (
-            (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError") ||
-            (typeof error === "object" && error !== null && "name" in error && (error as { name?: unknown }).name === "AbortError")
-        );
-    }
-
     /** Browser parity helper: plays a decoded sound effect through Web Audio. */
     public playSound(ref: string, pitch: number, volume: number, loop: boolean, onEnded?: () => void, position?: AudioPosition): AudioPlaybackHandle | null {
         this.init();
@@ -517,6 +546,10 @@ export class SoundStore {
         if (!context || !bus) {
             return null;
         }
+        if (this.explicitPlaybackGenerationMode && String(context.state) !== "running") {
+            return null;
+        }
+        const playbackGeneration = this.playbackGeneration;
         const sourceId = this.findFreeSoundSource();
         if (sourceId < 0) {
             return null;
@@ -574,10 +607,18 @@ export class SoundStore {
                 if (stopped) {
                     return;
                 }
-                if (!(await AudioContextLifecycle.resume(context)) || stopped || !this.soundsEnabled) {
+                if (this.explicitPlaybackGenerationMode) {
+                    if (!this.isPlaybackGenerationCurrent(playbackGeneration, context) || String(context.state) !== "running" || !this.soundsEnabled) {
+                        handle.stop();
+                        return;
+                    }
+                } else if (!(await AudioContextLifecycle.resume(context)) || stopped || !this.soundsEnabled) {
                     if (!stopped) {
                         handle.stop();
                     }
+                    return;
+                }
+                if (stopped || (this.explicitPlaybackGenerationMode && !this.isPlaybackGenerationCurrent(playbackGeneration, context))) {
                     return;
                 }
                 gain = context.createGain();
@@ -638,6 +679,157 @@ export class SoundStore {
         this.musicHandles.delete(handle);
     }
 
+    private completePlaybackGenerationStart(generation: number, context: AudioContext): boolean {
+        if (!this.isGenerationContext(generation, context) || String(context.state) !== "running") {
+            if (this.isGenerationContext(generation, context)) {
+                this.invalidateAndRetirePlaybackContext();
+            }
+            return false;
+        }
+        this.soundWorksFlag = true;
+        for (const handle of Array.from(this.musicHandles)) {
+            handle.attachPlaybackGeneration?.();
+        }
+        return true;
+    }
+
+    private isGenerationContext(generation: number, context: AudioContext): boolean {
+        return generation === this.playbackGeneration && this.context === context;
+    }
+
+    private invalidateAndRetirePlaybackContext(): void {
+        this.playbackGeneration++;
+        this.retirePlaybackContext();
+        this.resetSoundSources();
+    }
+
+    private retirePlaybackContext(): void {
+        const context = this.context;
+        const soundBus = this.soundBus;
+        const musicBus = this.musicBus;
+        this.context = null;
+        this.soundBus = null;
+        this.musicBus = null;
+        this.soundWorksFlag = false;
+        SoundStore.cleanupBus(soundBus);
+        SoundStore.cleanupBus(musicBus);
+        SoundStore.closeContext(context);
+    }
+
+    private createLegacyPlaybackContext(): AudioContext | null {
+        const Ctor = globalThis.AudioContext ?? (globalThis as WebAudioGlobal).webkitAudioContext;
+        if (!Ctor) {
+            return null;
+        }
+        let context: AudioContext | null = null;
+        let soundBus: GainNode | null = null;
+        let musicBus: GainNode | null = null;
+        try {
+            context = new Ctor();
+            soundBus = context.createGain();
+            musicBus = context.createGain();
+            soundBus.gain.value = 1;
+            musicBus.gain.value = this.musicVolume;
+            soundBus.connect(context.destination);
+            musicBus.connect(context.destination);
+        } catch {
+            SoundStore.cleanupBus(soundBus);
+            SoundStore.cleanupBus(musicBus);
+            SoundStore.closeContext(context);
+            return null;
+        }
+        this.context = context;
+        this.soundBus = soundBus;
+        this.musicBus = musicBus;
+        return context;
+    }
+
+    private loadAudioBufferLegacy(ref: string, options: ResourceLoadOptions): Promise<AudioBuffer> {
+        this.init();
+        const context = this.getAudioContext();
+        if (!context || !this.soundWorksFlag) {
+            return Promise.reject(this.audioDecodeUnavailable(ref));
+        }
+        return (async (): Promise<AudioBuffer> => {
+            const bytes = await ResourceLoader.loadResource(ref, options);
+            SoundStore.throwIfAborted(options.signal, ref);
+            try {
+                const buffer = await context.decodeAudioData(bytes);
+                SoundStore.throwIfAborted(options.signal, ref);
+                return buffer;
+            } catch (error) {
+                throw this.normalizeAudioLoadError(ref, options.signal, error);
+            }
+        })();
+    }
+
+    private loadAudioBufferOffline(ref: string, options: ResourceLoadOptions): Promise<AudioBuffer> {
+        return (async (): Promise<AudioBuffer> => {
+            SoundStore.throwIfAborted(options.signal, ref);
+            const bytes = await ResourceLoader.loadResource(ref, options);
+            SoundStore.throwIfAborted(options.signal, ref);
+            const decoder = this.acquireOfflineDecoder(ref);
+            try {
+                const buffer = await SoundStore.decodeAudioData(decoder, bytes.slice(0));
+                SoundStore.throwIfAborted(options.signal, ref);
+                return buffer;
+            } catch (error) {
+                throw this.normalizeAudioLoadError(ref, options.signal, error);
+            } finally {
+                this.releaseOfflineDecoder();
+            }
+        })();
+    }
+
+    private acquireOfflineDecoder(ref: string): BaseAudioContext {
+        if (this.offlineDecoder === null) {
+            const Ctor = globalThis.OfflineAudioContext ?? (globalThis as WebAudioGlobal).webkitOfflineAudioContext;
+            if (!Ctor) {
+                throw this.audioDecodeUnavailable(ref, "OfflineAudioContext is not available");
+            }
+            try {
+                this.offlineDecoder = new Ctor(2, 1, 44100);
+            } catch (error) {
+                throw this.audioDecodeUnavailable(ref, "OfflineAudioContext could not be created", error);
+            }
+        }
+        this.activeOfflineDecodes++;
+        return this.offlineDecoder;
+    }
+
+    private releaseOfflineDecoder(): void {
+        this.activeOfflineDecodes = Math.max(0, this.activeOfflineDecodes - 1);
+        if (this.activeOfflineDecodes === 0) {
+            this.offlineDecoder = null;
+        }
+    }
+
+    private audioDecodeUnavailable(ref: string, detail = "Web Audio API is not available", cause?: unknown): ResourceLoadException {
+        return new ResourceLoadException(`Failed to decode audio ${ref}: ${detail}`, {
+            ref,
+            url: ResourceLoader.getResource(ref)?.href ?? null,
+            kind: "decode",
+            phase: "decode",
+            cause
+        });
+    }
+
+    private normalizeAudioLoadError(ref: string, signal: AbortSignal | undefined, error: unknown): ResourceLoadException {
+        if (error instanceof ResourceLoadException) {
+            return error;
+        }
+        if (SoundStore.isAbortError(error) || signal?.aborted) {
+            return SoundStore.abortException(ref, signal?.reason ?? error);
+        }
+        return new ResourceLoadException(`Failed to load audio: ${ref}`, {
+            ref,
+            url: ResourceLoader.getResource(ref)?.href ?? null,
+            kind: "decode",
+            phase: "decode",
+            cause: error
+        });
+    }
+
     private resetSoundSources(): void {
         this.soundSources = new Array<AudioPlaybackHandle | null>(this.maxSources).fill(null);
     }
@@ -684,5 +876,97 @@ export class SoundStore {
         } catch {
             gain.connect(bus);
         }
+    }
+
+    private static async waitForAudioPromise(promise: Promise<AudioBuffer>, signal: AbortSignal | undefined, ref: string): Promise<AudioBuffer> {
+        if (!signal) {
+            return promise;
+        }
+        SoundStore.throwIfAborted(signal, ref);
+        return new Promise<AudioBuffer>((resolve, reject) => {
+            const abort = (): void => {
+                signal.removeEventListener("abort", abort);
+                reject(SoundStore.abortException(ref, signal.reason));
+            };
+            signal.addEventListener("abort", abort, { once: true });
+            void promise.then(
+                (value) => {
+                    signal.removeEventListener("abort", abort);
+                    resolve(value);
+                },
+                (error) => {
+                    signal.removeEventListener("abort", abort);
+                    reject(error);
+                }
+            );
+        });
+    }
+
+    private static decodeAudioData(context: BaseAudioContext, bytes: ArrayBuffer): Promise<AudioBuffer> {
+        return new Promise<AudioBuffer>((resolve, reject) => {
+            let settled = false;
+            const succeed = (buffer: AudioBuffer): void => {
+                if (!settled) {
+                    settled = true;
+                    resolve(buffer);
+                }
+            };
+            const fail = (error: unknown): void => {
+                if (!settled) {
+                    settled = true;
+                    reject(error);
+                }
+            };
+            try {
+                const result = context.decodeAudioData(bytes, succeed, fail as DecodeErrorCallback);
+                if (result && typeof (result as Promise<AudioBuffer>).then === "function") {
+                    void (result as Promise<AudioBuffer>).then(succeed, fail);
+                }
+            } catch (error) {
+                fail(error);
+            }
+        });
+    }
+
+    private static cleanupBus(bus: GainNode | null): void {
+        try {
+            bus?.disconnect();
+        } catch {
+            // Repeated/best-effort Web Audio teardown is intentionally harmless.
+        }
+    }
+
+    private static closeContext(context: AudioContext | null): void {
+        if (context === null) {
+            return;
+        }
+        try {
+            void context.close().catch(() => undefined);
+        } catch {
+            // Context teardown is detached from application state and never awaited.
+        }
+    }
+
+    private static throwIfAborted(signal: AbortSignal | undefined, ref: string): void {
+        if (signal?.aborted) {
+            throw SoundStore.abortException(ref, signal.reason);
+        }
+    }
+
+    private static abortException(ref: string, cause?: unknown): ResourceLoadException {
+        return new ResourceLoadException(`Resource load aborted: ${ref}`, {
+            ref,
+            url: ResourceLoader.getResource(ref)?.href ?? null,
+            kind: "abort",
+            phase: "decode",
+            cause
+        });
+    }
+
+    private static isAbortError(error: unknown): boolean {
+        return (
+            (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError") ||
+            (typeof error === "object" && error !== null && "name" in error && (error as { name?: unknown }).name === "AbortError")
+        );
     }
 }
