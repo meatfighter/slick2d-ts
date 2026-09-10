@@ -1,11 +1,6 @@
-import { SoundStore } from "./SoundStore.js";
+import { SoundStore, type PlaybackDiagnostics } from "./SoundStore.js";
 
-/**
- * Explicit PWA playback-generation facade.
- *
- * Decoded audio belongs to the page lifetime. Physical Web Audio playback belongs
- * to one RUNNING generation and is replaced after every trip through the PWA menu.
- */
+/** The PWA facade owns no separate audio state; SoundStore is the single generation owner. */
 export class PwaAudioManager {
     private static readonly instance = new PwaAudioManager();
 
@@ -13,12 +8,10 @@ export class PwaAudioManager {
         return PwaAudioManager.instance;
     }
 
-    /** Enable decode-only preload and disable lazy playback-context creation. */
     public install(): void {
         SoundStore.get().enableExplicitPlaybackGenerations();
     }
 
-    /** Current playback-generation token. */
     public getGeneration(): number {
         return SoundStore.get().getPlaybackGeneration();
     }
@@ -27,15 +20,26 @@ export class PwaAudioManager {
         return SoundStore.get().hasPlaybackGeneration();
     }
 
-    /** Create a fresh playback context synchronously from the current user activation. */
-    public beginPlaybackGeneration(): Promise<boolean> {
+    /** Pass true for STARTING: construct/resume now, but attach/open output only on commit. */
+    public beginPlaybackGeneration(deferPlayback = false): Promise<boolean> {
         this.install();
-        return SoundStore.get().beginPlaybackGenerationFromUserGesture();
+        return SoundStore.get().beginPlaybackGenerationFromUserGesture(deferPlayback);
     }
 
-    /** Retire physical playback while keeping decoded assets and logical music state. */
-    public endPlaybackGeneration(): void {
+    public commitPlaybackGeneration(generation: number): Promise<boolean> {
+        return SoundStore.get().commitPlaybackGeneration(generation);
+    }
+
+    public endPlaybackGeneration(expectedGeneration?: number): void {
         this.install();
-        SoundStore.get().endPlaybackGeneration();
+        SoundStore.get().endPlaybackGeneration(expectedGeneration);
+    }
+
+    public setInterruptionHandler(handler: ((reason: string, generation: number) => void) | null): void {
+        SoundStore.get().setPlaybackInterruptionHandler(handler);
+    }
+
+    public getDiagnostics(): PlaybackDiagnostics {
+        return SoundStore.get().getPlaybackDiagnostics();
     }
 }
