@@ -5,7 +5,9 @@ import { ResourceLoader } from "../dist/slick/util/ResourceLoader.js";
 import { SoundStore } from "../dist/slick/openal/SoundStore.js";
 
 class FakeAudioBuffer {
-    constructor() { this.duration = 8; }
+    constructor() {
+        this.duration = 8;
+    }
 }
 class FakeOfflineAudioContext {
     static decodes = 0;
@@ -26,9 +28,19 @@ class FakeAudioContext {
         this.currentTime = 0;
         this.destination = {};
     }
-    createGain() { return { gain: { value: 1 }, connect() {}, disconnect() {} }; }
-    resume() { FakeAudioContext.resumed++; this.state = "running"; return Promise.resolve(); }
-    close() { FakeAudioContext.closed++; this.state = "closed"; return Promise.resolve(); }
+    createGain() {
+        return { gain: { value: 1 }, connect() {}, disconnect() {} };
+    }
+    resume() {
+        FakeAudioContext.resumed++;
+        this.state = "running";
+        return Promise.resolve();
+    }
+    close() {
+        FakeAudioContext.closed++;
+        this.state = "closed";
+        return Promise.resolve();
+    }
 }
 
 function installAudioGlobals() {
