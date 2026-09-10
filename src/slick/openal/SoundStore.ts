@@ -75,6 +75,7 @@ export class SoundStore {
     private playbackGeneration = 0;
     private offlineDecoder: BaseAudioContext | null = null;
     private activeOfflineDecodes = 0;
+    private offlineDecodeBatchDepth = 0;
 
     /** Java Slick2D counterpart: SoundStore.get(). */
     public static get(): SoundStore {
@@ -188,7 +189,9 @@ export class SoundStore {
     public endPlaybackGeneration(): void {
         this.enableExplicitPlaybackGenerations();
         for (const handle of Array.from(this.musicHandles)) {
-            handle.detachPlaybackGeneration?.();
+            if (handle.playing()) {
+                handle.detachPlaybackGeneration?.();
+            }
         }
         this.stopSoundEffects();
         this.playbackGeneration++;
@@ -210,6 +213,7 @@ export class SoundStore {
         this.retirePlaybackContext();
         this.offlineDecoder = null;
         this.activeOfflineDecodes = 0;
+        this.offlineDecodeBatchDepth = 0;
         this.inited = false;
         this.soundWorksFlag = false;
         this.musicEnabled = false;
@@ -259,6 +263,9 @@ export class SoundStore {
         }
         this.musicEnabled = music;
         for (const handle of this.musicHandles) {
+            if (!handle.playing()) {
+                continue;
+            }
             if (music) {
                 handle.resume?.();
             } else if (handle.suspend) {
@@ -530,14 +537,25 @@ export class SoundStore {
         if (total === 0) {
             return;
         }
-        const settled = await runSettledBatch(uniqueRefs, options.concurrency, async (ref) => {
-            await this.preloadAudioBuffer(ref, options);
-            loaded++;
-            options.onProgress?.({ ref, loaded, total });
-        });
-        const failure = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected");
-        if (failure) {
-            throw failure.reason;
+        const holdOfflineDecoder = this.explicitPlaybackGenerationMode;
+        if (holdOfflineDecoder) {
+            this.offlineDecodeBatchDepth++;
+        }
+        try {
+            const settled = await runSettledBatch(uniqueRefs, options.concurrency, async (ref) => {
+                await this.preloadAudioBuffer(ref, options);
+                loaded++;
+                options.onProgress?.({ ref, loaded, total });
+            });
+            const failure = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected");
+            if (failure) {
+                throw failure.reason;
+            }
+        } finally {
+            if (holdOfflineDecoder) {
+                this.offlineDecodeBatchDepth = Math.max(0, this.offlineDecodeBatchDepth - 1);
+                this.releaseOfflineDecoderIfIdle();
+            }
         }
     }
 
@@ -694,7 +712,9 @@ export class SoundStore {
         }
         this.soundWorksFlag = true;
         for (const handle of Array.from(this.musicHandles)) {
-            handle.attachPlaybackGeneration?.();
+            if (handle.playing()) {
+                handle.attachPlaybackGeneration?.();
+            }
         }
         return true;
     }
@@ -805,7 +825,11 @@ export class SoundStore {
 
     private releaseOfflineDecoder(): void {
         this.activeOfflineDecodes = Math.max(0, this.activeOfflineDecodes - 1);
-        if (this.activeOfflineDecodes === 0) {
+        this.releaseOfflineDecoderIfIdle();
+    }
+
+    private releaseOfflineDecoderIfIdle(): void {
+        if (this.activeOfflineDecodes === 0 && this.offlineDecodeBatchDepth === 0) {
             this.offlineDecoder = null;
         }
     }
