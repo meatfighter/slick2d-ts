@@ -35,6 +35,7 @@ export class Music {
     private paused = false;
     private playingFlag = false;
     private globallySuspended = false;
+    private generationDetached = false;
     private stopRequested = false;
     private endPending = false;
     private startToken = 0;
@@ -103,6 +104,7 @@ export class Music {
         current.paused = false;
         current.playingFlag = false;
         current.globallySuspended = false;
+        current.generationDetached = false;
         current.stopRequested = false;
         current.endPending = false;
         current.fadeState = null;
@@ -160,6 +162,7 @@ export class Music {
         this.paused = true;
         this.playingFlag = false;
         this.globallySuspended = false;
+        this.generationDetached = false;
     }
 
     /** Java Slick2D counterpart: Music.stop(). */
@@ -170,6 +173,7 @@ export class Music {
         this.paused = false;
         this.playingFlag = false;
         this.globallySuspended = false;
+        this.generationDetached = false;
         this.fadeState = null;
         this.endPending = Music.currentMusic === this;
     }
@@ -180,6 +184,8 @@ export class Music {
             this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
         } else if (this.globallySuspended && SoundStore.get().musicOn()) {
             this.resumeForMusicOn();
+        } else if (this.generationDetached) {
+            this.attachPlaybackGeneration();
         }
     }
 
@@ -271,7 +277,11 @@ export class Music {
         this.paused = false;
         this.playingFlag = true;
         this.globallySuspended = !SoundStore.get().musicOn();
+        this.generationDetached = false;
         this.ensureHandle();
+        const store = SoundStore.get();
+        const explicitGeneration = store.isUsingExplicitPlaybackGenerations();
+        const playbackGeneration = store.getPlaybackGeneration();
         const token = ++this.startToken;
         void this.readyPromise
             .then(() => this.loadBuffer())
@@ -281,33 +291,45 @@ export class Music {
                 }
                 this.buffer = buffer;
                 this.positionOffset = this.normalizeOffset(buffer, this.positionOffset, loop);
-                if (!SoundStore.get().musicOn()) {
+                if (!store.musicOn()) {
                     this.globallySuspended = true;
                     return;
                 }
-                const context = SoundStore.get().getAudioContext();
+                const context = store.getAudioContext();
                 if (context === null) {
+                    if (explicitGeneration) {
+                        this.generationDetached = true;
+                        return;
+                    }
                     throw new SlickException("Music playback could not access Web Audio");
                 }
-                if (!(await AudioContextLifecycle.resume(context))) {
+                if (explicitGeneration) {
+                    if (!store.isPlaybackGenerationCurrent(playbackGeneration, context) || String(context.state) !== "running") {
+                        this.generationDetached = true;
+                        return;
+                    }
+                } else if (!(await AudioContextLifecycle.resume(context))) {
                     if (token === this.startToken && Music.currentMusic === this && this.playingFlag) {
-                        // A backgrounded WebKit context can leave resume() rejected or
-                        // pending indefinitely. Preserve the logical music state so a
-                        // later browser/user-gesture recovery can restart this track.
                         this.globallySuspended = true;
                     }
                     return;
                 }
-                if (token !== this.startToken || Music.currentMusic !== this || !this.playingFlag || !SoundStore.get().musicOn()) {
+                if (token !== this.startToken || Music.currentMusic !== this || !this.playingFlag || !store.musicOn()) {
+                    return;
+                }
+                if (explicitGeneration && !store.isPlaybackGenerationCurrent(playbackGeneration, context)) {
+                    this.generationDetached = true;
                     return;
                 }
                 this.globallySuspended = false;
-                this.startSource(buffer, loop, this.positionOffset);
+                this.generationDetached = false;
+                this.startSource(buffer, loop, this.positionOffset, explicitGeneration ? playbackGeneration : undefined);
             })
             .catch((error) => {
                 if (token === this.startToken && Music.currentMusic === this) {
                     this.playingFlag = false;
                     this.globallySuspended = false;
+                    this.generationDetached = false;
                     this.endPending = false;
                     Music.currentMusic = null;
                     this.clearHandle();
@@ -346,6 +368,7 @@ export class Music {
         this.playingFlag = false;
         this.paused = false;
         this.globallySuspended = false;
+        this.generationDetached = false;
         this.endPending = false;
         this.fadeState = null;
         if (Music.currentMusic === this) {
@@ -361,6 +384,7 @@ export class Music {
         this.playingFlag = false;
         this.paused = false;
         this.globallySuspended = false;
+        this.generationDetached = false;
         this.positionOffset = 0;
         this.clearHandle();
         for (const listener of this.listeners) {
@@ -409,10 +433,20 @@ export class Music {
         }
     }
 
-    private startSource(buffer: AudioBuffer, loop: boolean, offset: number): void {
-        const context = SoundStore.get().getAudioContext();
-        const bus = SoundStore.get().getMusicBus();
-        if (!context || !bus || !AudioContextLifecycle.isRunning(context)) {
+    private startSource(buffer: AudioBuffer, loop: boolean, offset: number, expectedGeneration?: number): void {
+        const store = SoundStore.get();
+        const context = store.getAudioContext();
+        const bus = store.getMusicBus();
+        const explicitGeneration = store.isUsingExplicitPlaybackGenerations();
+        if (!context || !bus) {
+            throw new SlickException("Music playback requires a running Web Audio context");
+        }
+        if (explicitGeneration) {
+            if (expectedGeneration === undefined || !store.isPlaybackGenerationCurrent(expectedGeneration, context) || String(context.state) !== "running") {
+                this.generationDetached = true;
+                return;
+            }
+        } else if (!AudioContextLifecycle.isRunning(context)) {
             throw new SlickException("Music playback requires a running Web Audio context");
         }
         this.stopSource(true);
@@ -481,6 +515,7 @@ export class Music {
         if (Music.currentMusic !== this || !this.playingFlag || this.globallySuspended) {
             return;
         }
+        this.startToken++;
         this.positionOffset = this.getPosition();
         this.globallySuspended = true;
         this.stopSource(true, true);
@@ -491,6 +526,37 @@ export class Music {
             return;
         }
         this.globallySuspended = false;
+        const store = SoundStore.get();
+        if (store.isUsingExplicitPlaybackGenerations() && !store.hasPlaybackGeneration()) {
+            this.generationDetached = true;
+            return;
+        }
+        this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
+    }
+
+    private detachPlaybackGeneration(): void {
+        if (Music.currentMusic !== this || (!this.playingFlag && !this.paused && !this.globallySuspended)) {
+            return;
+        }
+        this.startToken++;
+        if (this.source !== null) {
+            this.positionOffset = this.getPosition();
+        }
+        this.stopSource(true, true);
+        this.generationDetached = true;
+    }
+
+    private attachPlaybackGeneration(): void {
+        if (Music.currentMusic !== this || !this.generationDetached) {
+            return;
+        }
+        if (this.paused || this.globallySuspended || !this.playingFlag || !SoundStore.get().musicOn()) {
+            return;
+        }
+        if (!SoundStore.get().hasPlaybackGeneration()) {
+            return;
+        }
+        this.generationDetached = false;
         this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
     }
 
@@ -504,13 +570,15 @@ export class Music {
             pause: () => this.pause(),
             suspend: () => this.suspendForMusicOff(),
             resume: () => this.resumeForMusicOn(),
+            detachPlaybackGeneration: () => this.detachPlaybackGeneration(),
+            attachPlaybackGeneration: () => this.attachPlaybackGeneration(),
             playing: () => this.isPlaybackActiveForStore()
         };
         SoundStore.get().track(this.handle);
     }
 
     private isPlaybackActiveForStore(): boolean {
-        return Music.currentMusic === this && !this.endPending && (this.playingFlag || this.paused || this.globallySuspended);
+        return Music.currentMusic === this && !this.endPending && (this.playingFlag || this.paused || this.globallySuspended || this.generationDetached);
     }
 
     private clearHandle(): void {
