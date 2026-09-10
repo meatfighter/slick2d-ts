@@ -1,7 +1,7 @@
 import type { MusicListener } from "./MusicListener.js";
+import { copyMusicPlaybackSnapshot, type MusicPlaybackSnapshot, type MusicTransportState } from "./MusicPlaybackState.js";
 import { SlickException } from "./SlickException.js";
-import { AudioContextLifecycle } from "./openal/AudioContextLifecycle.js";
-import { AudioPlaybackHandle, SoundStore } from "./openal/SoundStore.js";
+import { type AudioPlaybackHandle, SoundStore } from "./openal/SoundStore.js";
 import { Log } from "./util/Log.js";
 import { ResourceLoader } from "./util/ResourceLoader.js";
 
@@ -13,17 +13,14 @@ type FadeState = {
     stopAfterFade: boolean;
 };
 
-/**
- * Java Slick2D counterpart: org.newdawn.slick.Music.
- *
- * Longer music track wrapper with play, loop, fade, and seek support.
- */
+/** Java Slick2D Music, with logical transport independent of disposable Web Audio nodes. */
 export class Music {
     private static currentMusic: Music | null = null;
     private readonly ref: string;
     private readonly readyPromise: Promise<void>;
     private readonly listeners: MusicListener[] = [];
     private source: AudioBufferSourceNode | null = null;
+    private sourceContext: AudioContext | null = null;
     private gain: GainNode | null = null;
     private buffer: AudioBuffer | null = null;
     private volume = 1;
@@ -46,43 +43,44 @@ export class Music {
     public constructor(url: URL);
     public constructor(url: URL, streamingHint: boolean);
     public constructor(input: ArrayBuffer | Blob, ref: string);
-    /**
-     * Java Slick2D counterpart: Music constructors.
-     *
-     * Stores a resource reference and queues browser loading when possible.
-     */
     public constructor(refOrUrlOrInput: string | URL | ArrayBuffer | Blob, streamingOrRef?: boolean | string) {
-        if (typeof refOrUrlOrInput === "string") {
-            this.ref = refOrUrlOrInput;
-            this.readyPromise = SoundStore.get().preloadAudioBuffer(this.ref);
-        } else if (refOrUrlOrInput instanceof URL) {
+        let preparation: Promise<void>;
+        if (typeof refOrUrlOrInput === "string" || refOrUrlOrInput instanceof URL) {
             this.ref = refOrUrlOrInput.toString();
-            this.readyPromise = SoundStore.get().preloadAudioBuffer(this.ref);
+            preparation = SoundStore.get().preloadAudioBuffer(this.ref);
         } else {
             this.ref = typeof streamingOrRef === "string" ? streamingOrRef : "music";
             if (refOrUrlOrInput instanceof ArrayBuffer) {
                 ResourceLoader.registerResource(this.ref, refOrUrlOrInput);
-                this.readyPromise = SoundStore.get().preloadAudioBuffer(this.ref);
+                preparation = SoundStore.get().preloadAudioBuffer(this.ref);
             } else {
-                const registered = refOrUrlOrInput.arrayBuffer().then((bytes) => {
-                    ResourceLoader.registerResource(this.ref, bytes);
-                });
-                this.readyPromise = ResourceLoader.track(
-                    registered.then(() => SoundStore.get().loadAudioBuffer(this.ref)).then(() => undefined),
+                preparation = ResourceLoader.track(
+                    refOrUrlOrInput.arrayBuffer().then((bytes) => {
+                        ResourceLoader.registerResource(this.ref, bytes);
+                        return SoundStore.get().preloadAudioBuffer(this.ref);
+                    }),
                     this.ref
                 );
-                void this.readyPromise.catch(() => undefined);
             }
         }
+        this.buffer = SoundStore.get().getDecodedAudioBuffer(this.ref);
+        this.readyPromise = preparation.then(() => {
+            this.buffer = SoundStore.get().getDecodedAudioBuffer(this.ref);
+        });
+        void this.readyPromise.catch(() => undefined);
     }
 
-    /** Java Slick2D counterpart: Music.poll(int). */
+    /** Only the accepted gameplay clock advances transport, fades, and completion delivery. */
     public static poll(delta: number): void {
-        const current = Music.currentMusic;
-        if (!current) {
+        const store = SoundStore.get();
+        if (store.isUsingExplicitPlaybackGenerations() && !store.isLogicalPlaybackActive()) {
             return;
         }
-        SoundStore.get().poll(delta);
+        const current = Music.currentMusic;
+        if (current === null) {
+            return;
+        }
+        store.poll(delta);
         if (current.endPending) {
             Music.currentMusic = null;
             current.finishEnded();
@@ -91,43 +89,26 @@ export class Music {
         current.poll(delta);
     }
 
-    /** Browser lifecycle helper: clears static Music playback state without firing listeners. */
     public static resetPlaybackState(): void {
         const current = Music.currentMusic;
         Music.currentMusic = null;
-        if (!current) {
-            return;
-        }
-        current.startToken++;
-        current.stopSource(true);
-        current.positionOffset = 0;
-        current.paused = false;
-        current.playingFlag = false;
-        current.globallySuspended = false;
-        current.generationDetached = false;
-        current.stopRequested = false;
-        current.endPending = false;
-        current.fadeState = null;
+        current?.resetLogicalState();
     }
 
-    /** Browser parity helper: waits for constructor-queued audio decode. */
     public ready(): Promise<void> {
         return this.readyPromise;
     }
 
-    /** Browser parity helper: Java-style explicit load alias. */
     public load(): Promise<void> {
         return this.ready();
     }
 
-    /** Java Slick2D counterpart: Music.addListener(MusicListener). */
     public addListener(listener: MusicListener): void {
         if (!this.listeners.includes(listener)) {
             this.listeners.push(listener);
         }
     }
 
-    /** Java Slick2D counterpart: Music.removeListener(MusicListener). */
     public removeListener(listener: MusicListener): void {
         const index = this.listeners.indexOf(listener);
         if (index >= 0) {
@@ -135,25 +116,20 @@ export class Music {
         }
     }
 
-    /** Java Slick2D counterpart: Music.play(). */
     public play(): void;
-    /** Java Slick2D counterpart: Music.play(float, float). */
     public play(pitch: number, volume: number): void;
-    public play(pitch: number = 1, volume: number = 1): void {
+    public play(pitch = 1, volume = 1): void {
         this.start(false, pitch, volume);
     }
 
-    /** Java Slick2D counterpart: Music.loop(). */
     public loop(): void;
-    /** Java Slick2D counterpart: Music.loop(float, float). */
     public loop(pitch: number, volume: number): void;
-    public loop(pitch: number = 1, volume: number = 1): void {
+    public loop(pitch = 1, volume = 1): void {
         this.start(true, pitch, volume);
     }
 
-    /** Java Slick2D counterpart: Music.pause(). */
     public pause(): void {
-        if (this.endPending || Music.currentMusic !== this || (!this.source && !this.playingFlag)) {
+        if (this.endPending || Music.currentMusic !== this || !this.playingFlag) {
             return;
         }
         this.startToken++;
@@ -161,11 +137,9 @@ export class Music {
         this.stopSource(true, true);
         this.paused = true;
         this.playingFlag = false;
-        this.globallySuspended = false;
-        this.generationDetached = false;
+        this.generationDetached = true;
     }
 
-    /** Java Slick2D counterpart: Music.stop(). */
     public stop(): void {
         this.startToken++;
         this.stopSource(true);
@@ -178,176 +152,270 @@ export class Music {
         this.endPending = Music.currentMusic === this;
     }
 
-    /** Java Slick2D counterpart: Music.resume(). */
     public resume(): void {
-        if (this.endPending) {
+        if (this.endPending || Music.currentMusic !== this) {
             return;
         }
         if (this.paused) {
             this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
-        } else if (this.globallySuspended && SoundStore.get().musicOn()) {
+        } else if (SoundStore.get().musicOn() && (this.globallySuspended || this.generationDetached)) {
             this.resumeForMusicOn();
-        } else if (this.generationDetached) {
-            this.attachPlaybackGeneration();
         }
     }
 
-    /** Java Slick2D counterpart: Music.playing(). */
     public playing(): boolean {
         return Music.currentMusic === this && this.playingFlag;
     }
 
-    /** Java Slick2D counterpart: Music.setVolume(float). */
+    public getTransportState(): MusicTransportState {
+        if (Music.currentMusic !== this) {
+            return "stopped";
+        }
+        if (this.endPending) {
+            return "ended-pending";
+        }
+        return this.paused ? "paused" : this.playingFlag ? "playing" : "stopped";
+    }
+
+    public isCompletionPending(): boolean {
+        return this.getTransportState() === "ended-pending";
+    }
+
+    /** A detached graph or an explicit pause must not make a Song advance to its next part. */
+    public isTransportActive(): boolean {
+        const state = this.getTransportState();
+        return state === "playing" || state === "paused";
+    }
+
     public setVolume(volume: number): void {
-        this.volume = Math.max(0, Math.min(1, volume));
-        if (this.gain) {
+        this.volume = Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 0;
+        if (this.gain !== null) {
             this.gain.gain.value = this.volume;
         }
     }
 
-    /** Java Slick2D counterpart: Music.getVolume(). */
     public getVolume(): number {
         return this.volume;
     }
 
-    /** Browser parity helper: reports whether the current playback mode loops. */
     public isLooped(): boolean {
         return this.looped;
     }
 
-    /** Browser parity helper: reports whether playback is explicitly paused. */
     public isPaused(): boolean {
-        return this.paused;
+        return Music.currentMusic === this && this.paused;
     }
 
-    /** Browser parity helper: reports the pitch/playback-rate used by play/loop. */
     public getPlaybackRate(): number {
         return this.playbackRate;
     }
 
-    /** Browser parity helper: reports the decoded track duration when available. */
     public getDuration(): number | null {
         const duration = this.buffer?.duration;
         return typeof duration === "number" && Number.isFinite(duration) && duration >= 0 ? duration : null;
     }
 
-    /** Java Slick2D counterpart: Music.setPosition(float). */
     public setPosition(position: number): boolean {
-        this.positionOffset = this.buffer ? this.normalizeOffset(this.buffer, position, this.looped) : this.sanitizeOffset(position);
-        if (this.source) {
-            this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
+        this.positionOffset = this.buffer === null ? this.sanitizeOffset(position) : this.normalizeOffset(this.buffer, position, this.looped);
+        if (this.source !== null) {
+            this.startToken++;
+            this.stopSource(true, true);
+            this.generationDetached = true;
+            this.requestAttach();
         }
         return true;
     }
 
-    /** Java Slick2D counterpart: Music.getPosition(). */
     public getPosition(): number {
-        const context = SoundStore.get().getAudioContext();
-        if (!context || !this.source) {
+        // The source's clock belongs to its own generation, never a replacement singleton context.
+        const context = this.sourceContext;
+        if (context === null || this.source === null) {
             return this.positionOffset;
         }
-        const position = this.positionOffset + (context.currentTime - this.startedAt) * this.playbackRate;
-        return this.buffer ? this.normalizeOffset(this.buffer, position, this.looped) : this.sanitizeOffset(position);
+        const position = this.positionOffset + Math.max(0, context.currentTime - this.startedAt) * this.playbackRate;
+        return this.buffer === null ? this.sanitizeOffset(position) : this.normalizeOffset(this.buffer, position, this.looped);
     }
 
-    /** Java Slick2D counterpart: Music.fade(int, float, boolean). */
     public fade(duration: number, endVolume: number, stopAfterFade: boolean): void {
         this.fadeState = {
-            duration: Math.max(1, duration),
+            duration: Number.isFinite(duration) ? Math.max(1, duration) : 1,
             elapsed: 0,
             startVolume: this.volume,
-            endVolume: Math.max(0, Math.min(1, endVolume)),
+            endVolume: Number.isFinite(endVolume) ? Math.max(0, Math.min(1, endVolume)) : 0,
             stopAfterFade
         };
     }
 
-    private start(loop: boolean, pitch: number, volume: number, offset: number = 0, resetFade: boolean = true): void {
-        const oldMusic = Music.currentMusic;
-        if (oldMusic && oldMusic !== this) {
-            oldMusic.stopForSwap(this);
-        } else if (oldMusic === this) {
-            this.stopSource(true);
+    /** Capture durable logical state without manufacturing or resuming a context. */
+    public capturePlaybackState(): MusicPlaybackSnapshot {
+        const fade = this.fadeState;
+        return {
+            transport: this.getTransportState(),
+            looped: this.looped,
+            playbackRate: this.playbackRate,
+            positionSeconds: this.getPosition(),
+            volume: this.volume,
+            fade:
+                fade === null
+                    ? null
+                    : {
+                          durationMs: fade.duration,
+                          elapsedMs: Math.min(fade.elapsed, fade.duration),
+                          startVolume: fade.startVolume,
+                          endVolume: fade.endVolume,
+                          stopAfterFade: fade.stopAfterFade
+                      }
+        };
+    }
+
+    /**
+     * Atomically import transport only. This never plays a source, queues a timer,
+     * changes global preferences, or delivers a Music listener notification.
+     * Playback attachment belongs to the shell's accepted start transaction.
+     */
+    public restorePlaybackState(snapshot: MusicPlaybackSnapshot): void {
+        const state = copyMusicPlaybackSnapshot(snapshot);
+        const old = Music.currentMusic;
+        if (state.transport !== "stopped" && old !== null && old !== this) {
+            old.resetLogicalState();
         }
+        this.startToken++;
+        this.stopSource(true);
+        if (Music.currentMusic === this || state.transport !== "stopped") {
+            Music.currentMusic = state.transport === "stopped" ? null : this;
+        }
+        this.looped = state.looped;
+        this.playbackRate = state.playbackRate;
+        this.positionOffset = this.buffer === null ? state.positionSeconds : this.normalizeOffset(this.buffer, state.positionSeconds, state.looped);
+        this.volume = state.volume;
+        this.paused = state.transport === "paused";
+        this.playingFlag = state.transport === "playing";
+        this.endPending = state.transport === "ended-pending";
+        this.globallySuspended = !SoundStore.get().musicOn();
+        this.generationDetached = state.transport !== "stopped";
+        this.stopRequested = false;
+        this.fadeState =
+            state.fade === null
+                ? null
+                : {
+                      duration: state.fade.durationMs,
+                      elapsed: state.fade.elapsedMs,
+                      startVolume: state.fade.startVolume,
+                      endVolume: state.fade.endVolume,
+                      stopAfterFade: state.fade.stopAfterFade
+                  };
+        if (state.transport !== "stopped") {
+            this.ensureHandle();
+        }
+    }
+
+    /** Attach the imported/live transport only to the currently accepted playback generation. */
+    public attachPlaybackGeneration(): Promise<void> {
+        const store = SoundStore.get();
+        if (Music.currentMusic !== this || this.endPending || this.paused || !this.playingFlag || !store.musicOn()) {
+            return Promise.resolve();
+        }
+        if (store.isUsingExplicitPlaybackGenerations() && !store.isPlaybackCommitted()) {
+            this.generationDetached = true;
+            return Promise.resolve();
+        }
+        const context = store.getAudioContext();
+        if (context === null || String(context.state) !== "running") {
+            this.generationDetached = true;
+            return Promise.resolve();
+        }
+        if (this.source !== null && this.sourceContext === context) {
+            return Promise.resolve();
+        }
+        const generation = store.getPlaybackGeneration();
+        const token = ++this.startToken;
+        const attach = (buffer: AudioBuffer): void => {
+            if (
+                token !== this.startToken ||
+                Music.currentMusic !== this ||
+                this.endPending ||
+                this.paused ||
+                !this.playingFlag ||
+                !store.musicOn() ||
+                (store.isUsingExplicitPlaybackGenerations() && (!store.isPlaybackGenerationCurrent(generation, context) || !store.isPlaybackCommitted()))
+            ) {
+                return;
+            }
+            this.buffer = buffer;
+            this.globallySuspended = false;
+            this.generationDetached = false;
+            this.startSource(buffer, context, generation);
+        };
+        try {
+            const cached = this.buffer ?? store.getDecodedAudioBuffer(this.ref);
+            if (cached !== null) {
+                attach(cached);
+                return Promise.resolve();
+            }
+            return this.readyPromise.then(() => this.loadBuffer()).then(attach);
+        } catch (error) {
+            return Promise.reject(error);
+        }
+    }
+
+    private start(loop: boolean, pitch: number, volume: number, offset = 0, resetFade = true): void {
+        const old = Music.currentMusic;
+        if (old !== null && old !== this) {
+            old.stopForSwap(this);
+        }
+        this.startToken++;
+        this.stopSource(true);
         Music.currentMusic = this;
         this.endPending = false;
         if (resetFade) {
             this.fadeState = null;
         }
         this.looped = loop;
-        this.playbackRate = Math.max(0.25, Math.min(4, pitch));
-        this.positionOffset = this.buffer ? this.normalizeOffset(this.buffer, offset, loop) : this.sanitizeOffset(offset);
+        this.playbackRate = Number.isFinite(pitch) ? Math.max(0.25, Math.min(4, pitch)) : 1;
+        this.positionOffset = this.buffer === null ? this.sanitizeOffset(offset) : this.normalizeOffset(this.buffer, offset, loop);
         this.setVolume(volume);
         this.paused = false;
         this.playingFlag = true;
         this.globallySuspended = !SoundStore.get().musicOn();
-        this.generationDetached = false;
+        this.generationDetached = true;
         this.ensureHandle();
-        const store = SoundStore.get();
-        const explicitGeneration = store.isUsingExplicitPlaybackGenerations();
-        const playbackGeneration = store.getPlaybackGeneration();
-        const token = ++this.startToken;
-        void this.readyPromise
-            .then(() => this.loadBuffer())
-            .then(async (buffer) => {
-                if (token !== this.startToken || Music.currentMusic !== this || !this.playingFlag) {
-                    return;
-                }
-                this.buffer = buffer;
-                this.positionOffset = this.normalizeOffset(buffer, this.positionOffset, loop);
-                if (!store.musicOn()) {
-                    this.globallySuspended = true;
-                    return;
-                }
-                const context = store.getAudioContext();
-                if (context === null) {
-                    if (explicitGeneration) {
-                        this.generationDetached = true;
-                        return;
-                    }
-                    throw new SlickException("Music playback could not access Web Audio");
-                }
-                if (explicitGeneration) {
-                    if (!store.isPlaybackGenerationCurrent(playbackGeneration, context) || String(context.state) !== "running") {
-                        this.generationDetached = true;
-                        return;
-                    }
-                } else if (!(await AudioContextLifecycle.resume(context))) {
-                    if (token === this.startToken && Music.currentMusic === this && this.playingFlag) {
-                        this.globallySuspended = true;
-                    }
-                    return;
-                }
-                if (token !== this.startToken || Music.currentMusic !== this || !this.playingFlag || !store.musicOn()) {
-                    return;
-                }
-                if (explicitGeneration && !store.isPlaybackGenerationCurrent(playbackGeneration, context)) {
-                    this.generationDetached = true;
-                    return;
-                }
-                this.globallySuspended = false;
-                this.generationDetached = false;
-                this.startSource(buffer, loop, this.positionOffset, explicitGeneration ? playbackGeneration : undefined);
-            })
-            .catch((error) => {
-                if (token === this.startToken && Music.currentMusic === this) {
-                    this.playingFlag = false;
-                    this.globallySuspended = false;
-                    this.generationDetached = false;
-                    this.endPending = false;
-                    Music.currentMusic = null;
-                    this.clearHandle();
-                }
-                Log.error(`Failed to start music: ${this.ref}`, error);
-            });
+        this.requestAttach();
+    }
+
+    private requestAttach(): void {
+        const attachment = this.attachPlaybackGeneration();
+        const token = this.startToken;
+        void attachment.catch((error) => {
+            if (token !== this.startToken || Music.currentMusic !== this) {
+                return;
+            }
+            this.stopSource(true, true);
+            this.generationDetached = true;
+            Log.error(`Failed to attach music: ${this.ref}`, error);
+            SoundStore.get().reportPlaybackInterruption("music-start-failed");
+        });
     }
 
     private poll(delta: number): void {
-        if (!this.fadeState) {
+        if (this.paused || this.globallySuspended || !this.playingFlag) {
             return;
         }
+        const elapsed = Number.isFinite(delta) ? Math.max(0, delta) : 0;
+        const store = SoundStore.get();
+        if (this.source === null && store.isSilentPlaybackActive() && this.buffer !== null) {
+            const position = this.positionOffset + (elapsed / 1000) * this.playbackRate;
+            this.positionOffset = this.normalizeOffset(this.buffer, position, this.looped);
+            if (!this.looped && position >= this.buffer.duration) {
+                this.playingFlag = false;
+                this.endPending = true;
+            }
+        }
         const fade = this.fadeState;
-        fade.elapsed += delta;
-        const t = Math.min(1, fade.elapsed / fade.duration);
+        if (fade === null) {
+            return;
+        }
+        fade.elapsed = Math.min(fade.duration, fade.elapsed + elapsed);
+        const t = fade.elapsed / fade.duration;
         this.setVolume(fade.startVolume + (fade.endVolume - fade.startVolume) * t);
         if (t >= 1) {
             this.fadeState = null;
@@ -358,22 +426,14 @@ export class Music {
     }
 
     private async loadBuffer(): Promise<AudioBuffer> {
-        if (this.buffer) {
-            return this.buffer;
+        if (this.buffer === null) {
+            this.buffer = await SoundStore.get().loadAudioBuffer(this.ref);
         }
-        this.buffer = await SoundStore.get().loadAudioBuffer(this.ref);
         return this.buffer;
     }
 
     private stopForSwap(newMusic: Music): void {
-        this.startToken++;
-        this.stopSource(true);
-        this.playingFlag = false;
-        this.paused = false;
-        this.globallySuspended = false;
-        this.generationDetached = false;
-        this.endPending = false;
-        this.fadeState = null;
+        this.resetLogicalState();
         if (Music.currentMusic === this) {
             Music.currentMusic = null;
         }
@@ -382,30 +442,31 @@ export class Music {
         }
     }
 
-    private finishEnded(): void {
-        this.endPending = false;
+    private resetLogicalState(): void {
+        this.startToken++;
+        this.stopSource(true);
+        this.positionOffset = 0;
         this.playingFlag = false;
         this.paused = false;
         this.globallySuspended = false;
         this.generationDetached = false;
-        this.positionOffset = 0;
-        this.clearHandle();
+        this.endPending = false;
+        this.fadeState = null;
+    }
+
+    private finishEnded(): void {
+        this.resetLogicalState();
         for (const listener of this.listeners) {
             listener.musicEnded(this);
         }
     }
 
     private stopSource(requested: boolean, keepHandle = false): void {
-        if (!this.source) {
-            if (!keepHandle) {
-                this.clearHandle();
-            }
-            return;
-        }
         this.stopRequested = requested;
         const source = this.source;
         const gain = this.gain;
         this.source = null;
+        this.sourceContext = null;
         this.gain = null;
         if (!keepHandle) {
             this.clearHandle();
@@ -414,84 +475,81 @@ export class Music {
     }
 
     private cleanupSourceGraph(source: AudioBufferSourceNode | null, gain: GainNode | null, stopSource: boolean): void {
-        if (source) {
+        if (source !== null) {
             source.onended = null;
             if (stopSource) {
                 try {
                     source.stop();
                 } catch {
-                    // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
+                    // A source may already have ended or failed before start().
                 }
             }
             try {
                 source.disconnect();
             } catch {
-                // A source can already be disconnected during repeated teardown.
+                // Retirement must finish even if the browser has already disposed a node.
             }
         }
         try {
             gain?.disconnect();
         } catch {
-            // A gain node can already be disconnected during repeated teardown.
+            // Best-effort cleanup never changes the logical transport.
         }
     }
 
-    private startSource(buffer: AudioBuffer, loop: boolean, offset: number, expectedGeneration?: number): void {
+    private startSource(buffer: AudioBuffer, context: AudioContext, generation: number): void {
         const store = SoundStore.get();
-        const context = store.getAudioContext();
         const bus = store.getMusicBus();
-        const explicitGeneration = store.isUsingExplicitPlaybackGenerations();
-        if (!context || !bus) {
+        if (bus === null || String(context.state) !== "running") {
             throw new SlickException("Music playback requires a running Web Audio context");
         }
-        if (explicitGeneration) {
-            if (expectedGeneration === undefined || !store.isPlaybackGenerationCurrent(expectedGeneration, context) || String(context.state) !== "running") {
-                this.generationDetached = true;
-                return;
-            }
-        } else if (!AudioContextLifecycle.isRunning(context)) {
-            throw new SlickException("Music playback requires a running Web Audio context");
+        if (store.isUsingExplicitPlaybackGenerations() && !store.isPlaybackGenerationCurrent(generation, context)) {
+            return;
         }
-        this.stopSource(true);
+        this.stopSource(true, true);
         this.ensureHandle();
-        let createdSource: AudioBufferSourceNode | null = null;
-        let createdGain: GainNode | null = null;
+        let source: AudioBufferSourceNode | null = null;
+        let gain: GainNode | null = null;
         try {
-            createdSource = context.createBufferSource();
-            createdGain = context.createGain();
-            const source = createdSource;
-            const gain = createdGain;
+            source = context.createBufferSource();
+            gain = context.createGain();
             source.buffer = buffer;
-            source.loop = loop;
+            source.loop = this.looped;
             source.playbackRate.value = this.playbackRate;
             gain.gain.value = this.volume;
             source.connect(gain);
             gain.connect(bus);
-            this.positionOffset = this.normalizeOffset(buffer, offset, loop);
+            this.positionOffset = this.normalizeOffset(buffer, this.positionOffset, this.looped);
             this.startedAt = context.currentTime;
             this.stopRequested = false;
             this.source = source;
+            this.sourceContext = context;
             this.gain = gain;
+            const startedSource = source;
+            const startedGain = gain;
+            const loop = this.looped;
             source.onended = () => {
-                this.cleanupSourceGraph(source, gain, false);
-                if (this.source !== source) {
+                this.cleanupSourceGraph(startedSource, startedGain, false);
+                if (this.source !== startedSource || this.sourceContext !== context) {
                     return;
                 }
-                const requested = this.stopRequested;
                 this.source = null;
+                this.sourceContext = null;
                 this.gain = null;
-                if (!requested && !loop) {
+                if (!this.stopRequested && !loop) {
+                    this.positionOffset = buffer.duration;
                     this.playingFlag = false;
                     this.endPending = true;
                 }
             };
             source.start(0, this.positionOffset);
         } catch (error) {
-            if (createdSource && this.source === createdSource) {
+            if (this.source === source) {
                 this.source = null;
+                this.sourceContext = null;
                 this.gain = null;
             }
-            this.cleanupSourceGraph(createdSource, createdGain, true);
+            this.cleanupSourceGraph(source, gain, true);
             throw error;
         }
     }
@@ -501,95 +559,64 @@ export class Music {
     }
 
     private normalizeOffset(buffer: AudioBuffer, offset: number, loop: boolean): number {
-        const sanitized = this.sanitizeOffset(offset);
+        const value = this.sanitizeOffset(offset);
         const duration = buffer.duration;
         if (!Number.isFinite(duration)) {
-            return sanitized;
+            return value;
         }
-        if (duration <= 0) {
-            return 0;
-        }
-        if (loop) {
-            return sanitized % duration;
-        }
-        return Math.min(sanitized, duration);
+        return duration <= 0 ? 0 : loop ? value % duration : Math.min(value, duration);
     }
 
     private suspendForMusicOff(): void {
-        if (this.endPending || Music.currentMusic !== this || !this.playingFlag || this.globallySuspended) {
+        if (Music.currentMusic !== this || this.endPending) {
             return;
         }
         this.startToken++;
         this.positionOffset = this.getPosition();
         this.globallySuspended = true;
         this.stopSource(true, true);
+        this.generationDetached = true;
     }
 
     private resumeForMusicOn(): void {
-        if (this.endPending || Music.currentMusic !== this || !this.playingFlag || this.paused || !this.globallySuspended) {
+        if (Music.currentMusic !== this || this.endPending || !SoundStore.get().musicOn()) {
             return;
         }
         this.globallySuspended = false;
-        const store = SoundStore.get();
-        if (store.isUsingExplicitPlaybackGenerations() && !store.hasPlaybackGeneration()) {
-            this.generationDetached = true;
-            return;
+        if (!this.paused && this.playingFlag) {
+            this.requestAttach();
         }
-        this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
     }
 
     private detachPlaybackGeneration(): void {
-        if (this.endPending || Music.currentMusic !== this || (!this.playingFlag && !this.paused && !this.globallySuspended)) {
+        if (Music.currentMusic !== this) {
             return;
         }
         this.startToken++;
-        if (this.source !== null) {
-            this.positionOffset = this.getPosition();
-        }
+        this.positionOffset = this.getPosition();
         this.stopSource(true, true);
         this.generationDetached = true;
     }
 
-    private attachPlaybackGeneration(): void {
-        if (this.endPending || Music.currentMusic !== this || !this.generationDetached) {
-            return;
-        }
-        if (this.paused || this.globallySuspended || !this.playingFlag || !SoundStore.get().musicOn()) {
-            return;
-        }
-        if (!SoundStore.get().hasPlaybackGeneration()) {
-            return;
-        }
-        this.generationDetached = false;
-        this.start(this.looped, this.playbackRate, this.volume, this.positionOffset, false);
-    }
-
     private ensureHandle(): void {
-        if (this.handle) {
-            SoundStore.get().track(this.handle);
-            return;
+        if (this.handle === null) {
+            this.handle = {
+                stop: () => this.stop(),
+                pause: () => this.pause(),
+                suspend: () => this.suspendForMusicOff(),
+                resume: () => this.resumeForMusicOn(),
+                detachPlaybackGeneration: () => this.detachPlaybackGeneration(),
+                attachPlaybackGeneration: () => this.attachPlaybackGeneration(),
+                playing: () => Music.currentMusic === this && (this.playingFlag || this.paused || this.endPending || this.generationDetached)
+            };
         }
-        this.handle = {
-            stop: () => this.stop(),
-            pause: () => this.pause(),
-            suspend: () => this.suspendForMusicOff(),
-            resume: () => this.resumeForMusicOn(),
-            detachPlaybackGeneration: () => this.detachPlaybackGeneration(),
-            attachPlaybackGeneration: () => this.attachPlaybackGeneration(),
-            playing: () => this.isPlaybackActiveForStore()
-        };
         SoundStore.get().track(this.handle);
     }
 
-    private isPlaybackActiveForStore(): boolean {
-        return Music.currentMusic === this && !this.endPending && (this.playingFlag || this.paused || this.globallySuspended || this.generationDetached);
-    }
-
     private clearHandle(): void {
-        if (!this.handle) {
-            return;
+        if (this.handle !== null) {
+            SoundStore.get().untrack(this.handle);
+            this.handle = null;
         }
-        SoundStore.get().untrack(this.handle);
-        this.handle = null;
     }
 }
