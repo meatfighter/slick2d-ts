@@ -2,13 +2,11 @@ import { AudioContextLifecycle } from "./AudioContextLifecycle.js";
 import { SoundStore } from "./SoundStore.js";
 
 /**
- * Browser/PWA bridge for the shared Web Audio context.
+ * Legacy browser bridge for persistent Web Audio contexts.
  *
- * The active game owns source/music suspension. This bridge waits until the end
- * of a hide/pagehide event turn before suspending the AudioContext so application
- * lifecycle handlers can first capture music position and stop active sources.
- * On return it begins automatic recovery immediately and also arms the first real
- * pointer/keyboard gesture as a forced WebKit recovery opportunity.
+ * Explicit PWA playback-generation mode deliberately bypasses this class: losing
+ * page control returns the application to its menu, retires the old context, and
+ * requires New Game/Continue to create a fresh context from user activation.
  */
 export class BrowserAudioLifecycle {
     private static readonly instance = new BrowserAudioLifecycle();
@@ -21,7 +19,7 @@ export class BrowserAudioLifecycle {
     }
 
     public install(): void {
-        if (this.installed || typeof document === "undefined" || typeof window === "undefined") {
+        if (this.usesExplicitPlaybackGenerations() || this.installed || typeof document === "undefined" || typeof window === "undefined") {
             return;
         }
         this.installed = true;
@@ -34,6 +32,9 @@ export class BrowserAudioLifecycle {
 
     /** Observes the already-created active context without creating Web Audio. */
     public observeActiveContext(): void {
+        if (this.usesExplicitPlaybackGenerations()) {
+            return;
+        }
         this.install();
         const store = SoundStore.get();
         if (!store.soundWorks()) {
@@ -42,8 +43,11 @@ export class BrowserAudioLifecycle {
         this.remember(store.getAudioContext());
     }
 
-    /** Arms the next visible pointer/keyboard gesture as a forced Web Audio retry. */
+    /** Arms the next visible pointer/keyboard gesture as a forced legacy Web Audio retry. */
     public armRecovery(): void {
+        if (this.usesExplicitPlaybackGenerations()) {
+            return;
+        }
         this.install();
         if (SoundStore.get().soundWorks()) {
             this.recoveryArmed = true;
@@ -51,6 +55,9 @@ export class BrowserAudioLifecycle {
     }
 
     public async resume(): Promise<boolean> {
+        if (this.usesExplicitPlaybackGenerations()) {
+            return true;
+        }
         this.install();
         const store = SoundStore.get();
         if (!store.soundWorks()) {
@@ -62,14 +69,15 @@ export class BrowserAudioLifecycle {
         }
         const resumed = await AudioContextLifecycle.resume(context);
         if (resumed && store.musicOn()) {
-            // Re-run Music's logical resume hook without restarting an already
-            // healthy source. This recovers music left waiting on Web Audio.
             store.setMusicOn(true);
         }
         return resumed;
     }
 
     public async resumeFromUserGesture(): Promise<boolean> {
+        if (this.usesExplicitPlaybackGenerations()) {
+            return true;
+        }
         this.install();
         const store = SoundStore.get();
         if (!store.soundWorks()) {
@@ -86,9 +94,6 @@ export class BrowserAudioLifecycle {
         }
         this.recoveryArmed = false;
         if (store.musicOn()) {
-            // A WebKit context can claim to be running while its existing graph
-            // remains silent. Recreate the current music source at its preserved
-            // logical position after a successful real-user-gesture recovery.
             store.setMusicOn(false);
             store.setMusicOn(true);
         }
@@ -96,9 +101,16 @@ export class BrowserAudioLifecycle {
     }
 
     public async suspend(): Promise<boolean> {
+        if (this.usesExplicitPlaybackGenerations()) {
+            return true;
+        }
         const store = SoundStore.get();
         const context = store.soundWorks() ? this.remember(store.getAudioContext()) : this.getRememberedContext();
         return context === null ? true : AudioContextLifecycle.suspend(context);
+    }
+
+    private usesExplicitPlaybackGenerations(): boolean {
+        return SoundStore.get().isUsingExplicitPlaybackGenerations();
     }
 
     private remember(context: AudioContext | null): AudioContext | null {
@@ -137,30 +149,30 @@ export class BrowserAudioLifecycle {
     }
 
     private readonly handleContextStateChange = (): void => {
+        if (this.usesExplicitPlaybackGenerations()) {
+            return;
+        }
         const context = this.getRememberedContext();
         if (context === null || typeof document === "undefined" || document.visibilityState !== "visible") {
             return;
         }
         const store = SoundStore.get();
         if (!store.soundWorks()) {
-            // Cache-preserving teardown intentionally leaves an idle context but
-            // clears active-audio state. Do not arm recovery for that suspension.
             return;
         }
         if (String(context.state) !== "running") {
-            // WebKit can enter a non-standard `interrupted` state while visible.
-            // Preserve the next real activation event as a forced recovery chance.
             this.recoveryArmed = true;
             return;
         }
         if (store.musicOn()) {
-            // A context may return to running without the application's pending
-            // Music handle having rebuilt its source yet.
             store.setMusicOn(true);
         }
     };
 
     private readonly handleVisibilityChange = (): void => {
+        if (this.usesExplicitPlaybackGenerations()) {
+            return;
+        }
         if (document.visibilityState === "visible") {
             void this.resume();
             return;
@@ -170,30 +182,29 @@ export class BrowserAudioLifecycle {
     };
 
     private readonly handlePageHide = (): void => {
+        if (this.usesExplicitPlaybackGenerations()) {
+            return;
+        }
         this.armRecovery();
-        // pagehide is the fallback lifecycle signal. Do not require a matching
-        // visibilityState transition before honoring it.
         this.scheduleSuspendAfterApplicationHandlers(true);
     };
 
     private readonly handlePageShow = (): void => {
-        if (document.visibilityState === "visible") {
+        if (!this.usesExplicitPlaybackGenerations() && document.visibilityState === "visible") {
             void this.resume();
         }
     };
 
     private readonly handleRecoveryGesture = (): void => {
-        if (!this.recoveryArmed || document.visibilityState !== "visible") {
+        if (this.usesExplicitPlaybackGenerations() || !this.recoveryArmed || document.visibilityState !== "visible") {
             return;
         }
-        // Calling the async method starts AudioContext.resume() synchronously
-        // before its first await, preserving this DOM user-activation event.
         void this.resumeFromUserGesture();
     };
 
     private scheduleSuspendAfterApplicationHandlers(force: boolean): void {
         queueMicrotask(() => {
-            if (force || document.visibilityState !== "visible") {
+            if (!this.usesExplicitPlaybackGenerations() && (force || document.visibilityState !== "visible")) {
                 void this.suspend();
             }
         });
