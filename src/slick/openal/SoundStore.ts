@@ -216,11 +216,17 @@ export class SoundStore {
         this.soundsEnabled = false;
     }
 
-    /** Browser/PWA helper: fully resets playback while preserving decoded audio assets only. */
+    /**
+     * Browser/PWA helper: resets playback and flags while preserving decoded audio.
+     * Explicit PWA generation mode also retires the playback context; legacy mode
+     * retains its historical context-preserving behavior for compatibility.
+     */
     public destroyPreservingAudioCache(): void {
         this.stopAllPlayback();
-        this.playbackGeneration++;
-        this.retirePlaybackContext();
+        if (this.explicitPlaybackGenerationMode) {
+            this.playbackGeneration++;
+            this.retirePlaybackContext();
+        }
         this.inited = false;
         this.soundWorksFlag = false;
         this.musicEnabled = false;
