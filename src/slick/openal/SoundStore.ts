@@ -1,4 +1,3 @@
-import { AudioContextLifecycle } from "./AudioContextLifecycle.js";
 import { ResourceLoadException, ResourceLoader, type ResourceLoadOptions } from "../util/ResourceLoader.js";
 import { runSettledBatch } from "../util/BatchLoader.js";
 import { Log } from "../util/Log.js";
@@ -8,52 +7,42 @@ type WebAudioGlobal = typeof globalThis & {
     webkitOfflineAudioContext?: typeof OfflineAudioContext;
 };
 
-type AudioPosition = {
-    x: number;
-    y: number;
-    z: number;
-};
+type AudioPosition = { x: number; y: number; z: number };
+type DecoderPool = { context: BaseAudioContext | null; active: number; batches: number };
+type AudioLoad = { promise: Promise<AudioBuffer>; abandoned: boolean; abort: (() => void) | null; signal?: AbortSignal };
 
-export type AudioPreloadProgress = {
-    ref: string;
-    loaded: number;
-    total: number;
-};
-
+export type AudioPreloadProgress = { ref: string; loaded: number; total: number };
 export interface AudioPreloadOptions extends ResourceLoadOptions {
     readonly onProgress?: (progress: AudioPreloadProgress) => void;
     readonly concurrency?: number;
 }
 
-/**
- * Browser Web Audio playback handle.
- */
 export interface AudioPlaybackHandle {
-    /** Browser parity helper: logical OpenAL source slot, when this handle owns one. */
     readonly sourceId?: number;
-    /** Stops playback if the source has started. */
     stop(): void;
-    /** Pauses playback when supported by the handle. */
     pause?(): void;
-    /** Suspends audible playback for global music-off without changing public Music.pause() state. */
     suspend?(): void;
-    /** Resumes playback when supported by the handle. */
     resume?(): void;
-    /** Detaches context-bound playback while preserving logical music state. */
     detachPlaybackGeneration?(): void;
-    /** Rebuilds context-bound playback for a newly created generation. */
-    attachPlaybackGeneration?(): void;
-    /** Returns true while the source is active. */
+    attachPlaybackGeneration?(): void | Promise<void>;
     playing(): boolean;
-    /** Browser parity helper: returns the fixed per-source gain assigned when playback started. */
     getGain?(): number;
 }
 
-/**
- * Java Slick2D counterpart: org.newdawn.slick.openal.SoundStore.
- *
- * Browser Web Audio subsystem singleton and compatibility state holder.
- */
+export type PlaybackDiagnostics = Readonly<{
+    generation: number;
+    ownedContext: boolean;
+    committed: boolean;
+    silent: boolean;
+    effects: number;
+    musicHandles: number;
+    decodedBuffers: number;
+    contextsCreated: number;
+    contextsRetired: number;
+    closesSettled: number;
+}>;
+
+/** Page-lifetime assets/preferences plus one explicitly owned playback generation. */
 export class SoundStore {
     private static readonly instance = new SoundStore();
     private deferredLoading = false;
@@ -67,209 +56,271 @@ export class SoundStore {
     private context: AudioContext | null = null;
     private soundBus: GainNode | null = null;
     private musicBus: GainNode | null = null;
+    private outputGate: GainNode | null = null;
+    private contextStateListener: (() => void) | null = null;
     private buffers = new Map<string, Promise<AudioBuffer>>();
+    private decodedBuffers = new Map<string, AudioBuffer>();
+    private audioLoads = new Map<string, AudioLoad>();
+    private decoderPool: DecoderPool = { context: null, active: 0, batches: 0 };
     private activeHandles = new Set<AudioPlaybackHandle>();
     private musicHandles = new Set<AudioPlaybackHandle>();
     private soundSources: Array<AudioPlaybackHandle | null> = new Array<AudioPlaybackHandle | null>(64).fill(null);
     private explicitPlaybackGenerationMode = false;
     private playbackGeneration = 0;
-    private offlineDecoder: BaseAudioContext | null = null;
-    private activeOfflineDecodes = 0;
-    private offlineDecodeBatchDepth = 0;
+    private playbackCommitted = false;
+    private logicalPlaybackActive = false;
+    private interruptionHandler: ((reason: string, generation: number) => void) | null = null;
+    private contextsCreated = 0;
+    private contextsRetired = 0;
+    private closesSettled = 0;
 
-    /** Java Slick2D counterpart: SoundStore.get(). */
     public static get(): SoundStore {
         return SoundStore.instance;
     }
 
-    /** Enable PWA playback-generation ownership. This mode lasts for the page lifetime. */
     public enableExplicitPlaybackGenerations(): void {
-        if (this.explicitPlaybackGenerationMode) {
-            return;
-        }
-        this.explicitPlaybackGenerationMode = true;
-        if (this.context !== null) {
-            this.endPlaybackGeneration();
+        this.ensureLogicalInitialization();
+        if (!this.explicitPlaybackGenerationMode) {
+            this.explicitPlaybackGenerationMode = true;
+            if (this.context !== null) {
+                this.endPlaybackGeneration();
+            }
+            this.logicalPlaybackActive = false;
+            this.playbackCommitted = false;
         }
     }
 
-    /** Reports whether lazy persistent-context behavior has been disabled for a PWA. */
     public isUsingExplicitPlaybackGenerations(): boolean {
         return this.explicitPlaybackGenerationMode;
     }
 
-    /** Current generation token used to reject stale asynchronous playback work. */
     public getPlaybackGeneration(): number {
         return this.playbackGeneration;
     }
 
-    /** True only while the application owns a usable physical playback context. */
     public hasPlaybackGeneration(): boolean {
         return this.context !== null && String(this.context.state) !== "closed";
     }
 
-    /** Checks that asynchronous work still belongs to the current PWA playback generation. */
     public isPlaybackGenerationCurrent(generation: number, context?: AudioContext | null): boolean {
-        if (!this.explicitPlaybackGenerationMode || generation !== this.playbackGeneration || !this.hasPlaybackGeneration()) {
-            return false;
-        }
-        return context === undefined || context === this.context;
+        return generation === this.playbackGeneration && this.hasPlaybackGeneration() && (context === undefined || context === this.context);
     }
 
-    /**
-     * Creates a brand-new playback generation. AudioContext construction and the
-     * native resume() call happen synchronously before this method returns.
-     */
-    public beginPlaybackGenerationFromUserGesture(): Promise<boolean> {
-        this.enableExplicitPlaybackGenerations();
-        if (this.context !== null) {
+    public isPlaybackCommitted(): boolean {
+        return !this.explicitPlaybackGenerationMode || this.playbackCommitted;
+    }
+
+    public isLogicalPlaybackActive(): boolean {
+        return !this.explicitPlaybackGenerationMode || this.logicalPlaybackActive;
+    }
+
+    public isSilentPlaybackActive(): boolean {
+        return this.explicitPlaybackGenerationMode && this.logicalPlaybackActive && this.playbackCommitted && this.context === null;
+    }
+
+    public setPlaybackInterruptionHandler(handler: ((reason: string, generation: number) => void) | null): void {
+        this.interruptionHandler = handler;
+    }
+
+    public reportPlaybackInterruption(reason: string): void {
+        if (!this.explicitPlaybackGenerationMode || !this.logicalPlaybackActive || !this.playbackCommitted) {
+            return;
+        }
+        try {
+            this.interruptionHandler?.(reason, this.playbackGeneration);
+        } catch (error) {
+            Log.error("Playback interruption handler failed", error);
             this.endPlaybackGeneration();
         }
+    }
 
-        // Logical defaults must survive a first hardware-context failure.
-        if (!this.inited) {
-            this.inited = true;
-            this.musicEnabled = true;
-            this.soundsEnabled = true;
-        }
-
+    /** Constructor and native resume execute before returning to the activation handler. */
+    public beginPlaybackGenerationFromUserGesture(deferPlayback = false): Promise<boolean> {
+        this.enableExplicitPlaybackGenerations();
+        this.endPlaybackGeneration();
+        this.ensureLogicalInitialization();
+        const generation = ++this.playbackGeneration;
         const Ctor = globalThis.AudioContext ?? (globalThis as WebAudioGlobal).webkitAudioContext;
         if (!Ctor) {
-            this.soundWorksFlag = false;
             return Promise.resolve(false);
         }
-
         let context: AudioContext | null = null;
         let soundBus: GainNode | null = null;
         let musicBus: GainNode | null = null;
+        let outputGate: GainNode | null = null;
         try {
             context = new Ctor();
+            this.contextsCreated++;
+            outputGate = context.createGain();
+            outputGate.gain.value = 0;
             soundBus = context.createGain();
             musicBus = context.createGain();
             soundBus.gain.value = 1;
             musicBus.gain.value = this.musicVolume;
-            soundBus.connect(context.destination);
-            musicBus.connect(context.destination);
+            soundBus.connect(outputGate);
+            musicBus.connect(outputGate);
+            outputGate.connect(context.destination);
         } catch {
-            SoundStore.cleanupBus(soundBus);
-            SoundStore.cleanupBus(musicBus);
-            SoundStore.closeContext(context);
-            this.soundWorksFlag = false;
+            SoundStore.disconnect(soundBus);
+            SoundStore.disconnect(musicBus);
+            SoundStore.disconnect(outputGate);
+            this.closeContext(context);
             return Promise.resolve(false);
         }
-
-        const generation = ++this.playbackGeneration;
         this.context = context;
         this.soundBus = soundBus;
         this.musicBus = musicBus;
-        this.soundWorksFlag = false;
-        this.resetSoundSources();
-
-        let resumeOperation: Promise<void>;
+        this.outputGate = outputGate;
+        const ownedContext = context;
+        this.contextStateListener = () => {
+            if (this.playbackGeneration === generation && this.context === ownedContext && String(ownedContext.state) !== "running") {
+                this.reportPlaybackInterruption("audio-context-interrupted");
+            }
+        };
+        context.addEventListener?.("statechange", this.contextStateListener);
+        let activation: Promise<void>;
         try {
-            resumeOperation = Promise.resolve(context.resume());
-        } catch {
-            resumeOperation = Promise.reject(new Error("AudioContext.resume() failed synchronously."));
+            activation = Promise.resolve(context.resume());
+        } catch (error) {
+            activation = Promise.reject(error);
         }
-
-        return resumeOperation.then(
-            () => this.completePlaybackGenerationStart(generation, context),
+        return activation.then(
+            async () => {
+                if (!this.isPlaybackGenerationCurrent(generation, ownedContext)) {
+                    return false;
+                }
+                if (String(ownedContext.state) !== "running") {
+                    this.retirePlaybackContext();
+                    return false;
+                }
+                this.soundWorksFlag = true;
+                return deferPlayback ? true : this.commitPlaybackGeneration(generation);
+            },
             () => {
-                if (this.isGenerationContext(generation, context)) {
-                    this.invalidateAndRetirePlaybackContext();
+                if (this.context === ownedContext && this.playbackGeneration === generation) {
+                    this.retirePlaybackContext();
                 }
                 return false;
             }
         );
     }
 
-    /**
-     * Retires physical Web Audio ownership while preserving decoded buffers and
-     * logical music state. SFX are discarded and cannot attach to a later generation.
-     */
-    public endPlaybackGeneration(): void {
-        this.enableExplicitPlaybackGenerations();
-        for (const handle of Array.from(this.musicHandles)) {
-            if (handle.playing()) {
-                handle.detachPlaybackGeneration?.();
-            }
+    /** Accept a prepared generation, attach logical music, and then open its output gate. */
+    public async commitPlaybackGeneration(generation: number): Promise<boolean> {
+        if (generation !== this.playbackGeneration) {
+            return false;
         }
-        this.stopSoundEffects();
-        this.playbackGeneration++;
-        this.retirePlaybackContext();
-        this.resetSoundSources();
+        this.ensureLogicalInitialization();
+        this.playbackCommitted = true;
+        this.logicalPlaybackActive = true;
+        if (this.context === null) {
+            return false; // Explicit silent gameplay; Music.poll owns the logical clock.
+        }
+        const context = this.context;
+        if (String(context.state) !== "running") {
+            this.detachMusic();
+            this.retirePlaybackContext();
+            return false;
+        }
+        const results = await Promise.allSettled(
+            Array.from(this.musicHandles, (handle) => {
+                try {
+                    return Promise.resolve(handle.attachPlaybackGeneration?.());
+                } catch (error) {
+                    return Promise.reject(error);
+                }
+            })
+        );
+        if (generation !== this.playbackGeneration || context !== this.context) {
+            return false;
+        }
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure !== undefined || String(context.state) !== "running") {
+            this.detachMusic();
+            this.stopSoundEffects();
+            this.retirePlaybackContext();
+            if (failure?.status === "rejected") {
+                Log.error("Unable to attach playback; continuing with the logical silent clock", failure.reason);
+            }
+            return false;
+        }
+        if (this.outputGate !== null) {
+            this.outputGate.gain.value = 1;
+        }
+        return true;
     }
 
-    /** Java Slick2D counterpart: SoundStore.clear(). */
+    /** Conditional retirement lets stale async owners dispose only their own generation. */
+    public endPlaybackGeneration(expectedGeneration?: number): void {
+        if (expectedGeneration !== undefined && expectedGeneration !== this.playbackGeneration) {
+            return;
+        }
+        this.logicalPlaybackActive = false;
+        this.playbackCommitted = false;
+        try {
+            this.detachMusic();
+            this.stopSoundEffects();
+        } finally {
+            this.playbackGeneration++;
+            this.retirePlaybackContext();
+            this.resetSoundSources();
+        }
+    }
+
+    private detachMusic(): void {
+        for (const handle of Array.from(this.musicHandles)) {
+            try {
+                handle.detachPlaybackGeneration?.();
+            } catch (error) {
+                Log.error("Unable to detach a music graph", error);
+            }
+        }
+    }
+
     public clear(): void {
         this.stopAllPlayback();
         this.clearDecodedBuffers();
     }
 
-    /** Browser parity helper: resets the Web Audio/OpenAL lifecycle for AL.destroy(). */
     public destroy(): void {
+        this.endPlaybackGeneration();
         this.stopAllPlayback();
         this.clearDecodedBuffers();
-        this.playbackGeneration++;
-        this.retirePlaybackContext();
-        this.offlineDecoder = null;
-        this.activeOfflineDecodes = 0;
-        this.offlineDecodeBatchDepth = 0;
+        this.decoderPool = { context: null, active: 0, batches: 0 };
         this.inited = false;
-        this.soundWorksFlag = false;
         this.musicEnabled = false;
         this.soundsEnabled = false;
     }
 
-    /**
-     * Browser/PWA helper: resets playback and flags while preserving decoded audio.
-     * Explicit PWA generation mode also retires the playback context; legacy mode
-     * retains its historical context-preserving behavior for compatibility.
-     */
     public destroyPreservingAudioCache(): void {
+        this.endPlaybackGeneration();
         this.stopAllPlayback();
-        if (this.explicitPlaybackGenerationMode) {
-            this.playbackGeneration++;
-            this.retirePlaybackContext();
-        }
-        this.inited = false;
-        this.soundWorksFlag = false;
-        this.musicEnabled = false;
-        this.soundsEnabled = false;
+        // User preferences and decoded buffers belong to the page, not the retired game.
     }
 
-    /** Java Slick2D counterpart: SoundStore.disable(). */
     public disable(): void {
+        this.ensureLogicalInitialization();
         this.musicEnabled = false;
         this.soundsEnabled = false;
-        this.soundWorksFlag = false;
-        this.inited = true;
+        this.endPlaybackGeneration();
         this.clear();
     }
 
-    /** Java Slick2D counterpart: SoundStore.setDeferredLoading(boolean). */
     public setDeferredLoading(deferred: boolean): void {
         this.deferredLoading = deferred;
     }
 
-    /** Java Slick2D counterpart: SoundStore.isDeferredLoading(). */
     public isDeferredLoading(): boolean {
         return this.deferredLoading;
     }
 
-    /** Java Slick2D counterpart: SoundStore.setMusicOn(boolean). */
     public setMusicOn(music: boolean): void {
-        if (!this.soundWorksFlag && !(this.explicitPlaybackGenerationMode && this.inited)) {
-            return;
-        }
+        this.ensureLogicalInitialization();
         this.musicEnabled = music;
-        for (const handle of this.musicHandles) {
-            if (!handle.playing()) {
-                continue;
-            }
+        for (const handle of Array.from(this.musicHandles)) {
             if (music) {
                 handle.resume?.();
-            } else if (handle.suspend) {
+            } else if (handle.suspend !== undefined) {
                 handle.suspend();
             } else {
                 handle.pause?.();
@@ -277,565 +328,428 @@ export class SoundStore {
         }
     }
 
-    /** Java Slick2D counterpart: SoundStore.isMusicOn(). */
     public isMusicOn(): boolean {
         return this.musicEnabled;
     }
 
-    /** Java Slick2D counterpart: SoundStore.setMusicVolume(float). */
     public setMusicVolume(volume: number): void {
-        this.musicVolume = Math.max(0, Math.min(1, volume));
-        if (this.musicBus) {
+        this.musicVolume = Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 0;
+        if (this.musicBus !== null) {
             this.musicBus.gain.value = this.musicVolume;
         }
     }
 
-    /** Java Slick2D counterpart: SoundStore.getMusicVolume(). */
     public getMusicVolume(): number {
         return this.musicVolume;
     }
 
-    /** Java Slick2D counterpart: SoundStore.setSoundVolume(float). */
     public setSoundVolume(volume: number): void {
-        this.soundVolume = Math.max(0, volume);
+        this.soundVolume = Number.isFinite(volume) ? Math.max(0, volume) : 0;
     }
 
-    /** Java Slick2D counterpart: SoundStore.getSoundVolume(). */
     public getSoundVolume(): number {
         return this.soundVolume;
     }
 
-    /** Java Slick2D counterpart: SoundStore.setSoundsOn(boolean). */
     public setSoundsOn(sounds: boolean): void {
-        if (!this.soundWorksFlag && !(this.explicitPlaybackGenerationMode && this.inited)) {
-            return;
-        }
+        this.ensureLogicalInitialization();
         this.soundsEnabled = sounds;
     }
 
-    /** Java Slick2D counterpart: SoundStore.soundsOn(). */
     public soundsOn(): boolean {
         return this.soundsEnabled;
     }
 
-    /** Java Slick2D counterpart: SoundStore.musicOn(). */
     public musicOn(): boolean {
         return this.musicEnabled;
     }
 
-    /** Java Slick2D counterpart: SoundStore.soundWorks(). */
     public soundWorks(): boolean {
         return this.soundWorksFlag;
     }
 
-    /** Java Slick2D counterpart: SoundStore.init(). */
     public init(): void {
-        if (this.explicitPlaybackGenerationMode) {
-            if (this.context !== null && String(this.context.state) !== "closed") {
-                this.inited = true;
-                this.soundWorksFlag = String(this.context.state) === "running";
-            } else {
-                this.soundWorksFlag = false;
-            }
-            return;
+        this.ensureLogicalInitialization();
+        if (!this.explicitPlaybackGenerationMode && this.context === null) {
+            this.createOrdinaryContainerContext();
         }
-        if (this.inited) {
-            return;
-        }
-        const context = this.getAudioContext();
-        if (context) {
-            this.inited = true;
-            this.soundWorksFlag = true;
-            this.soundsEnabled = true;
-            this.musicEnabled = true;
-            this.resetSoundSources();
-        } else {
-            this.soundWorksFlag = false;
-            this.soundsEnabled = false;
-            this.musicEnabled = false;
-        }
+        this.soundWorksFlag = this.context !== null && String(this.context.state) === "running";
     }
 
-    /** Java Slick2D counterpart: SoundStore.poll(int). */
     public poll(_delta: number): void {}
 
-    /** Java Slick2D counterpart: SoundStore.isMusicPlaying(). */
     public isMusicPlaying(): boolean {
-        for (const handle of this.musicHandles) {
-            if (handle.playing()) {
-                return true;
-            }
-        }
-        return false;
+        return Array.from(this.musicHandles).some((handle) => handle.playing());
     }
 
-    /** Java Slick2D counterpart: SoundStore.stopSoundEffect(int). */
     public stopSoundEffect(id: number): void {
-        const sourceId = Math.trunc(id);
-        this.soundSources[sourceId]?.stop();
+        this.soundSources[Math.trunc(id)]?.stop();
     }
 
-    /** Browser/PWA helper: stops active sound effects without clearing music or decoded buffers. */
     public stopSoundEffects(): void {
         for (const handle of Array.from(this.activeHandles)) {
             if (!this.musicHandles.has(handle)) {
-                handle.stop();
+                try {
+                    handle.stop();
+                } catch (error) {
+                    this.releaseEffect(handle);
+                    Log.error("Unable to stop a sound-effect handle", error);
+                }
             }
         }
     }
 
-    /** Browser/PWA helper: stops active music and sound effects without clearing decoded buffers. */
     public stopAllPlayback(): void {
         for (const handle of Array.from(this.activeHandles)) {
-            handle.stop();
+            try {
+                handle.stop();
+            } catch (error) {
+                Log.error("Unable to stop a playback handle", error);
+            }
         }
         this.resetPlaybackState();
     }
 
-    /** Browser/PWA helper: clears playback bookkeeping without clearing decoded buffers. */
     public resetPlaybackState(): void {
         this.activeHandles.clear();
         this.musicHandles.clear();
         this.resetSoundSources();
     }
 
-    /** Browser/PWA helper: clears decoded Web Audio buffers without changing the AudioContext. */
     public clearDecodedBuffers(): void {
+        for (const load of this.audioLoads.values()) {
+            load.abandoned = true;
+            if (load.abort !== null) {
+                load.signal?.removeEventListener("abort", load.abort);
+            }
+        }
+        this.audioLoads.clear();
         this.buffers.clear();
+        this.decodedBuffers.clear();
     }
 
-    /** Java Slick2D counterpart: SoundStore.getSourceCount(). */
+    public getDecodedAudioBuffer(ref: string): AudioBuffer | null {
+        return this.decodedBuffers.get(ref) ?? null;
+    }
+
     public getSourceCount(): number {
         return this.maxSources;
     }
 
-    /** Java Slick2D counterpart: SoundStore.setMaxSources(int). */
     public setMaxSources(max: number): void {
         if (!Number.isSafeInteger(max) || max <= 0) {
             throw new RangeError("Maximum source count must be a positive safe integer");
         }
-        const normalized = max;
-        if (normalized === this.maxSources) {
+        if (max === this.maxSources) {
             return;
         }
-        const firstUnavailableEffectSource = Math.max(1, normalized - 1);
-        for (let index = firstUnavailableEffectSource; index < this.soundSources.length; index++) {
-            this.soundSources[index]?.stop();
+        const limit = Math.max(1, max - 1);
+        for (let i = limit; i < this.soundSources.length; i++) {
+            this.soundSources[i]?.stop();
         }
-        const nextSources = new Array<AudioPlaybackHandle | null>(normalized).fill(null);
-        const limit = Math.min(firstUnavailableEffectSource, this.soundSources.length);
-        for (let index = 1; index < limit; index++) {
-            const handle = this.soundSources[index];
-            if (handle?.playing()) {
-                nextSources[index] = handle;
-            }
+        const sources = new Array<AudioPlaybackHandle | null>(max).fill(null);
+        for (let i = 1; i < Math.min(limit, this.soundSources.length); i++) {
+            sources[i] = this.soundSources[i] ?? null;
         }
-        this.maxSources = normalized;
-        this.soundSources = nextSources;
+        this.maxSources = max;
+        this.soundSources = sources;
     }
 
-    /** Browser parity helper: returns the active AudioContext; PWA generation mode never creates one lazily. */
     public getAudioContext(): AudioContext | null {
-        if (this.context) {
-            if (String(this.context.state) !== "closed") {
-                return this.context;
-            }
-            this.context = null;
-            this.soundBus = null;
-            this.musicBus = null;
-            this.soundWorksFlag = false;
+        if (!this.explicitPlaybackGenerationMode && this.context === null) {
+            this.init();
         }
-        if (this.explicitPlaybackGenerationMode) {
-            return null;
-        }
-        return this.createLegacyPlaybackContext();
+        return this.hasPlaybackGeneration() ? this.context : null;
     }
 
-    /** Browser parity helper: resumes legacy Web Audio or starts a fresh explicit PWA generation. */
-    public async unlock(): Promise<boolean> {
-        if (this.explicitPlaybackGenerationMode) {
-            return this.beginPlaybackGenerationFromUserGesture();
-        }
-        const context = this.getAudioContext();
-        if (!context) {
-            this.soundWorksFlag = false;
-            this.soundsEnabled = false;
-            this.musicEnabled = false;
-            return false;
-        }
-        const shouldInitializeAudioState = !this.soundWorksFlag;
-        this.inited = true;
-        this.soundWorksFlag = true;
-        if (shouldInitializeAudioState) {
-            this.soundsEnabled = true;
-            this.musicEnabled = true;
-            this.resetSoundSources();
-        }
-        const resumed = await AudioContextLifecycle.resumeFromUserGesture(context);
-        if (!resumed) {
-            Log.warn("Unable to unlock Web Audio");
-        }
-        return resumed;
+    /** Explicit activation only. Ordinary playback never resumes an old context implicitly. */
+    public unlock(): Promise<boolean> {
+        return this.beginPlaybackGenerationFromUserGesture();
     }
 
-    /** Browser parity helper: returns the global sound-effect gain bus. */
     public getSoundBus(): GainNode | null {
-        if (this.explicitPlaybackGenerationMode) {
-            return this.soundBus;
+        if (!this.explicitPlaybackGenerationMode) {
+            this.init();
         }
-        this.init();
-        return this.soundBus;
+        return this.hasPlaybackGeneration() ? this.soundBus : null;
     }
 
-    /** Browser parity helper: returns the global music gain bus. */
     public getMusicBus(): GainNode | null {
-        if (this.explicitPlaybackGenerationMode) {
-            return this.musicBus;
+        if (!this.explicitPlaybackGenerationMode) {
+            this.init();
         }
-        this.init();
-        return this.musicBus;
+        return this.hasPlaybackGeneration() ? this.musicBus : null;
     }
 
-    /** Browser parity helper: loads and decodes an audio buffer. */
     public loadAudioBuffer(ref: string, options: ResourceLoadOptions = {}): Promise<AudioBuffer> {
+        try {
+            SoundStore.throwIfAborted(options.signal, ref);
+        } catch (error) {
+            return Promise.reject(error);
+        }
         const existing = this.buffers.get(ref);
-        if (existing) {
+        if (existing !== undefined) {
             return SoundStore.waitForAudioPromise(existing, options.signal, ref);
         }
-        const operation = this.explicitPlaybackGenerationMode ? this.loadAudioBufferOffline(ref, options) : this.loadAudioBufferLegacy(ref, options);
-        const promise = operation.catch((error) => {
-            if (this.buffers.get(ref) === promise) {
-                this.buffers.delete(ref);
+        const load: AudioLoad = { promise: Promise.resolve(null as unknown as AudioBuffer), abandoned: false, abort: null, signal: options.signal };
+        const pool = this.decoderPool;
+        const forget = (): void => {
+            load.abandoned = true;
+            if (this.audioLoads.get(ref) === load) {
+                this.audioLoads.delete(ref);
+                if (this.buffers.get(ref) === load.promise) {
+                    this.buffers.delete(ref);
+                }
             }
-            throw error;
-        });
-        this.buffers.set(ref, promise);
-        return SoundStore.waitForAudioPromise(promise, options.signal, ref);
+        };
+        load.abort = forget;
+        const operation = this.explicitPlaybackGenerationMode
+            ? this.loadAudioBufferOffline(ref, options, pool)
+            : this.loadAudioBufferForOrdinaryContainer(ref, options);
+        load.promise = operation
+            .then((buffer) => {
+                if (load.abandoned) {
+                    throw SoundStore.abortException(ref, options.signal?.reason);
+                }
+                if (this.audioLoads.get(ref) === load) {
+                    this.decodedBuffers.set(ref, buffer);
+                }
+                return buffer;
+            })
+            .catch((error) => {
+                if (this.buffers.get(ref) === load.promise) {
+                    this.buffers.delete(ref);
+                }
+                throw error;
+            })
+            .finally(() => {
+                if (load.abort !== null) {
+                    options.signal?.removeEventListener("abort", load.abort);
+                }
+                if (this.audioLoads.get(ref) === load) {
+                    this.audioLoads.delete(ref);
+                }
+            });
+        this.audioLoads.set(ref, load);
+        this.buffers.set(ref, load.promise);
+        options.signal?.addEventListener("abort", forget, { once: true });
+        if (options.signal?.aborted) {
+            forget();
+        }
+        void load.promise.catch(() => undefined);
+        return SoundStore.waitForAudioPromise(load.promise, options.signal, ref);
     }
 
-    /** Browser parity helper: queues audio decode work into ResourceLoader.waitForAll(). */
     public preloadAudioBuffer(ref: string, options: ResourceLoadOptions = {}): Promise<void> {
-        const tracked = ResourceLoader.track(
-            this.loadAudioBuffer(ref, options).then(() => undefined),
-            ref
-        );
-        void tracked.catch(() => undefined);
-        return tracked;
+        const result = ResourceLoader.track(this.loadAudioBuffer(ref, options).then(() => undefined), ref);
+        void result.catch(() => undefined);
+        return result;
     }
 
     public preloadAudioBuffers(refs: Iterable<string>, onProgress?: (progress: AudioPreloadProgress) => void): Promise<void>;
     public preloadAudioBuffers(refs: Iterable<string>, options?: AudioPreloadOptions): Promise<void>;
-    /** Browser/PWA helper: queues and tracks a deduplicated batch of audio decodes. */
-    public async preloadAudioBuffers(
-        refs: Iterable<string>,
-        onProgressOrOptions?: ((progress: AudioPreloadProgress) => void) | AudioPreloadOptions
-    ): Promise<void> {
+    public async preloadAudioBuffers(refs: Iterable<string>, onProgressOrOptions?: ((progress: AudioPreloadProgress) => void) | AudioPreloadOptions): Promise<void> {
         const options = typeof onProgressOrOptions === "function" ? { onProgress: onProgressOrOptions } : (onProgressOrOptions ?? {});
         SoundStore.throwIfAborted(options.signal, "audio manifest");
-        const uniqueRefs = Array.from(new Set(refs));
-        const total = uniqueRefs.length;
+        const unique = Array.from(new Set(refs));
+        const pool = this.decoderPool;
+        pool.batches++;
         let loaded = 0;
-        if (total === 0) {
-            return;
-        }
-        const holdOfflineDecoder = this.explicitPlaybackGenerationMode;
-        if (holdOfflineDecoder) {
-            this.offlineDecodeBatchDepth++;
-        }
         try {
-            const settled = await runSettledBatch(uniqueRefs, options.concurrency, async (ref) => {
+            const results = await runSettledBatch(unique, options.concurrency, async (ref) => {
                 await this.preloadAudioBuffer(ref, options);
-                loaded++;
-                options.onProgress?.({ ref, loaded, total });
+                options.onProgress?.({ ref, loaded: ++loaded, total: unique.length });
             });
-            const failure = settled.find((entry): entry is PromiseRejectedResult => entry.status === "rejected");
-            if (failure) {
+            const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+            if (failure !== undefined) {
                 throw failure.reason;
             }
         } finally {
-            if (holdOfflineDecoder) {
-                this.offlineDecodeBatchDepth = Math.max(0, this.offlineDecodeBatchDepth - 1);
-                this.releaseOfflineDecoderIfIdle();
-            }
+            pool.batches--;
+            SoundStore.releaseDecoderIfIdle(pool);
         }
     }
 
-    /** Browser parity helper: plays a decoded sound effect through Web Audio. */
     public playSound(ref: string, pitch: number, volume: number, loop: boolean, onEnded?: () => void, position?: AudioPosition): AudioPlaybackHandle | null {
         this.init();
-        if (!this.soundWorksFlag || !this.soundsEnabled) {
-            return null;
-        }
         const context = this.getAudioContext();
         const bus = this.getSoundBus();
-        if (!context || !bus) {
+        if (!this.soundWorksFlag || !this.soundsEnabled || !this.isPlaybackCommitted() || context === null || bus === null) {
             return null;
         }
-        if (this.explicitPlaybackGenerationMode && String(context.state) !== "running") {
-            return null;
-        }
-        const playbackGeneration = this.playbackGeneration;
         const sourceId = this.findFreeSoundSource();
         if (sourceId < 0) {
             return null;
         }
-        let source: AudioBufferSourceNode | null = null;
-        let gain: GainNode | null = null;
-        let sourceGain = 0;
-        let playing = true;
-        let stopped = false;
-        let requestedStop = false;
-        const cleanupGraph = (targetSource: AudioBufferSourceNode | null, targetGain: GainNode | null, stopSource: boolean): void => {
-            if (targetSource) {
-                targetSource.onended = null;
-                if (stopSource) {
-                    try {
-                        targetSource.stop();
-                    } catch {
-                        // Ignore duplicate stop calls; Web Audio throws when a source is already stopped.
-                    }
-                }
-                try {
-                    targetSource.disconnect();
-                } catch {
-                    // A source can already be disconnected during repeated teardown.
-                }
-            }
-            try {
-                targetGain?.disconnect();
-            } catch {
-                // A gain node can already be disconnected during repeated teardown.
-            }
-        };
-        const handle: AudioPlaybackHandle = {
-            sourceId,
-            stop: () => {
-                stopped = true;
-                requestedStop = true;
-                const stoppedSource = source;
-                const stoppedGain = gain;
-                source = null;
-                gain = null;
-                cleanupGraph(stoppedSource, stoppedGain, true);
-                playing = false;
-                this.activeHandles.delete(handle);
-                this.musicHandles.delete(handle);
-                this.releaseSoundSource(sourceId, handle);
-            },
-            playing: () => playing,
-            getGain: () => sourceGain
-        };
+        const handle = new EffectPlayback(this, sourceId, this.playbackGeneration, context, bus, pitch, volume * this.soundVolume, loop, position, onEnded);
         this.activeHandles.add(handle);
         this.soundSources[sourceId] = handle;
-        void this.loadAudioBuffer(ref)
-            .then(async (buffer) => {
-                if (stopped) {
-                    return;
-                }
-                if (this.explicitPlaybackGenerationMode) {
-                    if (!this.isPlaybackGenerationCurrent(playbackGeneration, context) || String(context.state) !== "running" || !this.soundsEnabled) {
-                        handle.stop();
-                        return;
-                    }
-                } else if (!(await AudioContextLifecycle.resume(context)) || stopped || !this.soundsEnabled) {
-                    if (!stopped) {
-                        handle.stop();
-                    }
-                    return;
-                }
-                if (stopped || (this.explicitPlaybackGenerationMode && !this.isPlaybackGenerationCurrent(playbackGeneration, context))) {
-                    return;
-                }
-                gain = context.createGain();
-                source = context.createBufferSource();
-                source.buffer = buffer;
-                source.loop = loop;
-                source.playbackRate.value = Math.max(0.25, Math.min(4, pitch));
-                sourceGain = Math.max(0, volume * this.soundVolume);
-                gain.gain.value = sourceGain;
-                source.connect(gain);
-                this.connectPositionedSource(context, gain, bus, position);
-                const startedSource = source;
-                const startedGain = gain;
-                source.onended = () => {
-                    cleanupGraph(startedSource, startedGain, false);
-                    if (source !== startedSource) {
-                        return;
-                    }
-                    const wasLooping = startedSource.loop;
-                    source = null;
-                    gain = null;
-                    if (requestedStop || wasLooping) {
-                        return;
-                    }
-                    playing = false;
-                    this.activeHandles.delete(handle);
-                    this.musicHandles.delete(handle);
-                    this.releaseSoundSource(sourceId, handle);
-                    onEnded?.();
-                };
-                source.start();
-            })
-            .catch((error) => {
-                const failedSource = source;
-                const failedGain = gain;
-                source = null;
-                gain = null;
-                cleanupGraph(failedSource, failedGain, true);
-                playing = false;
-                this.activeHandles.delete(handle);
-                this.musicHandles.delete(handle);
-                this.releaseSoundSource(sourceId, handle);
-                onEnded?.();
-                Log.error(`Failed to play sound: ${ref}`, error);
-            });
+        void this.loadAudioBuffer(ref).then(
+            (buffer) => handle.start(buffer),
+            (error) => handle.fail(error, ref)
+        );
         return handle;
     }
 
-    /** Browser parity helper: tracks an externally-created Web Audio handle. */
     public track(handle: AudioPlaybackHandle): void {
         this.activeHandles.add(handle);
         this.musicHandles.add(handle);
     }
 
-    /** Browser parity helper: stops tracking an externally-created Web Audio handle. */
     public untrack(handle: AudioPlaybackHandle): void {
         this.activeHandles.delete(handle);
         this.musicHandles.delete(handle);
     }
 
-    private completePlaybackGenerationStart(generation: number, context: AudioContext): boolean {
-        if (!this.isGenerationContext(generation, context) || String(context.state) !== "running") {
-            if (this.isGenerationContext(generation, context)) {
-                this.invalidateAndRetirePlaybackContext();
-            }
-            return false;
+    /** Internal SFX owner hook; source slots are released only by their current handle. */
+    public releaseEffect(handle: AudioPlaybackHandle): void {
+        this.activeHandles.delete(handle);
+        const id = handle.sourceId;
+        if (id !== undefined && this.soundSources[id] === handle) {
+            this.soundSources[id] = null;
         }
-        this.soundWorksFlag = true;
-        for (const handle of Array.from(this.musicHandles)) {
-            if (handle.playing()) {
-                handle.attachPlaybackGeneration?.();
-            }
-        }
-        return true;
     }
 
-    private isGenerationContext(generation: number, context: AudioContext): boolean {
-        return generation === this.playbackGeneration && this.context === context;
+    public getPlaybackDiagnostics(): PlaybackDiagnostics {
+        return {
+            generation: this.playbackGeneration,
+            ownedContext: this.hasPlaybackGeneration(),
+            committed: this.playbackCommitted,
+            silent: this.isSilentPlaybackActive(),
+            effects: this.activeHandles.size - this.musicHandles.size,
+            musicHandles: this.musicHandles.size,
+            decodedBuffers: this.decodedBuffers.size,
+            contextsCreated: this.contextsCreated,
+            contextsRetired: this.contextsRetired,
+            closesSettled: this.closesSettled
+        };
     }
 
-    private invalidateAndRetirePlaybackContext(): void {
-        this.playbackGeneration++;
-        this.retirePlaybackContext();
-        this.resetSoundSources();
+    private ensureLogicalInitialization(): void {
+        if (!this.inited) {
+            this.inited = true;
+            this.musicEnabled = true;
+            this.soundsEnabled = true;
+        }
     }
 
     private retirePlaybackContext(): void {
         const context = this.context;
-        const soundBus = this.soundBus;
-        const musicBus = this.musicBus;
+        const listener = this.contextStateListener;
+        const nodes = [this.soundBus, this.musicBus, this.outputGate];
         this.context = null;
         this.soundBus = null;
         this.musicBus = null;
+        this.outputGate = null;
+        this.contextStateListener = null;
         this.soundWorksFlag = false;
-        SoundStore.cleanupBus(soundBus);
-        SoundStore.cleanupBus(musicBus);
-        SoundStore.closeContext(context);
+        if (listener !== null) {
+            try {
+                context?.removeEventListener?.("statechange", listener);
+            } catch {
+                // Native listener cleanup cannot retain application ownership.
+            }
+        }
+        for (const node of nodes) {
+            SoundStore.disconnect(node);
+        }
+        this.closeContext(context);
     }
 
-    private createLegacyPlaybackContext(): AudioContext | null {
+    private closeContext(context: AudioContext | null): void {
+        if (context === null) {
+            return;
+        }
+        this.contextsRetired++;
+        const settled = (): void => {
+            this.closesSettled++;
+        };
+        try {
+            void Promise.resolve(context.close()).then(settled, settled);
+        } catch {
+            settled();
+        }
+    }
+
+    private createOrdinaryContainerContext(): void {
         const Ctor = globalThis.AudioContext ?? (globalThis as WebAudioGlobal).webkitAudioContext;
         if (!Ctor) {
-            return null;
+            return;
         }
-        let context: AudioContext | null = null;
-        let soundBus: GainNode | null = null;
-        let musicBus: GainNode | null = null;
         try {
-            context = new Ctor();
-            soundBus = context.createGain();
-            musicBus = context.createGain();
-            soundBus.gain.value = 1;
-            musicBus.gain.value = this.musicVolume;
-            soundBus.connect(context.destination);
-            musicBus.connect(context.destination);
+            this.context = new Ctor();
+            this.contextsCreated++;
+            this.soundBus = this.context.createGain();
+            this.musicBus = this.context.createGain();
+            this.soundBus.gain.value = 1;
+            this.musicBus.gain.value = this.musicVolume;
+            this.soundBus.connect(this.context.destination);
+            this.musicBus.connect(this.context.destination);
+            this.playbackGeneration++;
         } catch {
-            SoundStore.cleanupBus(soundBus);
-            SoundStore.cleanupBus(musicBus);
-            SoundStore.closeContext(context);
-            return null;
+            this.retirePlaybackContext();
         }
-        this.context = context;
-        this.soundBus = soundBus;
-        this.musicBus = musicBus;
-        return context;
     }
 
-    private loadAudioBufferLegacy(ref: string, options: ResourceLoadOptions): Promise<AudioBuffer> {
+    private async loadAudioBufferForOrdinaryContainer(ref: string, options: ResourceLoadOptions): Promise<AudioBuffer> {
         this.init();
         const context = this.getAudioContext();
-        if (!context || !this.soundWorksFlag) {
-            return Promise.reject(this.audioDecodeUnavailable(ref));
+        if (context === null) {
+            throw this.audioDecodeUnavailable(ref, "Web Audio is not available");
         }
-        return (async (): Promise<AudioBuffer> => {
-            const bytes = await ResourceLoader.loadResource(ref, options);
-            SoundStore.throwIfAborted(options.signal, ref);
-            try {
-                const buffer = await context.decodeAudioData(bytes);
-                SoundStore.throwIfAborted(options.signal, ref);
-                return buffer;
-            } catch (error) {
-                throw this.normalizeAudioLoadError(ref, options.signal, error);
-            }
-        })();
+        const bytes = await ResourceLoader.loadResource(ref, options);
+        SoundStore.throwIfAborted(options.signal, ref);
+        const buffer = await SoundStore.decodeAudioData(context, bytes.slice(0));
+        SoundStore.throwIfAborted(options.signal, ref);
+        return buffer;
     }
 
-    private loadAudioBufferOffline(ref: string, options: ResourceLoadOptions): Promise<AudioBuffer> {
-        return (async (): Promise<AudioBuffer> => {
+    private async loadAudioBufferOffline(ref: string, options: ResourceLoadOptions, pool: DecoderPool): Promise<AudioBuffer> {
+        SoundStore.throwIfAborted(options.signal, ref);
+        const bytes = await ResourceLoader.loadResource(ref, options);
+        SoundStore.throwIfAborted(options.signal, ref);
+        const decoder = this.acquireOfflineDecoder(ref, pool);
+        try {
+            const buffer = await SoundStore.decodeAudioData(decoder, bytes.slice(0));
             SoundStore.throwIfAborted(options.signal, ref);
-            const bytes = await ResourceLoader.loadResource(ref, options);
-            SoundStore.throwIfAborted(options.signal, ref);
-            const decoder = this.acquireOfflineDecoder(ref);
-            try {
-                const buffer = await SoundStore.decodeAudioData(decoder, bytes.slice(0));
-                SoundStore.throwIfAborted(options.signal, ref);
-                return buffer;
-            } catch (error) {
-                throw this.normalizeAudioLoadError(ref, options.signal, error);
-            } finally {
-                this.releaseOfflineDecoder();
+            return buffer;
+        } catch (error) {
+            if (error instanceof ResourceLoadException) {
+                throw error;
             }
-        })();
+            if (options.signal?.aborted) {
+                throw SoundStore.abortException(ref, options.signal.reason);
+            }
+            throw this.audioDecodeUnavailable(ref, "Audio data could not be decoded", error);
+        } finally {
+            pool.active--;
+            SoundStore.releaseDecoderIfIdle(pool);
+        }
     }
 
-    private acquireOfflineDecoder(ref: string): BaseAudioContext {
-        if (this.offlineDecoder === null) {
+    private acquireOfflineDecoder(ref: string, pool: DecoderPool): BaseAudioContext {
+        if (pool.context === null) {
             const Ctor = globalThis.OfflineAudioContext ?? (globalThis as WebAudioGlobal).webkitOfflineAudioContext;
             if (!Ctor) {
                 throw this.audioDecodeUnavailable(ref, "OfflineAudioContext is not available");
             }
             try {
-                this.offlineDecoder = new Ctor(2, 1, 44100);
+                pool.context = new Ctor(2, 1, 44100);
             } catch (error) {
                 throw this.audioDecodeUnavailable(ref, "OfflineAudioContext could not be created", error);
             }
         }
-        this.activeOfflineDecodes++;
-        return this.offlineDecoder;
+        pool.active++;
+        return pool.context;
     }
 
-    private releaseOfflineDecoder(): void {
-        this.activeOfflineDecodes = Math.max(0, this.activeOfflineDecodes - 1);
-        this.releaseOfflineDecoderIfIdle();
-    }
-
-    private releaseOfflineDecoderIfIdle(): void {
-        if (this.activeOfflineDecodes === 0 && this.offlineDecodeBatchDepth === 0) {
-            this.offlineDecoder = null;
+    private static releaseDecoderIfIdle(pool: DecoderPool): void {
+        if (pool.active === 0 && pool.batches === 0) {
+            pool.context = null;
         }
     }
 
-    private audioDecodeUnavailable(ref: string, detail = "Web Audio API is not available", cause?: unknown): ResourceLoadException {
+    private audioDecodeUnavailable(ref: string, detail: string, cause?: unknown): ResourceLoadException {
         return new ResourceLoadException(`Failed to decode audio ${ref}: ${detail}`, {
             ref,
             url: ResourceLoader.getResource(ref)?.href ?? null,
@@ -845,75 +759,34 @@ export class SoundStore {
         });
     }
 
-    private normalizeAudioLoadError(ref: string, signal: AbortSignal | undefined, error: unknown): ResourceLoadException {
-        if (error instanceof ResourceLoadException) {
-            return error;
-        }
-        if (SoundStore.isAbortError(error) || signal?.aborted) {
-            return SoundStore.abortException(ref, signal?.reason ?? error);
-        }
-        return new ResourceLoadException(`Failed to load audio: ${ref}`, {
-            ref,
-            url: ResourceLoader.getResource(ref)?.href ?? null,
-            kind: "decode",
-            phase: "decode",
-            cause: error
-        });
-    }
-
     private resetSoundSources(): void {
         this.soundSources = new Array<AudioPlaybackHandle | null>(this.maxSources).fill(null);
     }
 
     private findFreeSoundSource(): number {
-        for (let index = 1; index < this.maxSources - 1; index++) {
-            const handle = this.soundSources[index];
-            if (!handle || !handle.playing()) {
-                this.soundSources[index] = null;
-                return index;
+        for (let i = 1; i < this.maxSources - 1; i++) {
+            if (!this.soundSources[i]?.playing()) {
+                return i;
             }
         }
         return -1;
     }
 
-    private releaseSoundSource(sourceId: number, handle: AudioPlaybackHandle): void {
-        if (this.soundSources[sourceId] === handle) {
-            this.soundSources[sourceId] = null;
-        }
-    }
-
-    private connectPositionedSource(context: AudioContext, gain: GainNode, bus: GainNode, position?: AudioPosition): void {
-        if (!position || typeof context.createPanner !== "function") {
-            gain.connect(bus);
-            return;
-        }
+    public static disconnect(node: AudioNode | null): void {
         try {
-            const panner = context.createPanner();
-            panner.panningModel = "equalpower";
-            panner.distanceModel = "inverse";
-            panner.refDistance = 1;
-            panner.maxDistance = 10000;
-            panner.rolloffFactor = 1;
-            const legacyPanner = panner as unknown as { setPosition?: (x: number, y: number, z: number) => void };
-            if ("positionX" in panner) {
-                panner.positionX.value = position.x;
-                panner.positionY.value = position.y;
-                panner.positionZ.value = position.z;
-            } else if (typeof legacyPanner.setPosition === "function") {
-                legacyPanner.setPosition.call(panner, position.x, position.y, position.z);
-            }
-            gain.connect(panner);
-            panner.connect(bus);
+            node?.disconnect();
         } catch {
-            gain.connect(bus);
+            // Partial and repeated graph retirement is best-effort.
         }
     }
 
-    private static async waitForAudioPromise(promise: Promise<AudioBuffer>, signal: AbortSignal | undefined, ref: string): Promise<AudioBuffer> {
-        if (!signal) {
+    private static waitForAudioPromise(promise: Promise<AudioBuffer>, signal: AbortSignal | undefined, ref: string): Promise<AudioBuffer> {
+        if (signal === undefined) {
             return promise;
         }
-        SoundStore.throwIfAborted(signal, ref);
+        if (signal.aborted) {
+            return Promise.reject(SoundStore.abortException(ref, signal.reason));
+        }
         return new Promise<AudioBuffer>((resolve, reject) => {
             const abort = (): void => {
                 signal.removeEventListener("abort", abort);
@@ -921,9 +794,9 @@ export class SoundStore {
             };
             signal.addEventListener("abort", abort, { once: true });
             void promise.then(
-                (value) => {
+                (buffer) => {
                     signal.removeEventListener("abort", abort);
-                    resolve(value);
+                    resolve(buffer);
                 },
                 (error) => {
                     signal.removeEventListener("abort", abort);
@@ -935,47 +808,15 @@ export class SoundStore {
 
     private static decodeAudioData(context: BaseAudioContext, bytes: ArrayBuffer): Promise<AudioBuffer> {
         return new Promise<AudioBuffer>((resolve, reject) => {
-            let settled = false;
-            const succeed = (buffer: AudioBuffer): void => {
-                if (!settled) {
-                    settled = true;
-                    resolve(buffer);
-                }
-            };
-            const fail = (error: unknown): void => {
-                if (!settled) {
-                    settled = true;
-                    reject(error);
-                }
-            };
             try {
-                const result = context.decodeAudioData(bytes, succeed, fail as DecodeErrorCallback);
-                if (result && typeof (result as Promise<AudioBuffer>).then === "function") {
-                    void (result as Promise<AudioBuffer>).then(succeed, fail);
+                const operation = context.decodeAudioData(bytes, resolve, reject as DecodeErrorCallback);
+                if (operation && typeof operation.then === "function") {
+                    void operation.then(resolve, reject);
                 }
             } catch (error) {
-                fail(error);
+                reject(error);
             }
         });
-    }
-
-    private static cleanupBus(bus: GainNode | null): void {
-        try {
-            bus?.disconnect();
-        } catch {
-            // Repeated/best-effort Web Audio teardown is intentionally harmless.
-        }
-    }
-
-    private static closeContext(context: AudioContext | null): void {
-        if (context === null) {
-            return;
-        }
-        try {
-            void context.close().catch(() => undefined);
-        } catch {
-            // Context teardown is detached from application state and never awaited.
-        }
     }
 
     private static throwIfAborted(signal: AbortSignal | undefined, ref: string): void {
@@ -993,11 +834,156 @@ export class SoundStore {
             cause
         });
     }
+}
 
-    private static isAbortError(error: unknown): boolean {
+/** A stopped handle retains no context, bus, source, gain, or panner. */
+class EffectPlayback implements AudioPlaybackHandle {
+    private source: AudioBufferSourceNode | null = null;
+    private gain: GainNode | null = null;
+    private panner: PannerNode | null = null;
+    private active = true;
+    private sourceGain = 0;
+
+    public constructor(
+        private readonly store: SoundStore,
+        public readonly sourceId: number,
+        private readonly generation: number,
+        private context: AudioContext | null,
+        private bus: GainNode | null,
+        private readonly pitch: number,
+        private readonly volume: number,
+        private readonly loop: boolean,
+        private readonly position: AudioPosition | undefined,
+        private onEnded: (() => void) | undefined
+    ) {}
+
+    public playing(): boolean {
+        return this.active;
+    }
+
+    public getGain(): number {
+        return this.sourceGain;
+    }
+
+    public stop(): void {
+        this.dispose(true);
+    }
+
+    public start(buffer: AudioBuffer): void {
+        if (!this.isCurrent() || !this.store.soundsOn()) {
+            this.stop();
+            return;
+        }
+        const context = this.context;
+        const bus = this.bus;
+        if (context === null || bus === null) {
+            this.stop();
+            return;
+        }
+        try {
+            this.source = context.createBufferSource();
+            this.gain = context.createGain();
+            this.source.buffer = buffer;
+            this.source.loop = this.loop;
+            this.source.playbackRate.value = Number.isFinite(this.pitch) ? Math.max(0.25, Math.min(4, this.pitch)) : 1;
+            this.sourceGain = Number.isFinite(this.volume) ? Math.max(0, this.volume) : 0;
+            this.gain.gain.value = this.sourceGain;
+            this.source.connect(this.gain);
+            this.connectPosition(context, this.gain, bus);
+            this.source.onended = () => {
+                const notify = this.isCurrent() && !this.loop ? this.onEnded : undefined;
+                this.dispose(false);
+                this.notify(notify);
+            };
+            this.source.start();
+        } catch (error) {
+            this.fail(error, "sound graph");
+        }
+    }
+
+    public fail(error: unknown, ref: string): void {
+        const current = this.isCurrent();
+        const notify = current ? this.onEnded : undefined;
+        this.dispose(true);
+        if (current) {
+            Log.error(`Failed to play sound: ${ref}`, error);
+            this.notify(notify);
+        }
+    }
+
+    private isCurrent(): boolean {
         return (
-            (typeof DOMException !== "undefined" && error instanceof DOMException && error.name === "AbortError") ||
-            (typeof error === "object" && error !== null && "name" in error && (error as { name?: unknown }).name === "AbortError")
+            this.active &&
+            this.context !== null &&
+            this.store.isPlaybackGenerationCurrent(this.generation, this.context) &&
+            this.store.isPlaybackCommitted() &&
+            String(this.context.state) === "running"
         );
+    }
+
+    private connectPosition(context: AudioContext, gain: GainNode, bus: GainNode): void {
+        if (this.position === undefined || typeof context.createPanner !== "function") {
+            gain.connect(bus);
+            return;
+        }
+        try {
+            const panner = context.createPanner();
+            this.panner = panner;
+            panner.panningModel = "equalpower";
+            panner.distanceModel = "inverse";
+            panner.refDistance = 1;
+            panner.maxDistance = 10000;
+            panner.rolloffFactor = 1;
+            if ("positionX" in panner) {
+                panner.positionX.value = this.position.x;
+                panner.positionY.value = this.position.y;
+                panner.positionZ.value = this.position.z;
+            } else {
+                const legacy = panner as unknown as { setPosition(x: number, y: number, z: number): void };
+                legacy.setPosition(this.position.x, this.position.y, this.position.z);
+            }
+            gain.connect(panner);
+            panner.connect(bus);
+        } catch {
+            SoundStore.disconnect(gain);
+            SoundStore.disconnect(this.panner);
+            this.panner = null;
+            gain.connect(bus);
+        }
+    }
+
+    private dispose(stopSource: boolean): void {
+        const source = this.source;
+        const gain = this.gain;
+        const panner = this.panner;
+        this.active = false;
+        this.source = null;
+        this.gain = null;
+        this.panner = null;
+        this.context = null;
+        this.bus = null;
+        this.onEnded = undefined;
+        if (source !== null) {
+            source.onended = null;
+            if (stopSource) {
+                try {
+                    source.stop();
+                } catch {
+                    // The source may have failed before start or already ended.
+                }
+            }
+        }
+        SoundStore.disconnect(source);
+        SoundStore.disconnect(gain);
+        SoundStore.disconnect(panner);
+        this.store.releaseEffect(this);
+    }
+
+    private notify(callback: (() => void) | undefined): void {
+        try {
+            callback?.();
+        } catch (error) {
+            Log.error("Sound completion callback failed", error);
+        }
     }
 }
