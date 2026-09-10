@@ -9,7 +9,6 @@ import { Graphics } from "./Graphics.js";
 import { Image } from "./Image.js";
 import { Music } from "./Music.js";
 import { SpriteSheet } from "./SpriteSheet.js";
-import { BrowserAudioLifecycle } from "./openal/BrowserAudioLifecycle.js";
 import { SoundStore } from "./openal/SoundStore.js";
 import type { ImageData as SlickImageData } from "./opengl/ImageData.js";
 import { InternalTextureLoader } from "./opengl/InternalTextureLoader.js";
@@ -192,12 +191,12 @@ export class AppGameContainer extends GameContainer {
         this.setLoopSuspended(false);
     }
 
-    /** Browser/PWA helper: controls whether destroy() preserves decoded audio and the AudioContext. */
+    /** Browser/PWA helper: controls whether destroy() preserves decoded audio assets. */
     public setPreserveAudioCacheOnDestroy(preserve: boolean): void {
         this.preserveAudioCacheOnDestroy = preserve;
     }
 
-    /** Browser/PWA helper: reports whether destroy() preserves decoded audio and the AudioContext. */
+    /** Browser/PWA helper: reports whether destroy() preserves decoded audio assets. */
     public isPreservingAudioCacheOnDestroy(): boolean {
         return this.preserveAudioCacheOnDestroy;
     }
@@ -452,6 +451,9 @@ export class AppGameContainer extends GameContainer {
 
     /** Java Slick2D counterpart: AppGameContainer.destroy(). */
     public destroy(): void {
+        if (this.destroyed) {
+            return;
+        }
         const canvas = this.canvas;
         this.destroyed = true;
         this.started = false;
@@ -482,9 +484,6 @@ export class AppGameContainer extends GameContainer {
         InternalTextureLoader.get().clear();
         Renderer.getBackend().dispose();
         if (this.preserveAudioCacheOnDestroy) {
-            // Suspend while SoundStore still reports active audio, then preserve the
-            // decoded buffers/context for a later user-gesture unlock.
-            void BrowserAudioLifecycle.get().suspend();
             AL.destroyPreservingAudioCache();
         } else {
             AL.destroy();
