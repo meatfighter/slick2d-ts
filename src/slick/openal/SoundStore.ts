@@ -67,6 +67,7 @@ export class SoundStore {
     private soundSources: Array<AudioPlaybackHandle | null> = new Array<AudioPlaybackHandle | null>(64).fill(null);
     private explicitPlaybackGenerationMode = false;
     private playbackGeneration = 0;
+    private playbackRetirementFailure: Error | null = null;
     private playbackCommitted = false;
     private logicalPlaybackActive = false;
     private interruptionHandler: ((reason: string, generation: number) => void) | null = null;
@@ -207,6 +208,9 @@ export class SoundStore {
 
     /** Accept a prepared generation, attach logical music, and then open its output gate. */
     public async commitPlaybackGeneration(generation: number): Promise<boolean> {
+        if (this.playbackRetirementFailure !== null) {
+            throw this.playbackRetirementFailure;
+        }
         if (generation !== this.playbackGeneration) {
             return false;
         }
@@ -218,8 +222,7 @@ export class SoundStore {
         }
         const context = this.context;
         if (String(context.state) !== "running") {
-            this.detachMusic();
-            this.retirePlaybackContext();
+            this.discardUnusablePlayback();
             return false;
         }
         const results = await Promise.allSettled(
@@ -236,9 +239,7 @@ export class SoundStore {
         }
         const failure = results.find((result) => result.status === "rejected");
         if (failure !== undefined || String(context.state) !== "running") {
-            this.detachMusic();
-            this.stopSoundEffects();
-            this.retirePlaybackContext();
+            this.discardUnusablePlayback();
             if (failure?.status === "rejected") {
                 Log.error("Unable to attach playback; continuing with the logical silent clock", failure.reason);
             }
@@ -250,30 +251,45 @@ export class SoundStore {
         return true;
     }
 
-    /** Conditional retirement lets stale async owners dispose only their own generation. */
+    /** Conditional retirement cannot tear down a replacement generation. */
     public endPlaybackGeneration(expectedGeneration?: number): void {
         if (expectedGeneration !== undefined && expectedGeneration !== this.playbackGeneration) {
             return;
         }
         this.logicalPlaybackActive = false;
         this.playbackCommitted = false;
-        try {
-            this.detachMusic();
-            this.stopSoundEffects();
-        } finally {
-            this.playbackGeneration++;
-            this.retirePlaybackContext();
-            this.resetSoundSources();
+        const failures: unknown[] = [];
+        const attempt = (operation: () => void): void => {
+            try {
+                operation();
+            } catch (error) {
+                failures.push(error);
+            }
+        };
+        attempt(() => this.detachMusic());
+        attempt(() => this.stopSoundEffects());
+        this.playbackGeneration++;
+        attempt(() => this.retirePlaybackContext());
+        attempt(() => this.resetSoundSources());
+        if (failures.length !== 0) {
+            this.playbackRetirementFailure ??= new AggregateError(failures, "Unable to retire the playback generation safely.");
+        }
+        if (this.playbackRetirementFailure !== null) {
+            throw this.playbackRetirementFailure;
         }
     }
 
     private detachMusic(): void {
+        const failures: unknown[] = [];
         for (const handle of Array.from(this.musicHandles)) {
             try {
                 handle.detachPlaybackGeneration?.();
             } catch (error) {
-                Log.error("Unable to detach a music graph", error);
+                failures.push(error);
             }
+        }
+        if (failures.length !== 0) {
+            throw new AggregateError(failures, "Unable to detach every music graph.");
         }
     }
 
@@ -369,6 +385,9 @@ export class SoundStore {
     }
 
     public init(): void {
+        if (this.playbackRetirementFailure !== null) {
+            throw this.playbackRetirementFailure;
+        }
         this.ensureLogicalInitialization();
         if (!this.explicitPlaybackGenerationMode && this.context === null) {
             this.createOrdinaryContainerContext();
@@ -636,24 +655,48 @@ export class SoundStore {
     private retirePlaybackContext(): void {
         const context = this.context;
         const listener = this.contextStateListener;
-        const nodes = [this.soundBus, this.musicBus, this.outputGate];
+        const outputGate = this.outputGate;
+        const nodes = [this.soundBus, this.musicBus, outputGate];
         this.context = null;
         this.soundBus = null;
         this.musicBus = null;
         this.outputGate = null;
         this.contextStateListener = null;
         this.soundWorksFlag = false;
+        const failures: unknown[] = [];
         if (listener !== null) {
             try {
                 context?.removeEventListener?.("statechange", listener);
-            } catch {
-                // Native listener cleanup cannot retain application ownership.
+            } catch (error) {
+                // This callback is fenced by both context identity and generation.
+                Log.error("Unable to remove a retired audio listener", error);
             }
         }
-        for (const node of nodes) {
-            SoundStore.disconnect(node);
+        try {
+            if (outputGate !== null) {
+                try {
+                    outputGate.gain.value = 0;
+                } catch (error) {
+                    failures.push(error);
+                }
+            }
+            for (const node of nodes) {
+                try {
+                    node?.disconnect();
+                } catch (error) {
+                    failures.push(error);
+                }
+            }
+        } finally {
+            // Native close settlement is independent of synchronous ownership exit.
+            this.closeContext(context);
         }
-        this.closeContext(context);
+        if (failures.length !== 0) {
+            this.playbackRetirementFailure ??= new AggregateError(failures, "Unable to disconnect the retired audio output safely.");
+        }
+        if (this.playbackRetirementFailure !== null) {
+            throw this.playbackRetirementFailure;
+        }
     }
 
     private closeContext(context: AudioContext | null): void {
@@ -833,6 +876,25 @@ export class SoundStore {
             phase: "decode",
             cause
         });
+    }
+
+    private discardUnusablePlayback(): void {
+        const failures: unknown[] = [];
+        for (const operation of [() => this.detachMusic(), () => this.stopSoundEffects(), () => this.retirePlaybackContext()]) {
+            try {
+                operation();
+            } catch (error) {
+                failures.push(error);
+            }
+        }
+        if (failures.length !== 0) {
+            this.playbackRetirementFailure ??= new AggregateError(failures, "Unable to discard an unusable playback graph safely.");
+        }
+        if (this.playbackRetirementFailure !== null) {
+            this.logicalPlaybackActive = false;
+            this.playbackCommitted = false;
+            throw this.playbackRetirementFailure;
+        }
     }
 }
 

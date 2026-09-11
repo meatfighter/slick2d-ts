@@ -17,21 +17,34 @@ export class AL {
 
     /** Java LWJGL counterpart: AL.destroy(). */
     public static destroy(): void {
-        try {
-            Music.resetPlaybackState();
-            SoundStore.get().destroy();
-        } finally {
-            AL.created = false;
-        }
+        AL.destroyAudio(false);
     }
 
     /** Browser/PWA helper: tears down logical OpenAL state while preserving decoded audio cache. */
     public static destroyPreservingAudioCache(): void {
+        AL.destroyAudio(true);
+    }
+
+    private static destroyAudio(preserveCache: boolean): void {
+        const failures: unknown[] = [];
         try {
             Music.resetPlaybackState();
-            SoundStore.get().destroyPreservingAudioCache();
+        } catch (error) {
+            failures.push(error);
+        }
+        try {
+            if (preserveCache) {
+                SoundStore.get().destroyPreservingAudioCache();
+            } else {
+                SoundStore.get().destroy();
+            }
+        } catch (error) {
+            failures.push(error);
         } finally {
             AL.created = false;
+        }
+        if (failures.length !== 0) {
+            throw new AggregateError(failures, "Unable to destroy OpenAL state safely.");
         }
     }
 

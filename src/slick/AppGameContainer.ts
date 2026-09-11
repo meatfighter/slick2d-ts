@@ -60,6 +60,7 @@ export class AppGameContainer extends GameContainer {
     private title = "";
     private started = false;
     private destroyed = false;
+    private destructionFailure: Error | null = null;
     private lifetime = 0;
     private displayOperation = 0;
     private resourceWait = 0;
@@ -375,9 +376,8 @@ export class AppGameContainer extends GameContainer {
             if (!this.isLifetimeCurrent(lifetime)) {
                 return;
             }
-            const reported = this.toError(error, "Failed to reinitialize AppGameContainer");
             const handler = this.errorHandler;
-            this.destroy();
+            const reported = this.destroyAfterError(this.toError(error, "Failed to reinitialize AppGameContainer"));
             if (handler) {
                 handler(reported);
                 return;
@@ -449,9 +449,8 @@ export class AppGameContainer extends GameContainer {
             if (!this.isLifetimeCurrent(lifetime)) {
                 return;
             }
-            const reported = this.toError(error, "Failed to start AppGameContainer");
             const handler = this.errorHandler;
-            this.destroy();
+            const reported = this.destroyAfterError(this.toError(error, "Failed to start AppGameContainer"));
             if (handler) {
                 handler(reported);
                 return;
@@ -518,9 +517,12 @@ export class AppGameContainer extends GameContainer {
         return this.screenWidth;
     }
 
-    /** Terminal, idempotent, exception-safe teardown. Global resources have one owner. */
+    /** Terminal teardown: attempt every step and never hide an unsafe failure. */
     public destroy(): void {
         if (this.destroyed) {
+            if (this.destructionFailure !== null) {
+                throw this.destructionFailure;
+            }
             return;
         }
         const canvas = this.canvas;
@@ -535,26 +537,26 @@ export class AppGameContainer extends GameContainer {
         this.contextLost = false;
         this.waitingForResources = false;
         this.resourceError = null;
-        this.lifetimeController.abort();
-        this.cancelScheduledFrame();
+        this.cleanup("lifetime cancellation", () => this.lifetimeController.abort());
+        this.cleanup("scheduled frame", () => this.cancelScheduledFrame());
         this.cleanup("canvas listeners", () => this.removeCanvasContextListeners());
         this.cleanup("input binding", () => this.input.unbind());
         this.cleanup("input capture", () => this.input.setPreventDefaultElement(null));
         this.cleanup("DPR monitor", () => this.devicePixelRatioMonitor.stop());
         if (typeof window !== "undefined") {
-            window.removeEventListener("resize", this.handleWindowResize);
-            window.visualViewport?.removeEventListener("resize", this.handleWindowResize);
+            this.cleanup("window resize listener", () => window.removeEventListener("resize", this.handleWindowResize));
+            this.cleanup("visual viewport listener", () => window.visualViewport?.removeEventListener("resize", this.handleWindowResize));
         }
         if (typeof document !== "undefined") {
-            document.removeEventListener("fullscreenchange", this.handleFullscreenChange);
-            document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+            this.cleanup("fullscreen listener", () => document.removeEventListener("fullscreenchange", this.handleFullscreenChange));
+            this.cleanup("visibility listener", () => document.removeEventListener("visibilitychange", this.handleVisibilityChange));
         }
         if (ownsShared) {
             this.cleanup("fullscreen", () => this.exitBrowserFullscreenForDestroy());
-            this.cleanup("mouse capture", () => {
+            this.cleanup("pointer lock", () => {
                 void Mouse.setGrabbed(false).catch(() => undefined);
-                Mouse.setElement(null);
             });
+            this.cleanup("mouse element", () => Mouse.setElement(null));
             this.cleanup("rendering state", () => this.resetRenderingLifecycleState());
             this.cleanup("textures", () => InternalTextureLoader.get().clear());
             this.cleanup("renderer", () => Renderer.getBackend().dispose());
@@ -565,17 +567,20 @@ export class AppGameContainer extends GameContainer {
                     AL.destroy();
                 }
             });
-            this.cleanup("display", () => {
-                Display.destroy();
-                Display.setActiveContainer(null);
-            });
-            if (AppGameContainer.resourceOwner === this) {
-                AppGameContainer.resourceOwner = null;
-            }
+            this.cleanup("display", () => Display.destroy());
+            this.cleanup("display owner", () => Display.setActiveContainer(null));
         }
         this.cleanup("owned canvas", () => this.removeOwnedCanvas(canvas));
         this.canvas = null;
         this.graphicsLifecycleHandler = null;
+        // Keep the shared owner blocked on unsafe teardown. No replacement may start
+        // merely because a second call to destroy() did no additional work.
+        if (this.destructionFailure !== null) {
+            throw this.destructionFailure;
+        }
+        if (ownsShared && AppGameContainer.resourceOwner === this) {
+            AppGameContainer.resourceOwner = null;
+        }
     }
 
     public override setDefaultMouseCursor(): void {
@@ -619,6 +624,7 @@ export class AppGameContainer extends GameContainer {
         try {
             operation();
         } catch (error) {
+            this.destructionFailure ??= new Error(`Unable to clean up AppGameContainer ${label}; reload is required.`, { cause: error });
             Log.error(`Unable to clean up AppGameContainer ${label}`, error);
         }
     }
@@ -875,8 +881,17 @@ export class AppGameContainer extends GameContainer {
         try {
             this.graphicsLifecycleHandler?.("lost");
         } catch (error) {
-            SoundStore.get().endPlaybackGeneration();
-            this.reportError(error);
+            let reported = this.toError(error, "Graphics-loss handler failed");
+            try {
+                SoundStore.get().endPlaybackGeneration();
+            } catch (cleanupError) {
+                reported = new AggregateError([reported, cleanupError], "Graphics-loss handling and audio retirement failed.");
+            }
+            this.reportError(reported);
+            return;
+        }
+        if (this.destructionFailure !== null) {
+            this.reportError(this.destructionFailure);
         }
     };
 
@@ -1114,13 +1129,26 @@ export class AppGameContainer extends GameContainer {
             return;
         }
         this.resourceError = null;
-        const reported = this.toError(error, "Failed to run AppGameContainer frame");
         const handler = this.errorHandler;
-        this.destroy();
+        const reported = this.destroyAfterError(this.toError(error, "Failed to run AppGameContainer frame"));
         if (handler) {
-            handler(reported);
+            try {
+                handler(reported);
+            } catch (handlerError) {
+                Log.error("AppGameContainer error handler failed", handlerError);
+            }
         } else {
             Log.error(reported); // Do not throw into a later replacement session's global handler.
+        }
+    }
+
+    /** Keep the original fault and still notify the shell after failed cleanup. */
+    private destroyAfterError(reported: Error): Error {
+        try {
+            this.destroy();
+            return reported;
+        } catch (cleanupError) {
+            return new AggregateError([reported, cleanupError], "AppGameContainer failed and could not be destroyed safely.");
         }
     }
 
