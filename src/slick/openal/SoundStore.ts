@@ -742,9 +742,19 @@ export class SoundStore {
         }
         const bytes = await ResourceLoader.loadResource(ref, options);
         SoundStore.throwIfAborted(options.signal, ref);
-        const buffer = await SoundStore.decodeAudioData(context, bytes.slice(0));
-        SoundStore.throwIfAborted(options.signal, ref);
-        return buffer;
+        try {
+            const buffer = await SoundStore.decodeAudioData(context, bytes.slice(0));
+            SoundStore.throwIfAborted(options.signal, ref);
+            return buffer;
+        } catch (error) {
+            if (error instanceof ResourceLoadException) {
+                throw error;
+            }
+            if (options.signal?.aborted) {
+                throw SoundStore.abortException(ref, options.signal.reason);
+            }
+            throw this.audioDecodeUnavailable(ref, "Audio data could not be decoded", error);
+        }
     }
 
     private async loadAudioBufferOffline(ref: string, options: ResourceLoadOptions, pool: DecoderPool): Promise<AudioBuffer> {
