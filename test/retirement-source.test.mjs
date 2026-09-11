@@ -393,7 +393,13 @@ test("failed attachment and unsafe retirement cannot pass the session's silent-f
 for (const preserve of [false, true]) {
     test(`OpenAL teardown still retires hardware after logical music reset fails (preserve=${preserve})`, () => {
         const trace = [];
-        const store = { init() {}, destroy() { trace.push("destroy"); }, destroyPreservingAudioCache() { trace.push("cache"); } };
+        const store = {
+            init() {},
+            isUsingExplicitPlaybackGenerations() { return false; },
+            hasPlaybackGeneration() { return true; },
+            destroy() { trace.push("destroy"); },
+            destroyPreservingAudioCache() { trace.push("cache"); }
+        };
         const { AL } = loadModule("lwjgl/openal/AL.ts", {
             "../../slick/Music.js": { Music: { resetPlaybackState() { throw new Error("music reset failed"); } } },
             "../../slick/openal/SoundStore.js": { SoundStore: { get: () => store } }
