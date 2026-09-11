@@ -62,7 +62,13 @@ function fixture(t, { begin, commit, end } = {}) {
         }
     };
     const session = new PlaybackSession(manager, 25);
-    t.after(() => session.cancel());
+    t.after(() => {
+        try {
+            session.cancel();
+        } catch {
+            // Tests that intentionally latch retirement failure assert it directly.
+        }
+    });
     return {
         session,
         manager,
@@ -224,6 +230,7 @@ test("retirement failure settles readiness and blocks subsequent starts", async 
     });
     await flush();
     assert.equal(ready, false);
+    assert.throws(() => f.session.assertRetirementSafe(), /Playback retirement failed/);
     assert.equal(await f.session.begin().ready, false);
     assert.equal(f.events.began.length, 1);
     assert.equal(f.events.ended.length, 1);
