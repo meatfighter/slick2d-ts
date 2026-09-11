@@ -55,7 +55,7 @@ export class PlaybackSession {
             return Object.freeze({ id, ready: Promise.resolve(false) });
         }
         try {
-            this.cancel();
+            this.cancelActive();
         } catch {
             // A failed retirement is terminal, not permission to create new output.
             return Object.freeze({ id, ready: Promise.resolve(false) });
@@ -151,6 +151,13 @@ export class PlaybackSession {
      * The writer-lock owner must not interpret a detached attempt as safe cleanup.
      */
     public cancel(): void {
+        // An explicit departure must invalidate even a begin that is currently
+        // retiring its predecessor and has not published a new active record yet.
+        this.serial++;
+        this.cancelActive();
+    }
+
+    private cancelActive(): void {
         const record = this.active;
         this.active = null;
         if (record !== null) {
