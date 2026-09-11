@@ -32,19 +32,23 @@ class Manager {
     install() {
         this.installed++;
     }
+
     getGeneration() {
         return this.generation;
     }
+
     beginPlaybackGeneration(deferPlayback) {
         this.starts.push(deferPlayback);
         this.generation++;
         this.context = true;
         return this.beginOperation();
     }
+
     commitPlaybackGeneration(generation) {
         this.commits.push(generation);
         return this.commitOperation();
     }
+
     endPlaybackGeneration(expected) {
         if (expected !== this.generation) {
             return;
@@ -56,6 +60,7 @@ class Manager {
         this.generation++;
         this.context = false;
     }
+
     setInterruptionHandler(handler) {
         this.interrupted = handler;
     }
@@ -63,6 +68,7 @@ class Manager {
 
 function fixture(t) {
     t.mock.method(console, "warn", () => {});
+    t.mock.method(console, "error", () => {});
     t.mock.timers.enable({ apis: ["setTimeout"] });
     const manager = new Manager();
     const session = new PlaybackSession(manager, 10);
@@ -226,16 +232,21 @@ test("failed prepare retirement settles readiness and invalidates the attempt", 
     const attempt = session.begin();
     assert.equal(await attempt.ready, false);
     assert.equal(session.isCurrent(attempt), false);
+    assert.throws(() => session.assertRetirementSafe(), /Playback retirement failed/);
+    assert.equal(await session.begin().ready, false);
 });
 
-test("cancel still settles readiness if manager retirement throws", async (t) => {
+test("cancel settles readiness and exposes manager retirement failure", async (t) => {
     const { manager, session } = fixture(t);
     manager.beginOperation = () => new Promise(() => {});
     const attempt = session.begin();
     manager.retirementFailure = true;
-    assert.doesNotThrow(() => session.cancel());
+
+    assert.throws(() => session.cancel(), /Playback retirement failed/);
     assert.equal(await attempt.ready, false);
     assert.equal(session.isCurrent(attempt), false);
+    assert.throws(() => session.assertRetirementSafe(), /Playback retirement failed/);
+    assert.throws(() => session.cancel(), /Playback retirement failed/);
 });
 
 test("interruption notifications only reach the current committing or committed generation", async (t) => {
