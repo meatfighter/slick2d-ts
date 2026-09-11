@@ -7,8 +7,17 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const distRoot = join(repositoryRoot, "dist");
 const browserEntry = join(repositoryRoot, "test", "browser", "verify.mjs");
+const windowsCandidates =
+    process.platform === "win32"
+        ? [
+              process.env.ProgramFiles && join(process.env.ProgramFiles, "Google", "Chrome", "Application", "chrome.exe"),
+              process.env["ProgramFiles(x86)"] && join(process.env["ProgramFiles(x86)"], "Google", "Chrome", "Application", "chrome.exe"),
+              process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe")
+          ]
+        : [];
 const candidates = [
     process.env.CHROMIUM_PATH,
+    ...windowsCandidates,
     "/usr/bin/google-chrome",
     "/usr/bin/google-chrome-stable",
     "/usr/bin/chromium",
@@ -438,6 +447,9 @@ try {
         "--use-angle=swiftshader-webgl",
         "--ignore-gpu-blocklist",
         "--enable-unsafe-swiftshader",
+        // The listener-leak fixture exercises real Web Audio graph ownership, not autoplay policy.
+        // Activation semantics are covered separately by playback-session tests.
+        "--autoplay-policy=no-user-gesture-required",
         "--remote-debugging-port=0",
         "--remote-allow-origins=*",
         `--user-data-dir=${userDataDirectory}`,
