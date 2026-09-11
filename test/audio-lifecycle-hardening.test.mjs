@@ -252,11 +252,12 @@ test("natural non-looping Music completion is reported by the next poll", async 
 
     assert.deepEqual(events, []);
     assert.equal(music.playing(), false);
-    assert.equal(store.isMusicPlaying(), false);
+    assert.equal(store.isMusicPlaying(), true, "ended-pending remains owned until the next Music poll");
 
     Music.poll(1);
     assert.deepEqual(events, ["ended"]);
     assert.equal(music.playing(), false);
+    assert.equal(store.isMusicPlaying(), false);
 });
 
 test("Music startup failure disconnects its partial Web Audio graph", async () => {
