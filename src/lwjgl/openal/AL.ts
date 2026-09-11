@@ -11,8 +11,13 @@ export class AL {
 
     /** Java LWJGL counterpart: AL.create(). */
     public static create(): void {
-        SoundStore.get().init();
-        AL.created = true;
+        const store = SoundStore.get();
+        store.init();
+        // A partially constructed ordinary Web Audio graph is rolled back by
+        // SoundStore and must remain retryable. Explicit-generation mode is a
+        // logical OpenAL owner even when the accepted session is deliberately
+        // silent and therefore has no hardware context.
+        AL.created = store.isUsingExplicitPlaybackGenerations() || store.hasPlaybackGeneration();
     }
 
     /** Java LWJGL counterpart: AL.destroy(). */
