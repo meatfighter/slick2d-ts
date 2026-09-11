@@ -36,7 +36,7 @@ export class PlaybackSession {
     private serial = 0;
     private active: AttemptRecord | null = null;
     private beginning = false;
-    private cleanupFailed = false;
+    private cleanupError: Error | null = null;
 
     public constructor(
         private readonly manager: PlaybackSessionManager = PwaAudioManager.get(),
@@ -51,12 +51,17 @@ export class PlaybackSession {
     /** Call directly from the New Game/Continue activation, before any await. */
     public begin(): PlaybackAttempt {
         const id = ++this.serial;
-        if (this.beginning || this.cleanupFailed) {
+        if (this.beginning || this.cleanupError !== null) {
             return Object.freeze({ id, ready: Promise.resolve(false) });
         }
-        this.cancel();
+        try {
+            this.cancel();
+        } catch {
+            // A failed retirement is terminal, not permission to create new output.
+            return Object.freeze({ id, ready: Promise.resolve(false) });
+        }
         // Teardown hooks may synchronously start a replacement. Never overwrite it.
-        if (id !== this.serial || this.cleanupFailed) {
+        if (id !== this.serial || this.cleanupError !== null) {
             return Object.freeze({ id, ready: Promise.resolve(false) });
         }
         let resolveReady!: (current: boolean) => void;
@@ -100,12 +105,19 @@ export class PlaybackSession {
     public isCurrent(attempt: PlaybackAttempt): boolean {
         const record = this.active;
         return (
-            !this.cleanupFailed &&
+            this.cleanupError === null &&
             record !== null &&
             record.attempt === attempt &&
             record.phase !== "cancelled" &&
             record.generation === this.manager.getGeneration()
         );
+    }
+
+    /** Failed cleanup remains observable even after the active attempt is detached. */
+    public assertRetirementSafe(): void {
+        if (this.cleanupError !== null) {
+            throw this.cleanupError;
+        }
     }
 
     /** Logical restoration must be complete before commit is called. */
@@ -133,19 +145,23 @@ export class PlaybackSession {
         return record.commitPromise;
     }
 
-    /** Detach ownership synchronously; native close and resume are never awaited. */
+    /**
+     * Detach ownership synchronously; native close and resume are never awaited.
+     * Throws on unsafe retirement, including repeated cancellation after failure.
+     * The writer-lock owner must not interpret a detached attempt as safe cleanup.
+     */
     public cancel(): void {
         const record = this.active;
         this.active = null;
-        if (record === null) {
-            return;
+        if (record !== null) {
+            record.phase = "cancelled";
+            record.cancel();
+            record.resolveReady(false);
+            if (this.cleanupError === null) {
+                this.retire(record);
+            }
         }
-        record.phase = "cancelled";
-        record.cancel();
-        record.resolveReady(false);
-        if (!this.cleanupFailed) {
-            this.retire(record);
-        }
+        this.assertRetirementSafe();
     }
 
     public setInterruptionHandler(handler: ((reason: string) => void) | null): void {
@@ -184,7 +200,7 @@ export class PlaybackSession {
             // Resolved false is the manager's successful silent-clock contract.
             // Rejection/timeout is not successful silent initialization.
             if (fallback !== "ready" && fallback !== "unavailable") {
-                this.cancel();
+                this.cancelAfterFailure();
                 return false;
             }
         }
@@ -209,7 +225,7 @@ export class PlaybackSession {
     private retireForFallback(record: AttemptRecord): boolean {
         if (!this.isCurrent(record.attempt) || !this.retire(record)) {
             if (this.active === record) {
-                this.cancel();
+                this.cancelAfterFailure();
             }
             return false;
         }
@@ -225,10 +241,19 @@ export class PlaybackSession {
             this.manager.endPlaybackGeneration(record.generation);
             return true;
         } catch (error) {
-            // Do not claim a safe menu/new start when physical retirement failed.
-            this.cleanupFailed = true;
-            console.error("Playback retirement failed; reload is required before another start.", error);
+            // Latch the original failure: later no-op cleanup cannot clear it.
+            this.cleanupError ??= new Error("Playback retirement failed; reload is required before another start.", { cause: error });
+            console.error(this.cleanupError.message, error);
             return false;
+        }
+    }
+
+    private cancelAfterFailure(): void {
+        try {
+            this.cancel();
+        } catch {
+            // Async preparation/commit still settles false. Synchronous exit and
+            // assertRetirementSafe expose the latched failure to the shell owner.
         }
     }
 
@@ -236,7 +261,7 @@ export class PlaybackSession {
         record.resolveReady(false);
         if (this.active === record) {
             console.error("Playback transaction failed.", error);
-            this.cancel();
+            this.cancelAfterFailure();
         }
     }
 
