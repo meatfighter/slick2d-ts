@@ -312,9 +312,9 @@ test("PWA retirement cannot resurrect a naturally ended track before the next Mu
     assert.equal(music.playing(), false);
 });
 
-test("AppGameContainer teardown is idempotent and does not invoke legacy audio recovery", () => {
+test("AppGameContainer repeated teardown preserves any latched cleanup failure and has no legacy recovery", () => {
     const source = readFileSync(new URL("../src/slick/AppGameContainer.ts", import.meta.url), "utf8");
     const destroy = source.slice(source.indexOf("public destroy(): void"), source.indexOf("public override setDefaultMouseCursor"));
-    assert.match(destroy, /if \(this\.destroyed\) \{\s*return;\s*\}/);
+    assert.match(destroy, /if \(this\.destroyed\) \{[\s\S]*?this\.destructionFailure !== null[\s\S]*?throw this\.destructionFailure;[\s\S]*?return;/);
     assert.doesNotMatch(source, /BrowserAudioLifecycle/);
 });
