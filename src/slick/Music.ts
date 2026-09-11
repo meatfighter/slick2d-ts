@@ -389,10 +389,22 @@ export class Music {
             if (token !== this.startToken || Music.currentMusic !== this) {
                 return;
             }
+            const store = SoundStore.get();
             this.stopSource(true, true);
-            this.generationDetached = true;
             Log.error(`Failed to attach music: ${this.ref}`, error);
-            SoundStore.get().reportPlaybackInterruption("music-start-failed");
+            if (store.isUsingExplicitPlaybackGenerations()) {
+                this.generationDetached = true;
+                store.reportPlaybackInterruption("music-start-failed");
+                return;
+            }
+            // Ordinary Slick containers do not have a playback-session transaction
+            // that can deliberately accept a silent logical clock. A failed native
+            // start therefore ends this attempted transport without synthesizing a
+            // Music listener event.
+            this.resetLogicalState();
+            if (Music.currentMusic === this) {
+                Music.currentMusic = null;
+            }
         });
     }
 
