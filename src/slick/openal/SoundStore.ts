@@ -9,7 +9,7 @@ type WebAudioGlobal = typeof globalThis & {
 
 type AudioPosition = { x: number; y: number; z: number };
 type DecoderPool = { context: BaseAudioContext | null; active: number; batches: number };
-type AudioLoad = { promise: Promise<AudioBuffer>; abandoned: boolean; abort: (() => void) | null; signal?: AbortSignal };
+type AudioLoad = { promise: Promise<AudioBuffer>; abandoned: boolean; abort: (() => void) | null; signal: AbortSignal | undefined };
 
 export type AudioPreloadProgress = { ref: string; loaded: number; total: number };
 export interface AudioPreloadOptions extends ResourceLoadOptions {
