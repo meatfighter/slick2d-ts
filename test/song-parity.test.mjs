@@ -2,28 +2,30 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Music, Song } from "../dist/index.js";
 
-function fakeMusic(name, events, initiallyPlaying = false) {
+function fakeMusic(name, events, initialTransport = "stopped") {
     const music = Object.create(Music.prototype);
-    music.isPlaying = initiallyPlaying;
+    music.transport = initialTransport;
     music.loop = () => {
         events.push(`${name}.loop`);
-        music.isPlaying = true;
+        music.transport = "playing";
     };
     music.play = () => {
         events.push(`${name}.play`);
-        music.isPlaying = true;
+        music.transport = "playing";
     };
-    music.playing = () => music.isPlaying;
+    music.playing = () => music.transport === "playing";
+    music.getTransportState = () => music.transport;
+    music.isTransportActive = () => music.transport === "playing" || music.transport === "paused";
     music.stop = () => {
         events.push(`${name}.stop`);
-        music.isPlaying = false;
+        music.transport = "stopped";
     };
     return music;
 }
 
-test("Song.play calls stop before starting the selected music part", () => {
+test("Song.play stops an active selected part before restarting it", () => {
     const events = [];
-    const intro = fakeMusic("intro", events, true);
+    const intro = fakeMusic("intro", events, "playing");
     const song = new Song(intro);
 
     song.play();
@@ -32,13 +34,13 @@ test("Song.play calls stop before starting the selected music part", () => {
     assert.equal(song.playing, true);
 });
 
-test("Song.play sets playing only after the selected start call", () => {
+test("Song.play preserves Java ordering while starting the selected part", () => {
     const events = [];
     let song;
     const intro = fakeMusic("intro", events);
     intro.play = () => {
         events.push(`intro.play songPlaying=${song.playing}`);
-        intro.isPlaying = true;
+        intro.transport = "playing";
     };
     song = new Song(intro);
 
@@ -48,7 +50,7 @@ test("Song.play sets playing only after the selected start call", () => {
     assert.equal(song.playing, true);
 });
 
-test("Song preserves the no-primary-intro replay lifecycle", () => {
+test("Song starts an intro2-only song exactly once before its loop", () => {
     const events = [];
     const intro2 = fakeMusic("intro2", events);
     const loop = fakeMusic("loop", events);
@@ -57,31 +59,42 @@ test("Song preserves the no-primary-intro replay lifecycle", () => {
     song.play();
 
     assert.deepEqual(events, ["intro2.play"]);
-    assert.equal(song.playedIntro2, false);
-
-    song.update();
-
-    assert.deepEqual(events, ["intro2.play", "intro2.play"]);
     assert.equal(song.playedIntro2, true);
 
-    intro2.isPlaying = false;
+    song.update();
+    assert.deepEqual(events, ["intro2.play"]);
+
+    intro2.transport = "stopped";
     song.update();
 
-    assert.deepEqual(events, ["intro2.play", "intro2.play", "loop.loop"]);
+    assert.deepEqual(events, ["intro2.play", "loop.loop"]);
 });
 
-test("Song.stop only stops music parts that report playing", () => {
+test("Song.update does not skip or restart a paused part", () => {
     const events = [];
-    const intro = fakeMusic("intro", events, false);
-    const intro2 = fakeMusic("intro2", events, true);
-    const loop = fakeMusic("loop", events, false);
+    const intro = fakeMusic("intro", events, "paused");
+    const loop = fakeMusic("loop", events);
+    const song = new Song(intro, loop);
+    song.playing = true;
+
+    song.update();
+
+    assert.deepEqual(events, []);
+    assert.equal(loop.transport, "stopped");
+});
+
+test("Song.stop includes paused transports and resets phase flags", () => {
+    const events = [];
+    const intro = fakeMusic("intro", events, "stopped");
+    const intro2 = fakeMusic("intro2", events, "paused");
+    const loop = fakeMusic("loop", events, "playing");
     const song = new Song(intro, intro2, loop);
 
     song.playing = true;
     song.playedIntro2 = true;
     song.stop();
 
-    assert.deepEqual(events, ["intro2.stop"]);
+    assert.deepEqual(events, ["intro2.stop", "loop.stop"]);
     assert.equal(song.playing, false);
     assert.equal(song.playedIntro2, false);
 });
