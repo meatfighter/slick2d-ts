@@ -217,7 +217,7 @@ test("an obsolete audio failure cannot evict a newer decoded-buffer request", as
         }
 
         createGain() {
-            return { connect: () => undefined, gain: { value: 1 } };
+            return { connect: () => undefined, disconnect: () => undefined, gain: { value: 1 } };
         }
 
         decodeAudioData() {
