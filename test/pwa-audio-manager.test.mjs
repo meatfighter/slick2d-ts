@@ -172,10 +172,7 @@ test("PWA preload never falls back to a hardware playback context when OfflineAu
     manager.install();
     ResourceLoader.registerResource("no-offline.ogg", new Uint8Array([1, 2, 3, 4]));
 
-    await assert.rejects(
-        SoundStore.get().preloadAudioBuffer("no-offline.ogg"),
-        (error) => error?.kind === "decode" && error?.phase === "decode"
-    );
+    await assert.rejects(SoundStore.get().preloadAudioBuffer("no-offline.ogg"), (error) => error?.kind === "decode" && error?.phase === "decode");
 
     assert.equal(FakeAudioContext.created, 0);
     assert.equal(manager.hasPlaybackGeneration(), false);

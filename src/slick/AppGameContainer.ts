@@ -801,7 +801,15 @@ export class AppGameContainer extends GameContainer {
     }
 
     private scheduleNextFrame(): void {
-        if (!this.ownsSharedResources() || this.loopSuspended || this.contextLost || !this.started || !this.loopReady || this.waitingForResources || this.animationFrame !== 0) {
+        if (
+            !this.ownsSharedResources() ||
+            this.loopSuspended ||
+            this.contextLost ||
+            !this.started ||
+            !this.loopReady ||
+            this.waitingForResources ||
+            this.animationFrame !== 0
+        ) {
             return;
         }
         this.animationFrame = requestAnimationFrame(this.loop);

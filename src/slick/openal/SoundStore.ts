@@ -560,14 +560,20 @@ export class SoundStore {
     }
 
     public preloadAudioBuffer(ref: string, options: ResourceLoadOptions = {}): Promise<void> {
-        const result = ResourceLoader.track(this.loadAudioBuffer(ref, options).then(() => undefined), ref);
+        const result = ResourceLoader.track(
+            this.loadAudioBuffer(ref, options).then(() => undefined),
+            ref
+        );
         void result.catch(() => undefined);
         return result;
     }
 
     public preloadAudioBuffers(refs: Iterable<string>, onProgress?: (progress: AudioPreloadProgress) => void): Promise<void>;
     public preloadAudioBuffers(refs: Iterable<string>, options?: AudioPreloadOptions): Promise<void>;
-    public async preloadAudioBuffers(refs: Iterable<string>, onProgressOrOptions?: ((progress: AudioPreloadProgress) => void) | AudioPreloadOptions): Promise<void> {
+    public async preloadAudioBuffers(
+        refs: Iterable<string>,
+        onProgressOrOptions?: ((progress: AudioPreloadProgress) => void) | AudioPreloadOptions
+    ): Promise<void> {
         const options = typeof onProgressOrOptions === "function" ? { onProgress: onProgressOrOptions } : (onProgressOrOptions ?? {});
         SoundStore.throwIfAborted(options.signal, "audio manifest");
         const unique = Array.from(new Set(refs));
