@@ -63,7 +63,6 @@ export class Song {
             return;
         }
         this.stop();
-        this.playing = true;
         if (this.intro !== null) {
             this.intro.play();
         } else if (this.intro2 !== null) {
@@ -72,8 +71,11 @@ export class Song {
         } else if (this.loop !== null) {
             this.loop.loop();
         } else {
-            this.playing = false;
+            return;
         }
+        // Preserve the Java ordering: the selected Music starts while Song itself
+        // is still stopped. This also keeps reentrant listener behavior stable.
+        this.playing = true;
     }
 
     /** Java counterpart: Song.update(). */
