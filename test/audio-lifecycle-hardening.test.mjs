@@ -76,7 +76,7 @@ class FakeAudioContext {
         this.createGainCalls = 0;
         this.currentTime = 0;
         this.destination = {};
-        this.state = "suspended";
+        this.state = "running";
         FakeAudioContext.created.push(this);
     }
 
@@ -166,7 +166,7 @@ test("idle Music fades do not advance and fresh play clears the dormant fade", a
     assert.equal(music.getVolume(), 0.8);
 });
 
-test("current Music fades continue while explicitly paused", async () => {
+test("current Music fades freeze while explicitly paused and continue after resume", async () => {
     installAudioGlobals();
     registerTone();
     const store = SoundStore.get();
@@ -183,10 +183,15 @@ test("current Music fades continue while explicitly paused", async () => {
     assert.equal(store.isMusicPlaying(), true);
 
     Music.poll(50);
+    assert.equal(music.getVolume(), 1);
+    assert.equal(music.isPaused(), true);
+
+    music.resume();
+    await settleAudioStart();
+    Music.poll(50);
     assert.equal(music.getVolume(), 0.5);
     Music.poll(50);
     assert.equal(music.getVolume(), 0);
-    assert.equal(music.isPaused(), true);
 });
 
 test("explicit Music stop reports musicEnded on the next poll", async () => {
@@ -242,6 +247,7 @@ test("natural non-looping Music completion is reported by the next poll", async 
     music.play();
     await settleAudioStart();
     const source = FakeAudioSource.created.at(-1);
+    assert.notEqual(source, undefined);
     source.finish();
 
     assert.deepEqual(events, []);
@@ -267,6 +273,8 @@ test("Music startup failure disconnects its partial Web Audio graph", async () =
 
     const source = FakeAudioSource.created.at(-1);
     const gain = FakeGain.created.at(-1);
+    assert.notEqual(source, undefined);
+    assert.notEqual(gain, undefined);
     assert.equal(source.onended, null);
     assert.equal(source.disconnectCalls, 1);
     assert.equal(gain.disconnectCalls, 1);
@@ -298,7 +306,7 @@ test("Sound startup failure disconnects its graph and clears the remembered hand
     assert.equal(gain.disconnectCalls, 1);
 });
 
-test("partial Web Audio initialization rolls back and a later AL.create retries", () => {
+test("partial Web Audio initialization rolls back physical state and a later AL.create retries", () => {
     installAudioGlobals();
     const store = SoundStore.get();
     FakeAudioContext.failCreateGainAt = 2;
@@ -308,7 +316,7 @@ test("partial Web Audio initialization rolls back and a later AL.create retries"
     const failedContext = FakeAudioContext.created[0];
     const partialBus = FakeGain.created[0];
     assert.equal(store.soundWorks(), false);
-    assert.equal(store.inited, false);
+    assert.equal(store.inited, true, "logical audio defaults remain initialized after hardware failure");
     assert.equal(store.context, null);
     assert.equal(store.soundBus, null);
     assert.equal(store.musicBus, null);
