@@ -12,7 +12,8 @@ function toMusic(value: MusicOrString): Music | null {
 /**
  * Java counterpart: source Song helper classes.
  *
- * Public-field intro/intro2/loop sequencer.
+ * Public-field intro/intro2/loop sequencer. A paused or detached transport is
+ * still active; replacing its physical audio generation must not skip a part.
  */
 export class Song {
     public static readonly STREAMING = false;
@@ -47,14 +48,10 @@ export class Song {
 
     /** Java counterpart: Song.stop(). */
     public stop(): void {
-        if (this.intro?.playing()) {
-            this.intro.stop();
-        }
-        if (this.intro2?.playing()) {
-            this.intro2.stop();
-        }
-        if (this.loop?.playing()) {
-            this.loop.stop();
+        for (const music of [this.intro, this.intro2, this.loop]) {
+            if (music !== null && music.getTransportState() !== "stopped") {
+                music.stop();
+            }
         }
         this.playing = false;
         this.playedIntro2 = false;
@@ -66,30 +63,38 @@ export class Song {
             return;
         }
         this.stop();
-        if (this.intro) {
-            this.intro.play();
-        } else if (this.intro2) {
-            this.intro2.play();
-        } else if (this.loop) {
-            this.loop.loop();
-        }
         this.playing = true;
+        if (this.intro !== null) {
+            this.intro.play();
+        } else if (this.intro2 !== null) {
+            this.playedIntro2 = true;
+            this.intro2.play();
+        } else if (this.loop !== null) {
+            this.loop.loop();
+        } else {
+            this.playing = false;
+        }
     }
 
     /** Java counterpart: Song.update(). */
     public update(): void {
-        if (this.playing) {
-            if (this.intro === null || !this.intro.playing()) {
-                if (!(this.intro2 === null || this.playedIntro2)) {
-                    this.playedIntro2 = true;
-                    this.intro2.play();
-                } else if ((this.intro2 === null || !this.intro2.playing()) && this.loop !== null && !this.loop.playing()) {
-                    this.loop.loop();
-                }
+        if (!this.playing || this.intro?.isTransportActive()) {
+            return;
+        }
+        if (this.intro2 !== null && !this.playedIntro2) {
+            this.playedIntro2 = true;
+            this.intro2.play();
+            return;
+        }
+        if (this.intro2?.isTransportActive()) {
+            return;
+        }
+        if (this.loop !== null) {
+            if (!this.loop.isTransportActive()) {
+                this.loop.loop();
             }
-            if (this.loop === null && this.intro !== null && !this.intro.playing() && (this.intro2 === null || !this.intro2.playing())) {
-                this.stop();
-            }
+        } else {
+            this.stop();
         }
     }
 }
