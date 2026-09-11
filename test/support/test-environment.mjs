@@ -1,5 +1,5 @@
 import { afterEach } from "node:test";
-import { AppGameContainer, Display } from "../../dist/index.js";
+import { AppGameContainer, Display, SoundStore } from "../../dist/index.js";
 
 // Older parity tests construct an AppGameContainer manually and register it only
 // through Display. Production start() publishes the shared resource owner before
@@ -18,19 +18,14 @@ Display.setActiveContainer = (container) => {
     originalSetActiveContainer(container);
 };
 
-// Older ordinary-audio fixtures expose only AudioContext. PWA-generation preload
-// now correctly requires a decode-only OfflineAudioContext. Alias the fixture's
-// current AudioContext constructor by default while keeping the property
-// configurable so tests can explicitly remove/replace it to exercise unavailable
-// offline decoding.
-function installOfflineAudioContextAlias() {
-    Object.defineProperty(globalThis, "OfflineAudioContext", {
-        configurable: true,
-        get() {
-            return globalThis.AudioContext;
-        }
-    });
-}
-
-installOfflineAudioContextAlias();
-afterEach(installOfflineAudioContextAlias);
+// Explicit PWA-generation mode is page-lifetime production state, but individual
+// Node tests must not inherit it from an earlier test in the same process. Reset
+// only the mode/capability flags here; each test remains responsible for retiring
+// its own physical resources through the normal APIs.
+afterEach(() => {
+    const store = SoundStore.get();
+    store.explicitPlaybackGenerationMode = false;
+    store.playbackCommitted = false;
+    store.logicalPlaybackActive = false;
+    store.interruptionHandler = null;
+});
