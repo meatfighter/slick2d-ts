@@ -41,7 +41,7 @@
         "format": "prettier . --write",
         "format:check": "prettier . --check",
         "lint": "eslint src --ext .ts",
-        "test": "npm run build && node --test test/*.mjs",
+        "test": "npm run build && node --import ./test/test-environment.mjs --test test/*.mjs",
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "check:dist": "node scripts/check-dist-clean.mjs",
         "verify": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run check:dist",
