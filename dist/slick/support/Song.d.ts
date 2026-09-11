@@ -2,7 +2,8 @@ import { Music } from "../Music.js";
 /**
  * Java counterpart: source Song helper classes.
  *
- * Public-field intro/intro2/loop sequencer.
+ * Public-field intro/intro2/loop sequencer. A paused or detached transport is
+ * still active; replacing its physical audio generation must not skip a part.
  */
 export declare class Song {
     static readonly STREAMING = false;

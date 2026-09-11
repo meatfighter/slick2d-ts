@@ -13,30 +13,30 @@ export interface AudioPreloadOptions extends ResourceLoadOptions {
     readonly onProgress?: (progress: AudioPreloadProgress) => void;
     readonly concurrency?: number;
 }
-/**
- * Browser Web Audio playback handle.
- */
 export interface AudioPlaybackHandle {
-    /** Browser parity helper: logical OpenAL source slot, when this handle owns one. */
     readonly sourceId?: number;
-    /** Stops playback if the source has started. */
     stop(): void;
-    /** Pauses playback when supported by the handle. */
     pause?(): void;
-    /** Suspends audible playback for global music-off without changing public Music.pause() state. */
     suspend?(): void;
-    /** Resumes playback when supported by the handle. */
     resume?(): void;
-    /** Returns true while the source is active. */
+    detachPlaybackGeneration?(): void;
+    attachPlaybackGeneration?(): void | Promise<void>;
     playing(): boolean;
-    /** Browser parity helper: returns the fixed per-source gain assigned when playback started. */
     getGain?(): number;
 }
-/**
- * Java Slick2D counterpart: org.newdawn.slick.openal.SoundStore.
- *
- * Browser Web Audio subsystem singleton and compatibility state holder.
- */
+export type PlaybackDiagnostics = Readonly<{
+    generation: number;
+    ownedContext: boolean;
+    committed: boolean;
+    silent: boolean;
+    effects: number;
+    musicHandles: number;
+    decodedBuffers: number;
+    contextsCreated: number;
+    contextsRetired: number;
+    closesSettled: number;
+}>;
+/** Page-lifetime assets/preferences plus one explicitly owned playback generation. */
 export declare class SoundStore {
     private static readonly instance;
     private deferredLoading;
@@ -50,92 +50,101 @@ export declare class SoundStore {
     private context;
     private soundBus;
     private musicBus;
+    private outputGate;
+    private contextStateListener;
     private buffers;
+    private decodedBuffers;
+    private audioLoads;
+    private decoderPool;
     private activeHandles;
     private musicHandles;
     private soundSources;
-    /** Java Slick2D counterpart: SoundStore.get(). */
+    private explicitPlaybackGenerationMode;
+    private playbackGeneration;
+    private playbackRetirementFailure;
+    private playbackCommitted;
+    private logicalPlaybackActive;
+    private interruptionHandler;
+    private contextsCreated;
+    private contextsRetired;
+    private closesSettled;
     static get(): SoundStore;
-    /** Java Slick2D counterpart: SoundStore.clear(). */
+    enableExplicitPlaybackGenerations(): void;
+    isUsingExplicitPlaybackGenerations(): boolean;
+    getPlaybackGeneration(): number;
+    hasPlaybackGeneration(): boolean;
+    isPlaybackGenerationCurrent(generation: number, context?: AudioContext | null): boolean;
+    isPlaybackCommitted(): boolean;
+    isLogicalPlaybackActive(): boolean;
+    isSilentPlaybackActive(): boolean;
+    setPlaybackInterruptionHandler(handler: ((reason: string, generation: number) => void) | null): void;
+    reportPlaybackInterruption(reason: string): void;
+    /** Constructor and native resume execute before returning to the activation handler. */
+    beginPlaybackGenerationFromUserGesture(deferPlayback?: boolean): Promise<boolean>;
+    /** Accept a prepared generation, attach logical music, and then open its output gate. */
+    commitPlaybackGeneration(generation: number): Promise<boolean>;
+    /** Conditional retirement cannot tear down a replacement generation. */
+    endPlaybackGeneration(expectedGeneration?: number): void;
+    private detachMusic;
     clear(): void;
-    /** Browser parity helper: resets the Web Audio/OpenAL lifecycle for AL.destroy(). */
     destroy(): void;
-    /** Browser/PWA helper: resets playback and flags while preserving decoded buffers and the AudioContext. */
     destroyPreservingAudioCache(): void;
-    /** Java Slick2D counterpart: SoundStore.disable(). */
     disable(): void;
-    /** Java Slick2D counterpart: SoundStore.setDeferredLoading(boolean). */
     setDeferredLoading(deferred: boolean): void;
-    /** Java Slick2D counterpart: SoundStore.isDeferredLoading(). */
     isDeferredLoading(): boolean;
-    /** Java Slick2D counterpart: SoundStore.setMusicOn(boolean). */
     setMusicOn(music: boolean): void;
-    /** Java Slick2D counterpart: SoundStore.isMusicOn(). */
     isMusicOn(): boolean;
-    /** Java Slick2D counterpart: SoundStore.setMusicVolume(float). */
     setMusicVolume(volume: number): void;
-    /** Java Slick2D counterpart: SoundStore.getMusicVolume(). */
     getMusicVolume(): number;
-    /** Java Slick2D counterpart: SoundStore.setSoundVolume(float). */
     setSoundVolume(volume: number): void;
-    /** Java Slick2D counterpart: SoundStore.getSoundVolume(). */
     getSoundVolume(): number;
-    /** Java Slick2D counterpart: SoundStore.setSoundsOn(boolean). */
     setSoundsOn(sounds: boolean): void;
-    /** Java Slick2D counterpart: SoundStore.soundsOn(). */
     soundsOn(): boolean;
-    /** Java Slick2D counterpart: SoundStore.musicOn(). */
     musicOn(): boolean;
-    /** Java Slick2D counterpart: SoundStore.soundWorks(). */
     soundWorks(): boolean;
-    /** Java Slick2D counterpart: SoundStore.init(). */
     init(): void;
-    /** Java Slick2D counterpart: SoundStore.poll(int). */
     poll(_delta: number): void;
-    /** Java Slick2D counterpart: SoundStore.isMusicPlaying(). */
     isMusicPlaying(): boolean;
-    /** Java Slick2D counterpart: SoundStore.stopSoundEffect(int). */
     stopSoundEffect(id: number): void;
-    /** Browser/PWA helper: stops active sound effects without clearing music or decoded buffers. */
     stopSoundEffects(): void;
-    /** Browser/PWA helper: stops active music and sound effects without clearing decoded buffers. */
     stopAllPlayback(): void;
-    /** Browser/PWA helper: clears playback bookkeeping without clearing decoded buffers. */
     resetPlaybackState(): void;
-    /** Browser/PWA helper: clears decoded Web Audio buffers without changing the AudioContext. */
     clearDecodedBuffers(): void;
-    /** Java Slick2D counterpart: SoundStore.getSourceCount(). */
+    getDecodedAudioBuffer(ref: string): AudioBuffer | null;
     getSourceCount(): number;
-    /** Java Slick2D counterpart: SoundStore.setMaxSources(int). */
     setMaxSources(max: number): void;
-    /** Browser parity helper: returns the lazily-created AudioContext. */
     getAudioContext(): AudioContext | null;
-    /** Browser parity helper: resumes Web Audio from a user gesture before gameplay playback. */
+    /** Explicit activation only. Ordinary playback never resumes an old context implicitly. */
     unlock(): Promise<boolean>;
-    /** Browser parity helper: returns the global sound-effect gain bus. */
     getSoundBus(): GainNode | null;
-    /** Browser parity helper: returns the global music gain bus. */
     getMusicBus(): GainNode | null;
-    /** Browser parity helper: loads and decodes an audio buffer through Web Audio. */
     loadAudioBuffer(ref: string, options?: ResourceLoadOptions): Promise<AudioBuffer>;
-    /** Browser parity helper: queues audio decode work into ResourceLoader.waitForAll(). */
     preloadAudioBuffer(ref: string, options?: ResourceLoadOptions): Promise<void>;
     preloadAudioBuffers(refs: Iterable<string>, onProgress?: (progress: AudioPreloadProgress) => void): Promise<void>;
     preloadAudioBuffers(refs: Iterable<string>, options?: AudioPreloadOptions): Promise<void>;
-    private static waitForAudioPromise;
-    private static throwIfAborted;
-    private static abortException;
-    private static isAbortError;
-    /** Browser parity helper: plays a decoded sound effect through Web Audio. */
     playSound(ref: string, pitch: number, volume: number, loop: boolean, onEnded?: () => void, position?: AudioPosition): AudioPlaybackHandle | null;
-    /** Browser parity helper: tracks an externally-created Web Audio handle. */
     track(handle: AudioPlaybackHandle): void;
-    /** Browser parity helper: stops tracking an externally-created Web Audio handle. */
     untrack(handle: AudioPlaybackHandle): void;
+    /** Internal SFX owner hook; source slots are released only by their current handle. */
+    releaseEffect(handle: AudioPlaybackHandle): void;
+    getPlaybackDiagnostics(): PlaybackDiagnostics;
+    private ensureLogicalInitialization;
+    private retirePlaybackContext;
+    private closeContext;
+    private createOrdinaryContainerContext;
+    private loadAudioBufferForOrdinaryContainer;
+    private loadAudioBufferOffline;
+    private acquireOfflineDecoder;
+    private static releaseDecoderIfIdle;
+    private audioDecodeUnavailable;
     private resetSoundSources;
     private findFreeSoundSource;
-    private releaseSoundSource;
-    private connectPositionedSource;
+    static disconnect(node: AudioNode | null): void;
+    private static waitForAudioPromise;
+    private static decodeAudioData;
+    private static throwIfAborted;
+    private static abortException;
+    private discardUnusablePlayback;
 }
 export {};
 //# sourceMappingURL=SoundStore.d.ts.map

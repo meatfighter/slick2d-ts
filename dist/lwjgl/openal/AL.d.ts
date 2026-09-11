@@ -11,6 +11,7 @@ export declare class AL {
     static destroy(): void;
     /** Browser/PWA helper: tears down logical OpenAL state while preserving decoded audio cache. */
     static destroyPreservingAudioCache(): void;
+    private static destroyAudio;
     /** Java LWJGL counterpart: AL.isCreated(). */
     static isCreated(): boolean;
 }
