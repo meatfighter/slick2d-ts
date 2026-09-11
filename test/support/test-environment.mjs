@@ -1,3 +1,4 @@
+import { afterEach } from "node:test";
 import { AppGameContainer, Display } from "../../dist/index.js";
 
 // Older parity tests construct an AppGameContainer manually and register it only
@@ -16,3 +17,20 @@ Display.setActiveContainer = (container) => {
     }
     originalSetActiveContainer(container);
 };
+
+// Older ordinary-audio fixtures expose only AudioContext. PWA-generation preload
+// now correctly requires a decode-only OfflineAudioContext. Alias the fixture's
+// current AudioContext constructor by default while keeping the property
+// configurable so tests can explicitly remove/replace it to exercise unavailable
+// offline decoding.
+function installOfflineAudioContextAlias() {
+    Object.defineProperty(globalThis, "OfflineAudioContext", {
+        configurable: true,
+        get() {
+            return globalThis.AudioContext;
+        }
+    });
+}
+
+installOfflineAudioContextAlias();
+afterEach(installOfflineAudioContextAlias);
