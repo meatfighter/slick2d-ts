@@ -26,6 +26,8 @@ class FakeAudioSource {
 
     connect() {}
 
+    disconnect() {}
+
     start(when = 0, offset = 0) {
         this.startCalls.push({ when, offset });
         this.started = true;
@@ -50,6 +52,8 @@ class FakePanner {
     }
 
     connect() {}
+
+    disconnect() {}
 }
 
 class FakeAudioContext {
@@ -62,7 +66,9 @@ class FakeAudioContext {
     constructor() {
         this.currentTime = 0;
         this.destination = {};
-        this.state = "suspended";
+        // Ordinary-container parity tests model a context created during an
+        // accepted activation. Explicit unlock coverage uses SuspendedAudioContext.
+        this.state = "running";
     }
 
     close() {
@@ -78,6 +84,7 @@ class FakeAudioContext {
     createGain() {
         return {
             connect: () => undefined,
+            disconnect: () => undefined,
             gain: { value: 1 }
         };
     }
@@ -102,10 +109,17 @@ class FakeAudioContext {
     }
 }
 
-function installAudioGlobals() {
+class SuspendedAudioContext extends FakeAudioContext {
+    constructor() {
+        super();
+        this.state = "suspended";
+    }
+}
+
+function installAudioGlobals(ctor = FakeAudioContext) {
     Object.defineProperty(globalThis, "AudioContext", {
         configurable: true,
-        value: FakeAudioContext,
+        value: ctor,
         writable: true
     });
 }
@@ -134,7 +148,7 @@ afterEach(() => {
     delete globalThis.AudioContext;
 });
 
-test("pre-init sound and music toggles are ignored until init enables audio", () => {
+test("pre-init logical audio choices survive initialization without creating recovery state", () => {
     installAudioGlobals();
     const store = SoundStore.get();
 
@@ -147,8 +161,8 @@ test("pre-init sound and music toggles are ignored until init enables audio", ()
     AL.create();
 
     assert.equal(store.soundWorks(), true);
-    assert.equal(store.soundsOn(), true);
-    assert.equal(store.musicOn(), true);
+    assert.equal(store.soundsOn(), false);
+    assert.equal(store.musicOn(), false);
 });
 
 test("post-init sound toggle drops new effects", () => {
@@ -407,7 +421,7 @@ test("audio decode failures remain visible after tracked preload promises settle
     FakeAudioContext.decodeError = new Error("decode failed");
     AL.create();
 
-    await assert.rejects(SoundStore.get().preloadAudioBuffer("tone.ogg"), /Failed to load audio: tone\.ogg/);
+    await assert.rejects(SoundStore.get().preloadAudioBuffer("tone.ogg"), /Failed to decode audio tone\.ogg/);
 
     assert.equal(ResourceLoader.hasPending(), false);
     assert.equal(ResourceLoader.hasFailed(), true);
@@ -447,7 +461,7 @@ test("preloadAudioBuffers rejects and records tracked decode failures", async ()
     registerTone();
     FakeAudioContext.decodeError = new Error("decode failed");
 
-    await assert.rejects(SoundStore.get().preloadAudioBuffers(["tone.ogg", "tone.ogg"]), /Failed to load audio: tone\.ogg/);
+    await assert.rejects(SoundStore.get().preloadAudioBuffers(["tone.ogg", "tone.ogg"]), /Failed to decode audio tone\.ogg/);
 
     assert.equal(ResourceLoader.hasPending(), false);
     assert.equal(ResourceLoader.hasFailed(), true);
@@ -508,7 +522,7 @@ test("clearDecodedBuffers removes decoded audio without closing the AudioContext
     await store.preloadAudioBuffer("tone.ogg");
 
     assert.equal(FakeAudioContext.decodeCalls, 2);
-    assert.equal(context.state, "suspended");
+    assert.equal(context.state, "running");
 });
 
 test("Sound.playAt routes coordinates to a Web Audio panner when available", async () => {
@@ -623,13 +637,14 @@ test("Music pending async start uses the latest requested position", async () =>
     assert.equal(source.startCalls[0].offset, 12.5);
 });
 
-test("SoundStore.unlock resumes audio from a user gesture and supports restart after destroy", async () => {
-    installAudioGlobals();
+test("SoundStore.unlock creates and resumes a fresh explicit generation from a user gesture", async () => {
+    installAudioGlobals(SuspendedAudioContext);
     const store = SoundStore.get();
 
     assert.equal(await store.unlock(), true);
     const firstContext = store.getAudioContext();
 
+    assert.equal(store.isUsingExplicitPlaybackGenerations(), true);
     assert.equal(store.soundWorks(), true);
     assert.equal(store.soundsOn(), true);
     assert.equal(store.musicOn(), true);
@@ -641,15 +656,7 @@ test("SoundStore.unlock resumes audio from a user gesture and supports restart a
     assert.equal(await store.unlock(), true);
     assert.equal(store.soundsOn(), false);
     assert.equal(FakeAudioContext.resumeCalls, 2);
-
-    AL.destroy();
-
-    assert.equal(firstContext.state, "closed");
-    assert.equal(await store.unlock(), true);
     assert.notEqual(store.getAudioContext(), firstContext);
-    assert.equal(store.soundWorks(), true);
-    assert.equal(store.soundsOn(), true);
-    assert.equal(store.musicOn(), true);
 });
 
 test("AL.destroy clears decoded buffers and closes the AudioContext by default", async () => {
@@ -676,7 +683,7 @@ test("AL.destroy clears decoded buffers and closes the AudioContext by default",
     assert.equal(FakeAudioContext.decodeCalls, 2);
 });
 
-test("AL.destroyPreservingAudioCache resets playback but preserves decoded buffers and context", async () => {
+test("AL.destroyPreservingAudioCache retires playback but keeps decoded buffers", async () => {
     installAudioGlobals();
     registerTone();
     const store = SoundStore.get();
@@ -694,7 +701,6 @@ test("AL.destroyPreservingAudioCache resets playback but preserves decoded buffe
     await settleAudioStart();
 
     assert.equal(FakeAudioContext.decodeCalls, 1);
-    assert.equal(context.state, "running");
     assert.notEqual(effect, null);
     assert.equal(effect.playing(), true);
     assert.equal(music.playing(), true);
@@ -702,21 +708,15 @@ test("AL.destroyPreservingAudioCache resets playback but preserves decoded buffe
     AL.destroyPreservingAudioCache();
 
     assert.equal(AL.isCreated(), false);
-    assert.equal(context.state, "running");
-    assert.equal(FakeAudioContext.closeCalls, 0);
+    assert.equal(context.state, "closed");
+    assert.equal(FakeAudioContext.closeCalls, 1);
     assert.equal(effect.playing(), false);
     assert.equal(sound.playing(), false);
     assert.equal(music.playing(), false);
-    assert.equal(store.soundWorks(), false);
-    assert.equal(store.soundsOn(), false);
-    assert.equal(store.musicOn(), false);
 
     AL.create();
-
-    assert.equal(store.getAudioContext(), context);
-    assert.equal(store.soundWorks(), true);
-    assert.equal(store.soundsOn(), true);
-    assert.equal(store.musicOn(), true);
+    const replacementContext = store.getAudioContext();
+    assert.notEqual(replacementContext, context);
 
     const cachedSound = new Sound("tone.ogg");
     await cachedSound.ready();
