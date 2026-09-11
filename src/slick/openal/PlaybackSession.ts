@@ -13,9 +13,10 @@ type AttemptRecord = {
     cancelled: Promise<void>;
     cancel: () => void;
     resolveReady: (current: boolean) => void;
+    commitPromise: Promise<boolean> | null;
 };
 
-type DeadlineResult = "ready" | "unavailable" | "cancelled";
+type DeadlineResult = "ready" | "unavailable" | "failed" | "timeout" | "cancelled";
 
 /**
  * One PWA's activation transaction. Native context creation happens synchronously
@@ -54,11 +55,13 @@ export class PlaybackSession {
             phase: "preparing",
             cancelled,
             cancel,
-            resolveReady
+            resolveReady,
+            commitPromise: null
         };
         this.active = record;
         let activation: Promise<boolean>;
         try {
+            // Do not move this call behind Promise.then or an await: it owns user activation.
             activation = this.manager.beginPlaybackGeneration(true);
         } catch (error) {
             console.warn("Fresh playback context could not be created.", error);
@@ -74,48 +77,38 @@ export class PlaybackSession {
         return record !== null && record.attempt === attempt && record.phase !== "cancelled" && record.generation === this.manager.getGeneration();
     }
 
-    /** Logical restoration must be complete before commit is called. */
-    public async commit(attempt: PlaybackAttempt): Promise<boolean> {
+    /** Logical restoration must be complete before commit is called. Concurrent commits share one result. */
+    public commit(attempt: PlaybackAttempt): Promise<boolean> {
         const record = this.active;
         if (record === null || record.attempt !== attempt || !this.isCurrent(attempt)) {
-            return false;
+            return Promise.resolve(false);
         }
-        if (record.phase === "committed") {
-            return true;
+        if (record.commitPromise !== null) {
+            return record.commitPromise;
         }
         if (record.phase !== "prepared") {
-            return false;
+            return Promise.resolve(false);
         }
         record.phase = "committing";
-        const result = await this.withDeadline(record, this.manager.commitPlaybackGeneration(record.generation));
-        if (!this.isCurrent(attempt) || result === "cancelled") {
-            return false;
-        }
-        if (result === "unavailable") {
-            // Stop any partially attached graph. The new current token below owns
-            // a deliberate silent session, not a retry of the retired context.
-            this.manager.endPlaybackGeneration(record.generation);
-            record.generation = this.manager.getGeneration();
-            await this.manager.commitPlaybackGeneration(record.generation);
-            if (!this.isCurrent(attempt)) {
-                return false;
-            }
-        }
-        record.phase = "committed";
-        return true;
+        let resolveCommit!: (accepted: boolean) => void;
+        record.commitPromise = new Promise<boolean>((resolve) => {
+            resolveCommit = resolve;
+        });
+        // Publish the shared completion before invoking a manager hook.
+        void this.completeCommit(record).then(resolveCommit, (error: unknown) => {
+            console.warn("Playback commit could not finish safely.", error);
+            this.cancelRecord(record);
+            resolveCommit(false);
+        });
+        return record.commitPromise;
     }
 
     /** Synchronous ownership detachment; neither context.close nor native resume is awaited. */
     public cancel(): void {
         const record = this.active;
-        this.active = null;
-        if (record === null) {
-            return;
+        if (record !== null) {
+            this.cancelRecord(record);
         }
-        record.phase = "cancelled";
-        record.cancel();
-        record.resolveReady(false);
-        this.manager.endPlaybackGeneration(record.generation);
     }
 
     public setInterruptionHandler(handler: ((reason: string) => void) | null): void {
@@ -131,23 +124,93 @@ export class PlaybackSession {
         );
     }
 
-    private async prepare(record: AttemptRecord, activation: Promise<boolean>): Promise<void> {
-        const result = await this.withDeadline(record, activation);
+    private async completeCommit(record: AttemptRecord): Promise<boolean> {
+        let result = await this.withDeadline(record, () => this.manager.commitPlaybackGeneration(record.generation));
         if (!this.isCurrent(record.attempt) || result === "cancelled") {
-            record.resolveReady(false);
-            return;
+            return false;
         }
-        if (result === "unavailable") {
-            this.manager.endPlaybackGeneration(record.generation);
-            record.generation = this.manager.getGeneration();
+        // A fulfilled false is the manager's normal silent-session result. A
+        // rejection/timeout is different: retire once, then bound the fallback too.
+        if (result === "failed" || result === "timeout") {
+            if (!this.retireForSilentPlayback(record)) {
+                return false;
+            }
+            result = await this.withDeadline(record, () => this.manager.commitPlaybackGeneration(record.generation));
+            if (!this.isCurrent(record.attempt) || result === "cancelled") {
+                return false;
+            }
         }
-        record.phase = "prepared";
-        record.resolveReady(true);
+        if (result !== "ready" && result !== "unavailable") {
+            this.cancelRecord(record);
+            return false;
+        }
+        record.phase = "committed";
+        return true;
     }
 
-    private async withDeadline(record: AttemptRecord, operation: Promise<boolean>): Promise<DeadlineResult> {
+    private async prepare(record: AttemptRecord, activation: Promise<boolean>): Promise<void> {
+        try {
+            const result = await this.withDeadline(record, () => activation);
+            if (!this.isCurrent(record.attempt) || result === "cancelled") {
+                record.resolveReady(false);
+                return;
+            }
+            if (result !== "ready" && !this.retireForSilentPlayback(record)) {
+                return;
+            }
+            record.phase = "prepared";
+            record.resolveReady(true);
+        } catch (error) {
+            console.warn("Playback preparation could not finish safely.", error);
+            this.cancelRecord(record);
+        }
+    }
+
+    private retireForSilentPlayback(record: AttemptRecord): boolean {
+        if (!this.isCurrent(record.attempt)) {
+            record.resolveReady(false);
+            return false;
+        }
+        try {
+            this.manager.endPlaybackGeneration(record.generation);
+        } catch (error) {
+            console.warn("Unable to retire playback safely; cancelling this attempt.", error);
+            this.cancelRecord(record);
+            return false;
+        }
+        if (this.active !== record || record.phase === "cancelled") {
+            record.resolveReady(false);
+            return false;
+        }
+        record.generation = this.manager.getGeneration();
+        return true;
+    }
+
+    private cancelRecord(record: AttemptRecord): void {
+        if (this.active === record) {
+            this.active = null;
+        }
+        record.phase = "cancelled";
+        record.cancel();
+        record.resolveReady(false);
+        try {
+            // Conditional retirement is safe even when a newer attempt is active.
+            this.manager.endPlaybackGeneration(record.generation);
+        } catch (error) {
+            // The shell must still reach MENU; native teardown is the manager's responsibility.
+            console.warn("Playback retirement reported an error.", error);
+        }
+    }
+
+    private async withDeadline(record: AttemptRecord, invoke: () => Promise<boolean>): Promise<DeadlineResult> {
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
+            let operation: Promise<boolean>;
+            try {
+                operation = Promise.resolve(invoke());
+            } catch (error) {
+                operation = Promise.reject(error);
+            }
             return await Promise.race([
                 operation.then<DeadlineResult, DeadlineResult>(
                     (ready) => (ready ? "ready" : "unavailable"),
@@ -155,12 +218,12 @@ export class PlaybackSession {
                         if (this.active === record) {
                             console.warn("Playback operation failed; the current session may run silently.", error);
                         }
-                        return "unavailable";
+                        return "failed";
                     }
                 ),
                 record.cancelled.then<DeadlineResult>(() => "cancelled"),
                 new Promise<DeadlineResult>((resolve) => {
-                    timer = setTimeout(() => resolve("unavailable"), this.timeoutMs);
+                    timer = setTimeout(() => resolve("timeout"), this.timeoutMs);
                 })
             ]);
         } finally {
