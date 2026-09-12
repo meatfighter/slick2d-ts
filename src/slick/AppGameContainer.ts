@@ -666,7 +666,6 @@ export class AppGameContainer extends GameContainer {
         this.lastFrameTime = time;
         this.input.poll(this.width, this.height);
         Music.poll(delta);
-        SoundStore.get().poll(delta);
         this.updateGame(delta);
         if (!this.ownsSharedResources() || this.loopSuspended || this.contextLost) {
             return;
