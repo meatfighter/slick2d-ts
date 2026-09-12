@@ -845,9 +845,20 @@ export class AppGameContainer extends GameContainer {
             return;
         }
         try {
-            if (document.fullscreenElement === this.canvas) {
+            const fullscreenElement = document.fullscreenElement;
+            if (fullscreenElement === this.canvas) {
                 this.fullscreen = true;
                 this.applyBrowserDisplaySize();
+                return;
+            }
+            // Fullscreen may be owned by a host/PWA wrapper. That does not change
+            // Slick's canvas-owned fullscreen state and must not rewrite its sizing.
+            if (fullscreenElement !== null) {
+                return;
+            }
+            // Ignore an unrelated fullscreen element leaving the document. Restore
+            // only when this container previously believed its canvas was fullscreen.
+            if (!this.fullscreen) {
                 return;
             }
             this.fullscreen = false;
