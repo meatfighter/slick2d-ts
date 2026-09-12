@@ -80,7 +80,6 @@ export class Music {
         if (current === null) {
             return;
         }
-        store.poll(delta);
         if (current.endPending) {
             Music.currentMusic = null;
             current.finishEnded();
