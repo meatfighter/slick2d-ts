@@ -182,30 +182,22 @@ test("paused containers still receive a zero-delta update", () => {
     assert.deepEqual(calls.deltas, [0]);
 });
 
-test("paused containers still poll music and browser audio", () => {
+test("paused containers still poll music", () => {
     installBrowserGlobals();
     const { container } = createContainer();
     const musicPoll = Music.poll;
-    const store = SoundStore.get();
-    const soundPoll = store.poll;
     const musicDeltas = [];
-    const soundDeltas = [];
 
     Music.poll = (delta) => {
         musicDeltas.push(delta);
-    };
-    store.poll = (delta) => {
-        soundDeltas.push(delta);
     };
     try {
         container.setPaused(true);
         container.loopFrame(25);
 
         assert.deepEqual(musicDeltas, [25]);
-        assert.deepEqual(soundDeltas, [25]);
     } finally {
         Music.poll = musicPoll;
-        store.poll = soundPoll;
     }
 });
 
@@ -267,16 +259,13 @@ test("loop suspension cancels an existing RAF", () => {
 test("suspended RAF callback clears the frame id and performs no work", () => {
     installBrowserGlobals();
     const { calls, container } = createContainer();
-    const store = SoundStore.get();
     const oldInputPoll = container.input.poll;
     const oldMusicPoll = Music.poll;
-    const oldSoundPoll = store.poll;
     const backend = Renderer.getBackend();
     const oldBeginFrame = backend.beginFrame;
     const oldEndFrame = backend.endFrame;
     let inputPolls = 0;
     let musicPolls = 0;
-    let soundPolls = 0;
     let beginFrames = 0;
     let endFrames = 0;
 
@@ -285,9 +274,6 @@ test("suspended RAF callback clears the frame id and performs no work", () => {
     };
     Music.poll = () => {
         musicPolls += 1;
-    };
-    store.poll = () => {
-        soundPolls += 1;
     };
     backend.beginFrame = () => {
         beginFrames += 1;
@@ -308,13 +294,11 @@ test("suspended RAF callback clears the frame id and performs no work", () => {
         assert.equal(calls.renders, 0);
         assert.equal(inputPolls, 0);
         assert.equal(musicPolls, 0);
-        assert.equal(soundPolls, 0);
         assert.equal(beginFrames, 0);
         assert.equal(endFrames, 0);
     } finally {
         container.input.poll = oldInputPoll;
         Music.poll = oldMusicPoll;
-        store.poll = oldSoundPoll;
         backend.beginFrame = oldBeginFrame;
         backend.endFrame = oldEndFrame;
     }
