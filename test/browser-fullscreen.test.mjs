@@ -9,32 +9,20 @@ import {
     requestBrowserFullscreen
 } from "../dist/slick/util/BrowserFullscreen.js";
 
-const standardProbe = {
-    requestFullscreen() {}
-};
-
-const webkitProbe = {
-    webkitRequestFullscreen() {}
-};
-
-test("fullscreen capability distinguishes available, unavailable, and unknown", () => {
-    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: true }, standardProbe), "available");
-    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: false }, standardProbe), "unavailable");
-    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: true }, webkitProbe), "available");
-    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: false }, webkitProbe), "unavailable");
-    assert.equal(getBrowserFullscreenCapability({}, standardProbe), "unknown");
-    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: false, webkitFullscreenEnabled: true }, webkitProbe), "available");
+test("fullscreen capability distinguishes explicit available, explicit unavailable, and unknown", () => {
+    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: true }), "available");
+    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: false }), "unavailable");
+    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: true }), "available");
+    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: false }), "unavailable");
+    assert.equal(getBrowserFullscreenCapability({}), "unknown");
+    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: false, webkitFullscreenEnabled: true }), "available");
 });
 
-test("fullscreen capability is unavailable when arbitrary elements expose no request method", () => {
-    assert.equal(getBrowserFullscreenCapability({}), "unavailable");
-    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: true }, {}), "unavailable");
-    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: true }, {}), "unavailable");
-});
-
-test("fullscreen capability probes documentElement by default", () => {
-    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: true, documentElement: standardProbe }), "available");
-    assert.equal(getBrowserFullscreenCapability({ documentElement: webkitProbe }), "unknown");
+test("missing request methods do not convert an unreported capability into unavailable", () => {
+    assert.equal(getBrowserFullscreenCapability({}), "unknown");
+    assert.equal(getBrowserFullscreenCapability({ documentElement: {} }), "unknown");
+    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: true, documentElement: {} }), "available");
+    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: true, documentElement: {} }), "available");
 });
 
 test("fullscreen element lookup supports standard and WebKit surfaces", () => {
@@ -66,7 +54,7 @@ test("requestBrowserFullscreen invokes standard request synchronously", async ()
     assert.equal(await result, true);
 });
 
-test("requestBrowserFullscreen falls back to WebKit and reports no method", async () => {
+test("requestBrowserFullscreen falls back to WebKit and reports no method without throwing", async () => {
     let webkitCalls = 0;
     assert.equal(
         await requestBrowserFullscreen({
