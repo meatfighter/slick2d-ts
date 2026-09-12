@@ -1087,14 +1087,18 @@ export class AppGameContainer extends GameContainer {
         if (!this.canvas || typeof document === "undefined") {
             return;
         }
+        const ownsCanvasFullscreen = document.fullscreenElement === this.canvas;
         this.fullscreen = false;
+        if (!ownsCanvasFullscreen) {
+            return;
+        }
         // The fullscreenchange listener is already removed during terminal teardown,
         // so synchronously restore the remembered windowed canvas before asking the
-        // browser to finish exiting fullscreen. Do not notify the game while it is
-        // already being destroyed.
+        // browser to finish exiting Slick-owned canvas fullscreen. Host/PWA wrapper
+        // fullscreen is owned by the host and must remain completely untouched here.
         this.applyWindowedDisplayMode(this.lastWindowedDisplayMode.width, this.lastWindowedDisplayMode.height, false);
         Mouse.restoreNativeCursorAfterForcedFullscreenExit();
-        if (document.fullscreenElement === this.canvas && document.exitFullscreen) {
+        if (document.exitFullscreen) {
             void document.exitFullscreen().catch(() => undefined);
         }
     }
