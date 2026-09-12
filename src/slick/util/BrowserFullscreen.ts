@@ -10,27 +10,12 @@ type WebKitElement = HTMLElement & {
     webkitRequestFullscreen?: () => void | Promise<void>;
 };
 
-function hasBrowserFullscreenRequestMethod(element: HTMLElement | null | undefined): boolean {
-    if (element === null || element === undefined) {
-        return false;
-    }
-    return typeof element.requestFullscreen === "function" || typeof (element as WebKitElement).webkitRequestFullscreen === "function";
-}
-
 /**
- * Reports whether arbitrary-element fullscreen can actually be requested. A browser
- * with no standard or recognized WebKit element request method is definitively
- * unavailable. When a request method exists but the document exposes no boolean
- * capability report, the result remains "unknown" so callers can optimistically try.
+ * Report only what the Fullscreen API itself explicitly exposes. Missing request
+ * methods do not turn an otherwise unreported capability into "unavailable": a
+ * caller may optimistically try and let requestBrowserFullscreen() return false.
  */
-export function getBrowserFullscreenCapability(
-    doc: Document = document,
-    probeElement: HTMLElement | null | undefined = doc.documentElement
-): BrowserFullscreenCapability {
-    if (!hasBrowserFullscreenRequestMethod(probeElement)) {
-        return "unavailable";
-    }
-
+export function getBrowserFullscreenCapability(doc: Document = document): BrowserFullscreenCapability {
     const reports: boolean[] = [];
     if (typeof doc.fullscreenEnabled === "boolean") {
         reports.push(doc.fullscreenEnabled);
