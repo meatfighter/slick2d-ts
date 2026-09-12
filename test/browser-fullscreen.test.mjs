@@ -64,10 +64,7 @@ test("unreadable capability and request getters degrade safely", () => {
             throw new Error("broken standard request getter");
         }
     });
-    assert.equal(
-        getBrowserFullscreenCapability({ fullscreenEnabled: true, documentElement: brokenStandardRequest }),
-        "unavailable"
-    );
+    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: true, documentElement: brokenStandardRequest }), "unavailable");
 
     const prefixedFallback = { webkitRequestFullscreen() {} };
     Object.defineProperty(prefixedFallback, "requestFullscreen", {
