@@ -148,12 +148,20 @@ test("exitBrowserFullscreen supports standard, WebKit, and no-method cases", asy
     assert.equal(await exitBrowserFullscreen({}), false);
 });
 
-test("synchronous throws become rejected promises without changing call timing", async () => {
-    const expected = new Error("denied");
-    const promise = requestBrowserFullscreen({
+test("synchronous request and exit throws become rejected promises", async () => {
+    const requestError = new Error("request denied");
+    const requestPromise = requestBrowserFullscreen({
         requestFullscreen() {
-            throw expected;
+            throw requestError;
         }
     });
-    await assert.rejects(promise, expected);
+    await assert.rejects(requestPromise, requestError);
+
+    const exitError = new Error("exit denied");
+    const exitPromise = exitBrowserFullscreen({
+        exitFullscreen() {
+            throw exitError;
+        }
+    });
+    await assert.rejects(exitPromise, exitError);
 });
