@@ -11,10 +11,12 @@ type WebKitElement = HTMLElement & {
 };
 
 /**
- * Report only what the Fullscreen API itself explicitly exposes. Missing request
- * methods do not turn an otherwise unreported capability into "unavailable": a
- * caller may optimistically try and let requestBrowserFullscreen() return false.
- * Broken capability getters are treated as no report rather than breaking the host UI.
+ * Report whether this document can plausibly request arbitrary-element fullscreen.
+ * A browser that exposes no standard/WebKit request method is unavailable even when
+ * its capability-reporting surface is absent or inconsistent. If a request method
+ * exists but no readable boolean capability report exists, callers may still try it
+ * optimistically and treat the capability as unknown. Broken browser-owned getters
+ * degrade safely rather than breaking the host UI.
  */
 export function getBrowserFullscreenCapability(doc: Document = document): BrowserFullscreenCapability {
     const reports: boolean[] = [];
@@ -34,10 +36,37 @@ export function getBrowserFullscreenCapability(doc: Document = document): Browse
     } catch {
         // Treat an unreadable prefixed capability as unreported.
     }
-    if (reports.some(Boolean)) {
-        return "available";
+    if (reports.length > 0 && !reports.some(Boolean)) {
+        return "unavailable";
     }
-    return reports.length === 0 ? "unknown" : "unavailable";
+    if (!hasBrowserFullscreenRequestMethod(doc)) {
+        return "unavailable";
+    }
+    return reports.some(Boolean) ? "available" : "unknown";
+}
+
+function hasBrowserFullscreenRequestMethod(doc: Document): boolean {
+    let root: HTMLElement | null;
+    try {
+        root = doc.documentElement;
+    } catch {
+        return false;
+    }
+    if (root === null || root === undefined) {
+        return false;
+    }
+    try {
+        if (typeof root.requestFullscreen === "function") {
+            return true;
+        }
+    } catch {
+        // Fall through to the prefixed request surface.
+    }
+    try {
+        return typeof (root as WebKitElement).webkitRequestFullscreen === "function";
+    } catch {
+        return false;
+    }
 }
 
 export function getBrowserFullscreenElement(doc: Document = document): Element | null {
