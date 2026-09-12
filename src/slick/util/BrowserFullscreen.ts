@@ -14,15 +14,25 @@ type WebKitElement = HTMLElement & {
  * Report only what the Fullscreen API itself explicitly exposes. Missing request
  * methods do not turn an otherwise unreported capability into "unavailable": a
  * caller may optimistically try and let requestBrowserFullscreen() return false.
+ * Broken capability getters are treated as no report rather than breaking the host UI.
  */
 export function getBrowserFullscreenCapability(doc: Document = document): BrowserFullscreenCapability {
     const reports: boolean[] = [];
-    if (typeof doc.fullscreenEnabled === "boolean") {
-        reports.push(doc.fullscreenEnabled);
+    try {
+        const standard = doc.fullscreenEnabled;
+        if (typeof standard === "boolean") {
+            reports.push(standard);
+        }
+    } catch {
+        // A browser-owned capability getter must not prevent responsive fallback.
     }
-    const webkitDocument = doc as WebKitDocument;
-    if (typeof webkitDocument.webkitFullscreenEnabled === "boolean") {
-        reports.push(webkitDocument.webkitFullscreenEnabled);
+    try {
+        const webkit = (doc as WebKitDocument).webkitFullscreenEnabled;
+        if (typeof webkit === "boolean") {
+            reports.push(webkit);
+        }
+    } catch {
+        // Treat an unreadable prefixed capability as unreported.
     }
     if (reports.some(Boolean)) {
         return "available";
@@ -31,7 +41,19 @@ export function getBrowserFullscreenCapability(doc: Document = document): Browse
 }
 
 export function getBrowserFullscreenElement(doc: Document = document): Element | null {
-    return doc.fullscreenElement ?? (doc as WebKitDocument).webkitFullscreenElement ?? null;
+    try {
+        const standard = doc.fullscreenElement;
+        if (standard !== null && standard !== undefined) {
+            return standard;
+        }
+    } catch {
+        // Fall through to the prefixed surface.
+    }
+    try {
+        return (doc as WebKitDocument).webkitFullscreenElement ?? null;
+    } catch {
+        return null;
+    }
 }
 
 export function isBrowserFullscreenElement(element: Element, doc: Document = document): boolean {
