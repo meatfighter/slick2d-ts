@@ -395,8 +395,6 @@ export class SoundStore {
         this.soundWorksFlag = this.context !== null && String(this.context.state) === "running";
     }
 
-    public poll(_delta: number): void {}
-
     public isMusicPlaying(): boolean {
         return Array.from(this.musicHandles).some((handle) => handle.playing());
     }
