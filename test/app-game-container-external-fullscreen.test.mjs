@@ -12,8 +12,14 @@ class FakeCanvas {
 
 function installDocument() {
     const document = {
+        exitFullscreenCalls: 0,
         fullscreenElement: null,
-        hasFocus: () => true
+        hasFocus: () => true,
+        exitFullscreen() {
+            this.exitFullscreenCalls++;
+            this.fullscreenElement = null;
+            return Promise.resolve();
+        }
     };
     Object.defineProperty(globalThis, "document", {
         configurable: true,
@@ -82,5 +88,33 @@ test("wrapper-owned fullscreen transitions do not mutate a windowed Slick canvas
     assert.equal(canvas.style.width, "800px");
     assert.equal(canvas.style.height, "600px");
     assert.equal(canvas.style.cursor, "default");
+    assert.deepEqual(resizeCalls, []);
+});
+
+test("terminal fullscreen cleanup does not rewrite or exit wrapper-owned presentation", () => {
+    const document = installDocument();
+    const { canvas, container, resizeCalls } = createContainer();
+    const wrapper = {};
+
+    // Simulate host-managed responsive sizing that is deliberately independent of
+    // Slick's remembered 800x600 windowed mode.
+    container.width = 1280;
+    container.height = 720;
+    canvas.width = 1280;
+    canvas.height = 720;
+    canvas.style.width = "1280px";
+    canvas.style.height = "720px";
+    document.fullscreenElement = wrapper;
+
+    container.exitBrowserFullscreenForDestroy();
+
+    assert.equal(container.getWidth(), 1280);
+    assert.equal(container.getHeight(), 720);
+    assert.equal(canvas.width, 1280);
+    assert.equal(canvas.height, 720);
+    assert.equal(canvas.style.width, "1280px");
+    assert.equal(canvas.style.height, "720px");
+    assert.equal(document.fullscreenElement, wrapper);
+    assert.equal(document.exitFullscreenCalls, 0);
     assert.deepEqual(resizeCalls, []);
 });
