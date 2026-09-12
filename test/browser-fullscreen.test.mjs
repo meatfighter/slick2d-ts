@@ -25,6 +25,24 @@ test("missing request methods do not convert an unreported capability into unava
     assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: true, documentElement: {} }), "available");
 });
 
+test("unreadable capability getters degrade to the remaining report or unknown", () => {
+    const brokenStandard = {};
+    Object.defineProperty(brokenStandard, "fullscreenEnabled", {
+        get() {
+            throw new Error("broken standard capability getter");
+        }
+    });
+    assert.equal(getBrowserFullscreenCapability(brokenStandard), "unknown");
+
+    const usablePrefixed = { webkitFullscreenEnabled: true };
+    Object.defineProperty(usablePrefixed, "fullscreenEnabled", {
+        get() {
+            throw new Error("broken standard capability getter");
+        }
+    });
+    assert.equal(getBrowserFullscreenCapability(usablePrefixed), "available");
+});
+
 test("fullscreen element lookup supports standard and WebKit surfaces", () => {
     const element = {};
     assert.equal(getBrowserFullscreenElement({ fullscreenElement: element }), element);
@@ -32,6 +50,30 @@ test("fullscreen element lookup supports standard and WebKit surfaces", () => {
     assert.equal(getBrowserFullscreenElement({}), null);
     assert.equal(isBrowserFullscreenElement(element, { fullscreenElement: element }), true);
     assert.equal(isBrowserFullscreenElement(element, { fullscreenElement: null }), false);
+});
+
+test("fullscreen element lookup tolerates broken browser getters", () => {
+    const element = {};
+    const brokenStandard = { webkitFullscreenElement: element };
+    Object.defineProperty(brokenStandard, "fullscreenElement", {
+        get() {
+            throw new Error("broken standard element getter");
+        }
+    });
+    assert.equal(getBrowserFullscreenElement(brokenStandard), element);
+
+    const brokenBoth = {};
+    Object.defineProperty(brokenBoth, "fullscreenElement", {
+        get() {
+            throw new Error("broken standard element getter");
+        }
+    });
+    Object.defineProperty(brokenBoth, "webkitFullscreenElement", {
+        get() {
+            throw new Error("broken prefixed element getter");
+        }
+    });
+    assert.equal(getBrowserFullscreenElement(brokenBoth), null);
 });
 
 test("requestBrowserFullscreen invokes standard request synchronously", async () => {
