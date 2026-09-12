@@ -9,24 +9,40 @@ import {
     requestBrowserFullscreen
 } from "../dist/slick/util/BrowserFullscreen.js";
 
-test("fullscreen capability distinguishes explicit available, explicit unavailable, and unknown", () => {
-    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: true }), "available");
-    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: false }), "unavailable");
-    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: true }), "available");
-    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: false }), "unavailable");
-    assert.equal(getBrowserFullscreenCapability({}), "unknown");
-    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: false, webkitFullscreenEnabled: true }), "available");
+const standardRequestRoot = () => ({
+    requestFullscreen() {}
 });
 
-test("missing request methods do not convert an unreported capability into unavailable", () => {
-    assert.equal(getBrowserFullscreenCapability({}), "unknown");
-    assert.equal(getBrowserFullscreenCapability({ documentElement: {} }), "unknown");
-    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: true, documentElement: {} }), "available");
-    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: true, documentElement: {} }), "available");
+const webkitRequestRoot = () => ({
+    webkitRequestFullscreen() {}
 });
 
-test("unreadable capability getters degrade to the remaining report or unknown", () => {
-    const brokenStandard = {};
+test("fullscreen capability distinguishes explicit available, explicit unavailable, and mixed reports", () => {
+    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: true, documentElement: standardRequestRoot() }), "available");
+    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: false, documentElement: standardRequestRoot() }), "unavailable");
+    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: true, documentElement: webkitRequestRoot() }), "available");
+    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: false, documentElement: webkitRequestRoot() }), "unavailable");
+    assert.equal(
+        getBrowserFullscreenCapability({
+            fullscreenEnabled: false,
+            webkitFullscreenEnabled: true,
+            documentElement: standardRequestRoot()
+        }),
+        "available"
+    );
+});
+
+test("missing request methods are unavailable while method-only capability remains unknown", () => {
+    assert.equal(getBrowserFullscreenCapability({}), "unavailable");
+    assert.equal(getBrowserFullscreenCapability({ documentElement: {} }), "unavailable");
+    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: true, documentElement: {} }), "unavailable");
+    assert.equal(getBrowserFullscreenCapability({ webkitFullscreenEnabled: true, documentElement: {} }), "unavailable");
+    assert.equal(getBrowserFullscreenCapability({ documentElement: standardRequestRoot() }), "unknown");
+    assert.equal(getBrowserFullscreenCapability({ documentElement: webkitRequestRoot() }), "unknown");
+});
+
+test("unreadable capability and request getters degrade safely", () => {
+    const brokenStandard = { documentElement: standardRequestRoot() };
     Object.defineProperty(brokenStandard, "fullscreenEnabled", {
         get() {
             throw new Error("broken standard capability getter");
@@ -34,13 +50,40 @@ test("unreadable capability getters degrade to the remaining report or unknown",
     });
     assert.equal(getBrowserFullscreenCapability(brokenStandard), "unknown");
 
-    const usablePrefixed = { webkitFullscreenEnabled: true };
+    const usablePrefixed = { webkitFullscreenEnabled: true, documentElement: webkitRequestRoot() };
     Object.defineProperty(usablePrefixed, "fullscreenEnabled", {
         get() {
             throw new Error("broken standard capability getter");
         }
     });
     assert.equal(getBrowserFullscreenCapability(usablePrefixed), "available");
+
+    const brokenStandardRequest = {};
+    Object.defineProperty(brokenStandardRequest, "requestFullscreen", {
+        get() {
+            throw new Error("broken standard request getter");
+        }
+    });
+    assert.equal(
+        getBrowserFullscreenCapability({ fullscreenEnabled: true, documentElement: brokenStandardRequest }),
+        "unavailable"
+    );
+
+    const prefixedFallback = { webkitRequestFullscreen() {} };
+    Object.defineProperty(prefixedFallback, "requestFullscreen", {
+        get() {
+            throw new Error("broken standard request getter");
+        }
+    });
+    assert.equal(getBrowserFullscreenCapability({ fullscreenEnabled: true, documentElement: prefixedFallback }), "available");
+
+    const brokenDocumentElement = { fullscreenEnabled: true };
+    Object.defineProperty(brokenDocumentElement, "documentElement", {
+        get() {
+            throw new Error("broken documentElement getter");
+        }
+    });
+    assert.equal(getBrowserFullscreenCapability(brokenDocumentElement), "unavailable");
 });
 
 test("fullscreen element lookup supports standard and WebKit surfaces", () => {
