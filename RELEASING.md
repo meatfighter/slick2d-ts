@@ -1,30 +1,59 @@
-# Release qualification and retention
+# Releasing
 
-Release from a clean checkout of one reviewed commit. Preserve existing Git history.
-Run `npm run qualify` against that exact commit before pushing or tagging it. Local
-qualification is the normal gate; GitHub Actions Verify is manual-only and optional
-as a second Linux environment.
+This file contains the reproducible repository-local release procedure for `slick2d-ts`.
 
-Archive an already verified build on a host with Node.js, Git, and tar:
+## Prerequisites
+
+Use a Node.js version supported by [package.json](package.json) and Git. Install dependencies from the lockfile:
+
+```sh
+npm ci
+```
+
+Release from one reviewed commit with a clean working tree. Local qualification is the primary gate; GitHub Actions is optional and is not required for release.
+
+## Build and commit generated `dist`
+
+`dist/` is committed and is the package consumed by the game repositories. After a source change:
+
+```sh
+npm run build
+git status --short
+git diff -- dist
+```
+
+Review the generated output, then commit the source and generated `dist` together. Do not edit generated files by hand. `npm run check:dist` intentionally fails when the committed distribution does not match the source.
+
+## Qualify the exact generated-output commit
+
+Run qualification only after the generated `dist` changes are committed and the working tree is clean:
+
+```sh
+git status --short
+npm run qualify
+```
+
+`npm run qualify` runs formatting, lint, type checks, behavioral tests, the committed-distribution check, real-browser verification, and final clean-tree verification.
+
+For browser-facing changes, also exercise the affected behavior in the consuming games. Engine qualification establishes the library behavior; it does not establish compatibility with every game integration.
+
+## Archive
+
+Archive an already-qualified `dist` outside the repository:
 
 ```sh
 node scripts/archive-release.mjs dist /absolute/path/outside/repository/release-artifacts
 ```
 
-Use a new empty output directory for each archive. The command refuses a dirty
-checkout or an existing same-commit archive. Verify `SHA256SUMS` after transferring
-an archive, and verify the contained files against `RELEASE.json` after extracting.
-Rebuilds can have new timestamps: the archive hash identifies the exact deployed
-bytes, while the commit identifies their source. Retain the last known good archive
-for rollback instead of rebuilding it during an incident.
+Use a new output directory for each archive. Preserve and verify the generated release metadata/checksums after transfer. Keep the previous known-good engine artifact/SHA available for rollback.
 
-A manually run Verify workflow provides an independent Linux check and retains its
-qualified artifact for 90 days. It is optional and does not replace local qualification.
+## Consumer pins and tag
 
-After all required checks pass, create an annotated release tag on that exact
-commit and push the tag. Choose a unique version tag matching the release; never
-move an existing tag. Record the tag, commit, archive hash, qualification run, and
-actual deployment time together. Creating an archive or tag does not deploy it.
-Do not change repository visibility as part of the build.
+The game repositories consume `slick2d-ts` through immutable commit archives. After qualifying the engine commit:
 
-For production game compatibility, qualify the exact engine pin in each consuming game before release.
+1. record its full SHA;
+2. update each intended consumer's `package.json` and `package-lock.json` to that SHA;
+3. qualify each consuming game independently;
+4. create an annotated engine tag only on the exact qualified commit when the release is ready.
+
+Never move an existing release tag. Creating a build, archive, or tag does not deploy or repin a game automatically.
