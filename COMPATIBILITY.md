@@ -56,7 +56,6 @@ These methods exist so copied Java code can call familiar APIs without crashing,
 - `LoadableImageData.configureEdging(...)` for TGA data: retained for API shape.
 - `Log.checkVerboseLogSetting()`: browser logging is controlled by host/runtime console settings.
 - `RecordedInput.snap()`: recorded state is already selected by its current byte index; `update()` advances that index.
-- `SoundStore.poll(...)`: sound completion is driven by Web Audio callbacks.
 - `SGL.glClipPlane(...)`, `SGL.glTexEnvi(...)`, and `SGL.glSecondaryColor3ubEXT(...)`: fixed-function desktop OpenGL features with no WebGL2 equivalent in this 2D renderer.
 
 ## Raw WebGL Caveat
