@@ -103,7 +103,6 @@ export declare class SoundStore {
     musicOn(): boolean;
     soundWorks(): boolean;
     init(): void;
-    poll(_delta: number): void;
     isMusicPlaying(): boolean;
     stopSoundEffect(id: number): void;
     stopSoundEffects(): void;

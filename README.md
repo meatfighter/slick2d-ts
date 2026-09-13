@@ -103,6 +103,6 @@ The runner uses headless mode on Windows and macOS. On Linux it can use an exist
 
 ## Releases and attribution
 
-See [RELEASING.md](RELEASING.md) for exact-commit qualification, local build archives, checksums, release tags, retention, and rollback. Archiving requires a clean checkout and Node.js, Git, and tar.
+See [RELEASING.md](RELEASING.md) for the generated-`dist`, exact-commit qualification, archive, consumer-pin, and tagging procedure. Archiving requires a clean checkout and Node.js, Git, and tar.
 
 The source is licensed under the [BSD 3-Clause License](LICENSE). Upstream Slick2D attribution is in [NOTICE.md](NOTICE.md).
