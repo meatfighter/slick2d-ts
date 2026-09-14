@@ -9,6 +9,7 @@ import {
     Music,
     Renderer,
     ResourceLoader,
+    Sound,
     SoundStore,
     SpriteSheet,
     XMLPackedSheet
@@ -109,10 +110,17 @@ async function runSoundLifecycleCycle() {
 
 async function verifySoundGenerationResumeOffset() {
     const ref = "audio/browser-sound-generation.wav";
+    const initialOffset = 0.375;
     ResourceLoader.registerResource(ref, silentWavBytes(16_000));
     const store = SoundStore.get();
     store.enableExplicitPlaybackGenerations();
     await store.preloadAudioBuffer(ref);
+    const sound = new Sound(ref);
+    await sound.ready();
+    sound.restorePlaybackState({
+        voices: [{ looped: false, playbackRate: 1, positionSeconds: initialOffset, gain: 1, spatialPosition: null }],
+        activeVoiceIndex: 0
+    });
 
     const sourcePrototype = globalThis.AudioBufferSourceNode?.prototype;
     assert(sourcePrototype && typeof sourcePrototype.start === "function", "AudioBufferSourceNode.start is unavailable for SFX resume verification");
@@ -123,21 +131,23 @@ async function verifySoundGenerationResumeOffset() {
         return duration === undefined ? originalStart.call(this, when, offset) : originalStart.call(this, when, offset, duration);
     };
 
-    let handle = null;
     try {
         assert(await store.beginPlaybackGenerationFromUserGesture(true), "Could not create the first SFX playback generation");
         assert(await store.commitPlaybackGeneration(store.getPlaybackGeneration()), "Could not commit the first SFX playback generation");
-
-        handle = store.playSound(ref, 1, 1, false);
-        assert(handle !== null, "Could not create the browser SFX test voice");
-        await new Promise((resolve) => setTimeout(resolve, 80));
+        assert(startOffsets.length >= 1, "First SFX playback generation did not create a native source");
+        assert(closeTo(startOffsets[0], initialOffset, 0.01), `First SFX source did not start at restored offset ${initialOffset}: ${startOffsets[0]}`);
 
         store.endPlaybackGeneration();
-        const frozenPosition = handle.capturePlaybackState().positionSeconds;
-        assert(frozenPosition > 0.005 && frozenPosition < 1.5, `SFX did not freeze at a usable nonzero offset: ${frozenPosition}`);
+        const frozenPosition = sound.capturePlaybackState().voices[0]?.positionSeconds;
+        assert(typeof frozenPosition === "number", "Retirement lost the browser SFX logical voice");
+        assert(frozenPosition >= initialOffset && frozenPosition < 1.5, `Retired SFX position is outside the expected range: ${frozenPosition}`);
         const retired = store.getPlaybackDiagnostics();
         assert(retired.effects === 0 && retired.logicalEffects === 1, "Retired SFX generation did not preserve exactly one detached logical voice");
 
+        // Do not require headless Chromium's AudioContext clock to advance with wall time.
+        // Windows/headless environments can report a running context whose currentTime
+        // remains stationary when there is no real audio output device. The contract we
+        // need to prove here is native nonzero-offset attachment across a fresh context.
         assert(await store.beginPlaybackGenerationFromUserGesture(true), "Could not create the replacement SFX playback generation");
         assert(await store.commitPlaybackGeneration(store.getPlaybackGeneration()), "Could not commit the replacement SFX playback generation");
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -148,7 +158,7 @@ async function verifySoundGenerationResumeOffset() {
         assert(closeTo(resumedOffset, frozenPosition, 0.05), `Replacement SFX source offset ${resumedOffset} did not match frozen ${frozenPosition}`);
         assert(store.getPlaybackDiagnostics().effects === 1, "Replacement SFX generation did not attach its logical voice");
     } finally {
-        handle?.stop();
+        sound.stop();
         sourcePrototype.start = originalStart;
     }
 }
