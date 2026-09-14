@@ -62,15 +62,7 @@ export class Sound {
     public play(pitch: number, volume: number): void;
     public play(pitch: number = 1, volume: number = 1): void {
         const effectiveVolume = volume * SoundStore.get().getSoundVolume();
-        const handle = SoundStore.get().playSound(
-            this.ref,
-            pitch,
-            effectiveVolume,
-            false,
-            undefined,
-            undefined,
-            (disposed) => this.releaseVoice(disposed)
-        );
+        const handle = SoundStore.get().playSound(this.ref, pitch, effectiveVolume, false, undefined, undefined, (disposed) => this.releaseVoice(disposed));
         if (!handle) {
             this.active = null;
             return;
@@ -82,15 +74,7 @@ export class Sound {
     /** Java Slick2D counterpart: Sound.playAt(float, float, float, float, float). */
     public playAt(pitch: number, volume: number, x: number, y: number, z: number): void {
         const effectiveVolume = volume * SoundStore.get().getSoundVolume();
-        const handle = SoundStore.get().playSound(
-            this.ref,
-            pitch,
-            effectiveVolume,
-            false,
-            undefined,
-            { x, y, z },
-            (disposed) => this.releaseVoice(disposed)
-        );
+        const handle = SoundStore.get().playSound(this.ref, pitch, effectiveVolume, false, undefined, { x, y, z }, (disposed) => this.releaseVoice(disposed));
         if (!handle) {
             this.active = null;
             return;
@@ -105,15 +89,7 @@ export class Sound {
     public loop(pitch: number, volume: number): void;
     public loop(pitch: number = 1, volume: number = 1): void {
         const effectiveVolume = volume * SoundStore.get().getSoundVolume();
-        const handle = SoundStore.get().playSound(
-            this.ref,
-            pitch,
-            effectiveVolume,
-            true,
-            undefined,
-            undefined,
-            (disposed) => this.releaseVoice(disposed)
-        );
+        const handle = SoundStore.get().playSound(this.ref, pitch, effectiveVolume, true, undefined, undefined, (disposed) => this.releaseVoice(disposed));
         if (!handle) {
             this.active = null;
             return;
@@ -170,12 +146,7 @@ export class Sound {
      */
     public restorePlaybackState(snapshot: SoundPlaybackSnapshot): void {
         const state = copySoundPlaybackSnapshot(snapshot);
-        const restored = SoundStore.get().replaceSoundPlaybacks(
-            this.ref,
-            Array.from(this.voices),
-            state.voices,
-            (disposed) => this.releaseVoice(disposed)
-        );
+        const restored = SoundStore.get().replaceSoundPlaybacks(this.ref, Array.from(this.voices), state.voices, (disposed) => this.releaseVoice(disposed));
         this.voices.clear();
         for (const voice of restored) {
             if (voice !== null) {

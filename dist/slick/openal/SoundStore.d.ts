@@ -1,3 +1,4 @@
+import { type SoundVoicePlaybackSnapshot } from "../SoundPlaybackState.js";
 import { type ResourceLoadOptions } from "../util/ResourceLoader.js";
 type AudioPosition = {
     x: number;
@@ -23,6 +24,13 @@ export interface AudioPlaybackHandle {
     attachPlaybackGeneration?(): void | Promise<void>;
     playing(): boolean;
     getGain?(): number;
+    isPlaybackGenerationAttached?(): boolean;
+}
+export interface SoundPlaybackHandle extends AudioPlaybackHandle {
+    readonly sourceId: number;
+    capturePlaybackState(): SoundVoicePlaybackSnapshot;
+    isPlaybackGenerationAttached(): boolean;
+    pollLogicalPlayback(delta: number): void;
 }
 export type PlaybackDiagnostics = Readonly<{
     generation: number;
@@ -30,6 +38,7 @@ export type PlaybackDiagnostics = Readonly<{
     committed: boolean;
     silent: boolean;
     effects: number;
+    logicalEffects: number;
     musicHandles: number;
     decodedBuffers: number;
     contextsCreated: number;
@@ -81,11 +90,11 @@ export declare class SoundStore {
     reportPlaybackInterruption(reason: string): void;
     /** Constructor and native resume execute before returning to the activation handler. */
     beginPlaybackGenerationFromUserGesture(deferPlayback?: boolean): Promise<boolean>;
-    /** Accept a prepared generation, attach logical music, and then open its output gate. */
+    /** Accept a prepared generation, attach every logical transport, and then open its output gate. */
     commitPlaybackGeneration(generation: number): Promise<boolean>;
     /** Conditional retirement cannot tear down a replacement generation. */
     endPlaybackGeneration(expectedGeneration?: number): void;
-    private detachMusic;
+    private detachPlaybackHandles;
     clear(): void;
     destroy(): void;
     destroyPreservingAudioCache(): void;
@@ -103,6 +112,8 @@ export declare class SoundStore {
     musicOn(): boolean;
     soundWorks(): boolean;
     init(): void;
+    /** Advance detached SFX only while accepted gameplay itself is advancing silently. */
+    poll(delta: number): void;
     isMusicPlaying(): boolean;
     stopSoundEffect(id: number): void;
     stopSoundEffects(): void;
@@ -121,11 +132,16 @@ export declare class SoundStore {
     preloadAudioBuffer(ref: string, options?: ResourceLoadOptions): Promise<void>;
     preloadAudioBuffers(refs: Iterable<string>, onProgress?: (progress: AudioPreloadProgress) => void): Promise<void>;
     preloadAudioBuffers(refs: Iterable<string>, options?: AudioPreloadOptions): Promise<void>;
-    playSound(ref: string, pitch: number, volume: number, loop: boolean, onEnded?: () => void, position?: AudioPosition): AudioPlaybackHandle | null;
+    playSound(ref: string, pitch: number, volume: number, loop: boolean, onEnded?: () => void, position?: AudioPosition, onDisposed?: (handle: SoundPlaybackHandle) => void): SoundPlaybackHandle | null;
+    /**
+     * Replace one Sound owner's complete logical voice set without touching browser playback.
+     * Existing source slots owned by the replaced voices may be reused transactionally.
+     */
+    replaceSoundPlaybacks(ref: string, existing: readonly SoundPlaybackHandle[], snapshots: readonly SoundVoicePlaybackSnapshot[], onDisposed?: (handle: SoundPlaybackHandle) => void): Array<SoundPlaybackHandle | null>;
     track(handle: AudioPlaybackHandle): void;
     untrack(handle: AudioPlaybackHandle): void;
     /** Internal SFX owner hook; source slots are released only by their current handle. */
-    releaseEffect(handle: AudioPlaybackHandle): void;
+    releaseEffect(handle: SoundPlaybackHandle): void;
     getPlaybackDiagnostics(): PlaybackDiagnostics;
     private ensureLogicalInitialization;
     private retirePlaybackContext;
@@ -138,6 +154,7 @@ export declare class SoundStore {
     private audioDecodeUnavailable;
     private resetSoundSources;
     private findFreeSoundSource;
+    private findReplacementSoundSourceIds;
     static disconnect(node: AudioNode | null): void;
     private static waitForAudioPromise;
     private static decodeAudioData;

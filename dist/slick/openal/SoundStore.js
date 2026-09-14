@@ -1,3 +1,4 @@
+import { isSoundVoicePlaybackSnapshot } from "../SoundPlaybackState.js";
 import { ResourceLoadException, ResourceLoader } from "../util/ResourceLoader.js";
 import { runSettledBatch } from "../util/BatchLoader.js";
 import { Log } from "../util/Log.js";
@@ -152,7 +153,7 @@ export class SoundStore {
             return false;
         });
     }
-    /** Accept a prepared generation, attach logical music, and then open its output gate. */
+    /** Accept a prepared generation, attach every logical transport, and then open its output gate. */
     async commitPlaybackGeneration(generation) {
         if (this.playbackRetirementFailure !== null) {
             throw this.playbackRetirementFailure;
@@ -164,14 +165,15 @@ export class SoundStore {
         this.playbackCommitted = true;
         this.logicalPlaybackActive = true;
         if (this.context === null) {
-            return false; // Explicit silent gameplay; Music.poll owns the logical clock.
+            return false; // Explicit silent gameplay; Music.poll/SoundStore.poll own logical clocks.
         }
         const context = this.context;
         if (String(context.state) !== "running") {
             this.discardUnusablePlayback();
             return false;
         }
-        const results = await Promise.allSettled(Array.from(this.musicHandles, (handle) => {
+        const handles = Array.from(this.activeHandles);
+        const results = await Promise.allSettled(handles.map((handle) => {
             try {
                 return Promise.resolve(handle.attachPlaybackGeneration?.());
             }
@@ -211,11 +213,9 @@ export class SoundStore {
                 failures.push(error);
             }
         };
-        attempt(() => this.detachMusic());
-        attempt(() => this.stopSoundEffects());
+        attempt(() => this.detachPlaybackHandles());
         this.playbackGeneration++;
         attempt(() => this.retirePlaybackContext());
-        attempt(() => this.resetSoundSources());
         if (failures.length !== 0) {
             this.playbackRetirementFailure ??= new AggregateError(failures, "Unable to retire the playback generation safely.");
         }
@@ -223,18 +223,24 @@ export class SoundStore {
             throw this.playbackRetirementFailure;
         }
     }
-    detachMusic() {
+    detachPlaybackHandles() {
         const failures = [];
-        for (const handle of Array.from(this.musicHandles)) {
+        for (const handle of Array.from(this.activeHandles)) {
             try {
-                handle.detachPlaybackGeneration?.();
+                if (handle.detachPlaybackGeneration !== undefined) {
+                    handle.detachPlaybackGeneration();
+                }
+                else {
+                    // Unknown legacy handles cannot safely retain a graph tied to the old context.
+                    handle.stop();
+                }
             }
             catch (error) {
                 failures.push(error);
             }
         }
         if (failures.length !== 0) {
-            throw new AggregateError(failures, "Unable to detach every music graph.");
+            throw new AggregateError(failures, "Unable to detach every playback graph.");
         }
     }
     clear() {
@@ -242,25 +248,52 @@ export class SoundStore {
         this.clearDecodedBuffers();
     }
     destroy() {
-        this.endPlaybackGeneration();
+        let retirementFailure = null;
+        try {
+            this.endPlaybackGeneration();
+        }
+        catch (error) {
+            retirementFailure = error;
+        }
         this.stopAllPlayback();
         this.clearDecodedBuffers();
         this.decoderPool = { context: null, active: 0, batches: 0 };
         this.inited = false;
         this.musicEnabled = false;
         this.soundsEnabled = false;
+        if (retirementFailure !== null) {
+            throw retirementFailure;
+        }
     }
     destroyPreservingAudioCache() {
-        this.endPlaybackGeneration();
+        let retirementFailure = null;
+        try {
+            this.endPlaybackGeneration();
+        }
+        catch (error) {
+            retirementFailure = error;
+        }
         this.stopAllPlayback();
         // User preferences and decoded buffers belong to the page, not the retired game.
+        if (retirementFailure !== null) {
+            throw retirementFailure;
+        }
     }
     disable() {
         this.ensureLogicalInitialization();
         this.musicEnabled = false;
         this.soundsEnabled = false;
-        this.endPlaybackGeneration();
+        let retirementFailure = null;
+        try {
+            this.endPlaybackGeneration();
+        }
+        catch (error) {
+            retirementFailure = error;
+        }
         this.clear();
+        if (retirementFailure !== null) {
+            throw retirementFailure;
+        }
     }
     setDeferredLoading(deferred) {
         this.deferredLoading = deferred;
@@ -324,6 +357,17 @@ export class SoundStore {
         }
         this.soundWorksFlag = this.context !== null && String(this.context.state) === "running";
     }
+    /** Advance detached SFX only while accepted gameplay itself is advancing silently. */
+    poll(delta) {
+        if (this.explicitPlaybackGenerationMode && !this.logicalPlaybackActive) {
+            return;
+        }
+        for (const handle of Array.from(this.activeHandles)) {
+            if (!this.musicHandles.has(handle) && isSoundPlaybackHandle(handle)) {
+                handle.pollLogicalPlayback(delta);
+            }
+        }
+    }
     isMusicPlaying() {
         return Array.from(this.musicHandles).some((handle) => handle.playing());
     }
@@ -337,7 +381,12 @@ export class SoundStore {
                     handle.stop();
                 }
                 catch (error) {
-                    this.releaseEffect(handle);
+                    if (isSoundPlaybackHandle(handle)) {
+                        this.releaseEffect(handle);
+                    }
+                    else {
+                        this.activeHandles.delete(handle);
+                    }
                     Log.error("Unable to stop a sound-effect handle", error);
                 }
             }
@@ -502,7 +551,7 @@ export class SoundStore {
             SoundStore.releaseDecoderIfIdle(pool);
         }
     }
-    playSound(ref, pitch, volume, loop, onEnded, position) {
+    playSound(ref, pitch, volume, loop, onEnded, position, onDisposed) {
         this.init();
         const context = this.getAudioContext();
         const bus = this.getSoundBus();
@@ -513,11 +562,53 @@ export class SoundStore {
         if (sourceId < 0) {
             return null;
         }
-        const handle = new EffectPlayback(this, sourceId, this.playbackGeneration, context, bus, pitch, volume * this.soundVolume, loop, position, onEnded);
+        const handle = new EffectPlayback(this, ref, sourceId, pitch, volume * this.soundVolume, loop, position, onEnded, onDisposed, 0, this.getDecodedAudioBuffer(ref));
         this.activeHandles.add(handle);
         this.soundSources[sourceId] = handle;
-        void this.loadAudioBuffer(ref).then((buffer) => handle.start(buffer), (error) => handle.fail(error, ref));
+        void handle.attachPlaybackGeneration().catch((error) => handle.failInitial(error));
         return handle;
+    }
+    /**
+     * Replace one Sound owner's complete logical voice set without touching browser playback.
+     * Existing source slots owned by the replaced voices may be reused transactionally.
+     */
+    replaceSoundPlaybacks(ref, existing, snapshots, onDisposed) {
+        this.ensureLogicalInitialization();
+        for (const snapshot of snapshots) {
+            if (!isSoundVoicePlaybackSnapshot(snapshot)) {
+                throw new TypeError("Invalid sound voice playback snapshot");
+            }
+        }
+        const decoded = this.getDecodedAudioBuffer(ref);
+        const shouldRestore = snapshots.map((snapshot) => !(decoded !== null && !snapshot.looped && snapshot.positionSeconds >= decoded.duration));
+        const required = shouldRestore.filter(Boolean).length;
+        const replaceable = new Set(existing);
+        const sourceIds = this.findReplacementSoundSourceIds(replaceable, required);
+        if (sourceIds === null) {
+            throw new RangeError("Insufficient sound-effect source capacity to restore playback state");
+        }
+        let sourceIndex = 0;
+        const planned = snapshots.map((snapshot, index) => {
+            if (!shouldRestore[index]) {
+                return null;
+            }
+            const sourceId = sourceIds[sourceIndex++];
+            if (sourceId === undefined) {
+                throw new Error("Sound source restoration plan is incomplete");
+            }
+            return new EffectPlayback(this, ref, sourceId, snapshot.playbackRate, snapshot.gain, snapshot.looped, snapshot.spatialPosition === null ? undefined : { ...snapshot.spatialPosition }, undefined, onDisposed, snapshot.positionSeconds, decoded);
+        });
+        for (const handle of existing) {
+            handle.stop();
+        }
+        for (const handle of planned) {
+            if (handle === null) {
+                continue;
+            }
+            this.activeHandles.add(handle);
+            this.soundSources[handle.sourceId] = handle;
+        }
+        return planned;
     }
     track(handle) {
         this.activeHandles.add(handle);
@@ -531,17 +622,29 @@ export class SoundStore {
     releaseEffect(handle) {
         this.activeHandles.delete(handle);
         const id = handle.sourceId;
-        if (id !== undefined && this.soundSources[id] === handle) {
+        if (this.soundSources[id] === handle) {
             this.soundSources[id] = null;
         }
     }
     getPlaybackDiagnostics() {
+        let logicalEffects = 0;
+        let effects = 0;
+        for (const handle of this.activeHandles) {
+            if (this.musicHandles.has(handle) || !handle.playing()) {
+                continue;
+            }
+            logicalEffects++;
+            if (handle.isPlaybackGenerationAttached?.() ?? true) {
+                effects++;
+            }
+        }
         return {
             generation: this.playbackGeneration,
             ownedContext: this.hasPlaybackGeneration(),
             committed: this.playbackCommitted,
             silent: this.isSilentPlaybackActive(),
-            effects: this.activeHandles.size - this.musicHandles.size,
+            effects,
+            logicalEffects,
             musicHandles: this.musicHandles.size,
             decodedBuffers: this.decodedBuffers.size,
             contextsCreated: this.contextsCreated,
@@ -729,6 +832,16 @@ export class SoundStore {
         }
         return -1;
     }
+    findReplacementSoundSourceIds(replaceable, count) {
+        const ids = [];
+        for (let i = 1; i < this.maxSources - 1 && ids.length < count; i++) {
+            const handle = this.soundSources[i] ?? null;
+            if (handle === null || !handle.playing() || replaceable.has(handle)) {
+                ids.push(i);
+            }
+        }
+        return ids.length === count ? ids : null;
+    }
     static disconnect(node) {
         try {
             node?.disconnect();
@@ -788,7 +901,7 @@ export class SoundStore {
     }
     discardUnusablePlayback() {
         const failures = [];
-        for (const operation of [() => this.detachMusic(), () => this.stopSoundEffects(), () => this.retirePlaybackContext()]) {
+        for (const operation of [() => this.detachPlaybackHandles(), () => this.retirePlaybackContext()]) {
             try {
                 operation();
             }
@@ -806,34 +919,40 @@ export class SoundStore {
         }
     }
 }
-/** A stopped handle retains no context, bus, source, gain, or panner. */
+/** A logical SFX voice survives playback-generation retirement; only its native graph is disposable. */
 class EffectPlayback {
     store;
+    ref;
     sourceId;
-    generation;
-    context;
-    bus;
-    pitch;
-    volume;
     loop;
-    position;
     onEnded;
+    onDisposed;
     source = null;
+    sourceContext = null;
     gain = null;
     panner = null;
+    buffer;
     active = true;
-    sourceGain = 0;
-    constructor(store, sourceId, generation, context, bus, pitch, volume, loop, position, onEnded) {
+    sourceGain;
+    playbackRate;
+    positionOffset;
+    startedAt = 0;
+    startToken = 0;
+    disposedNotified = false;
+    completionPending = false;
+    spatialPosition;
+    constructor(store, ref, sourceId, pitch, volume, loop, position, onEnded, onDisposed, offset, buffer) {
         this.store = store;
+        this.ref = ref;
         this.sourceId = sourceId;
-        this.generation = generation;
-        this.context = context;
-        this.bus = bus;
-        this.pitch = pitch;
-        this.volume = volume;
         this.loop = loop;
-        this.position = position;
         this.onEnded = onEnded;
+        this.onDisposed = onDisposed;
+        this.playbackRate = Number.isFinite(pitch) ? Math.max(0.25, Math.min(4, pitch)) : 1;
+        this.sourceGain = Number.isFinite(volume) ? Math.max(0, volume) : 0;
+        this.spatialPosition = position === undefined ? undefined : { ...position };
+        this.buffer = buffer;
+        this.positionOffset = buffer === null ? this.sanitizeOffset(offset) : this.normalizeOffset(buffer, offset);
     }
     playing() {
         return this.active;
@@ -841,100 +960,216 @@ class EffectPlayback {
     getGain() {
         return this.sourceGain;
     }
-    stop() {
-        this.dispose(true);
+    isPlaybackGenerationAttached() {
+        return this.active && this.source !== null && this.sourceContext !== null;
     }
-    start(buffer) {
-        if (!this.isCurrent() || !this.store.soundsOn()) {
-            this.stop();
+    capturePlaybackState() {
+        return {
+            looped: this.loop,
+            playbackRate: this.playbackRate,
+            positionSeconds: this.getPosition(),
+            gain: this.sourceGain,
+            spatialPosition: this.spatialPosition === undefined ? null : { ...this.spatialPosition }
+        };
+    }
+    stop() {
+        this.dispose(true, false);
+    }
+    detachPlaybackGeneration() {
+        if (!this.active) {
             return;
         }
-        const context = this.context;
-        const bus = this.bus;
-        if (context === null || bus === null) {
-            this.stop();
-            return;
+        this.startToken++;
+        this.positionOffset = this.getPosition();
+        if (!this.loop && this.buffer !== null && this.positionOffset >= this.buffer.duration) {
+            this.completionPending = true;
         }
+        this.stopSourceGraph(true);
+    }
+    attachPlaybackGeneration() {
+        if (!this.active) {
+            return Promise.resolve();
+        }
+        const store = this.store;
+        if (store.isUsingExplicitPlaybackGenerations() && !store.isPlaybackCommitted()) {
+            return Promise.resolve();
+        }
+        const context = store.getAudioContext();
+        const bus = store.getSoundBus();
+        if (context === null || bus === null || String(context.state) !== "running") {
+            return Promise.resolve();
+        }
+        if (this.source !== null && this.sourceContext === context) {
+            return Promise.resolve();
+        }
+        const generation = store.getPlaybackGeneration();
+        const token = ++this.startToken;
+        const attach = (buffer) => {
+            if (token !== this.startToken ||
+                !this.active ||
+                (store.isUsingExplicitPlaybackGenerations() && (!store.isPlaybackGenerationCurrent(generation, context) || !store.isPlaybackCommitted()))) {
+                return;
+            }
+            this.buffer = buffer;
+            this.positionOffset = this.normalizeOffset(buffer, this.positionOffset);
+            if (!this.loop && this.positionOffset >= buffer.duration) {
+                // Retirement must never deliver completion from inside the audio commit
+                // transaction. Preserve it until the first accepted game-clock poll.
+                this.completionPending = true;
+                return;
+            }
+            this.completionPending = false;
+            this.startSource(buffer, context, bus, generation);
+        };
         try {
-            this.source = context.createBufferSource();
-            this.gain = context.createGain();
-            this.source.buffer = buffer;
-            this.source.loop = this.loop;
-            this.source.playbackRate.value = Number.isFinite(this.pitch) ? Math.max(0.25, Math.min(4, this.pitch)) : 1;
-            this.sourceGain = Number.isFinite(this.volume) ? Math.max(0, this.volume) : 0;
-            this.gain.gain.value = this.sourceGain;
-            this.source.connect(this.gain);
-            this.connectPosition(context, this.gain, bus);
-            this.source.onended = () => {
-                const notify = this.isCurrent() && !this.loop ? this.onEnded : undefined;
-                this.dispose(false);
-                this.notify(notify);
-            };
-            this.source.start();
+            const cached = this.buffer ?? store.getDecodedAudioBuffer(this.ref);
+            if (cached !== null) {
+                attach(cached);
+                return Promise.resolve();
+            }
+            return store.loadAudioBuffer(this.ref).then(attach);
         }
         catch (error) {
-            this.fail(error, "sound graph");
+            return Promise.reject(error);
         }
     }
-    fail(error, ref) {
-        const current = this.isCurrent();
-        const notify = current ? this.onEnded : undefined;
-        this.dispose(true);
-        if (current) {
-            Log.error(`Failed to play sound: ${ref}`, error);
-            this.notify(notify);
-        }
-    }
-    isCurrent() {
-        return (this.active &&
-            this.context !== null &&
-            this.store.isPlaybackGenerationCurrent(this.generation, this.context) &&
-            this.store.isPlaybackCommitted() &&
-            String(this.context.state) === "running");
-    }
-    connectPosition(context, gain, bus) {
-        if (this.position === undefined || typeof context.createPanner !== "function") {
-            gain.connect(bus);
+    pollLogicalPlayback(delta) {
+        if (!this.active) {
             return;
         }
+        if (this.completionPending) {
+            this.dispose(false, true);
+            return;
+        }
+        if (this.source !== null || !this.store.isSilentPlaybackActive()) {
+            return;
+        }
+        const buffer = this.buffer ?? this.store.getDecodedAudioBuffer(this.ref);
+        if (buffer === null) {
+            return;
+        }
+        this.buffer = buffer;
+        const elapsed = Number.isFinite(delta) ? Math.max(0, delta) : 0;
+        const raw = this.positionOffset + (elapsed / 1000) * this.playbackRate;
+        if (!this.loop && raw >= buffer.duration) {
+            this.positionOffset = Math.max(0, buffer.duration);
+            this.dispose(false, true);
+            return;
+        }
+        this.positionOffset = this.normalizeOffset(buffer, raw);
+    }
+    failInitial(error) {
+        if (!this.active) {
+            return;
+        }
+        const ended = this.onEnded;
+        this.dispose(true, false);
+        Log.error(`Failed to play sound: ${this.ref}`, error);
+        this.notifyEnded(ended);
+    }
+    getPosition() {
+        const context = this.sourceContext;
+        if (context === null || this.source === null) {
+            return this.positionOffset;
+        }
+        const position = this.positionOffset + Math.max(0, context.currentTime - this.startedAt) * this.playbackRate;
+        return this.buffer === null ? this.sanitizeOffset(position) : this.normalizeOffset(this.buffer, position);
+    }
+    startSource(buffer, context, bus, generation) {
+        if (this.store.isUsingExplicitPlaybackGenerations() && !this.store.isPlaybackGenerationCurrent(generation, context)) {
+            return;
+        }
+        this.stopSourceGraph(true);
+        let source = null;
+        let gain = null;
+        let panner = null;
         try {
-            const panner = context.createPanner();
+            source = context.createBufferSource();
+            gain = context.createGain();
+            source.buffer = buffer;
+            source.loop = this.loop;
+            source.playbackRate.value = this.playbackRate;
+            gain.gain.value = this.sourceGain;
+            source.connect(gain);
+            panner = this.connectPosition(context, gain, bus);
+            this.positionOffset = this.normalizeOffset(buffer, this.positionOffset);
+            this.startedAt = context.currentTime;
+            this.completionPending = false;
+            this.source = source;
+            this.sourceContext = context;
+            this.gain = gain;
             this.panner = panner;
+            const startedSource = source;
+            source.onended = () => {
+                if (!this.active || this.source !== startedSource || this.sourceContext !== context) {
+                    return;
+                }
+                this.positionOffset = Math.max(0, buffer.duration);
+                this.clearCurrentSource(false);
+                if (!this.loop) {
+                    this.dispose(false, true);
+                }
+            };
+            source.start(0, this.positionOffset);
+        }
+        catch (error) {
+            if (this.source === source) {
+                this.source = null;
+                this.sourceContext = null;
+                this.gain = null;
+                this.panner = null;
+            }
+            this.cleanupSourceGraph(source, gain, panner, true);
+            throw error;
+        }
+    }
+    connectPosition(context, gain, bus) {
+        if (this.spatialPosition === undefined || typeof context.createPanner !== "function") {
+            gain.connect(bus);
+            return null;
+        }
+        let panner = null;
+        try {
+            panner = context.createPanner();
             panner.panningModel = "equalpower";
             panner.distanceModel = "inverse";
             panner.refDistance = 1;
             panner.maxDistance = 10000;
             panner.rolloffFactor = 1;
             if ("positionX" in panner) {
-                panner.positionX.value = this.position.x;
-                panner.positionY.value = this.position.y;
-                panner.positionZ.value = this.position.z;
+                panner.positionX.value = this.spatialPosition.x;
+                panner.positionY.value = this.spatialPosition.y;
+                panner.positionZ.value = this.spatialPosition.z;
             }
             else {
                 const legacy = panner;
-                legacy.setPosition(this.position.x, this.position.y, this.position.z);
+                legacy.setPosition(this.spatialPosition.x, this.spatialPosition.y, this.spatialPosition.z);
             }
             gain.connect(panner);
             panner.connect(bus);
+            return panner;
         }
         catch {
             SoundStore.disconnect(gain);
-            SoundStore.disconnect(this.panner);
-            this.panner = null;
+            SoundStore.disconnect(panner);
             gain.connect(bus);
+            return null;
         }
     }
-    dispose(stopSource) {
+    stopSourceGraph(stopSource) {
         const source = this.source;
         const gain = this.gain;
         const panner = this.panner;
-        this.active = false;
         this.source = null;
+        this.sourceContext = null;
         this.gain = null;
         this.panner = null;
-        this.context = null;
-        this.bus = null;
-        this.onEnded = undefined;
+        this.cleanupSourceGraph(source, gain, panner, stopSource);
+    }
+    clearCurrentSource(stopSource) {
+        this.stopSourceGraph(stopSource);
+    }
+    cleanupSourceGraph(source, gain, panner, stopSource) {
         if (source !== null) {
             source.onended = null;
             if (stopSource) {
@@ -949,9 +1184,34 @@ class EffectPlayback {
         SoundStore.disconnect(source);
         SoundStore.disconnect(gain);
         SoundStore.disconnect(panner);
-        this.store.releaseEffect(this);
     }
-    notify(callback) {
+    dispose(stopSource, notifyEnded) {
+        if (!this.active) {
+            return;
+        }
+        this.startToken++;
+        this.active = false;
+        this.stopSourceGraph(stopSource);
+        this.store.releaseEffect(this);
+        const disposed = this.onDisposed;
+        const ended = notifyEnded ? this.onEnded : undefined;
+        this.onDisposed = undefined;
+        this.onEnded = undefined;
+        if (!this.disposedNotified) {
+            this.disposedNotified = true;
+            this.notifyDisposed(disposed);
+        }
+        this.notifyEnded(ended);
+    }
+    notifyDisposed(callback) {
+        try {
+            callback?.(this);
+        }
+        catch (error) {
+            Log.error("Sound disposal callback failed", error);
+        }
+    }
+    notifyEnded(callback) {
         try {
             callback?.();
         }
@@ -959,5 +1219,21 @@ class EffectPlayback {
             Log.error("Sound completion callback failed", error);
         }
     }
+    sanitizeOffset(offset) {
+        return Number.isFinite(offset) ? Math.max(0, offset) : 0;
+    }
+    normalizeOffset(buffer, offset) {
+        const value = this.sanitizeOffset(offset);
+        const duration = buffer.duration;
+        if (!Number.isFinite(duration)) {
+            return value;
+        }
+        return duration <= 0 ? 0 : this.loop ? value % duration : Math.min(value, duration);
+    }
+}
+function isSoundPlaybackHandle(handle) {
+    return (typeof handle.sourceId === "number" &&
+        typeof handle.capturePlaybackState === "function" &&
+        typeof handle.pollLogicalPlayback === "function");
 }
 //# sourceMappingURL=SoundStore.js.map

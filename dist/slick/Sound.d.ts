@@ -1,3 +1,4 @@
+import { type SoundPlaybackSnapshot } from "./SoundPlaybackState.js";
 /**
  * Java Slick2D counterpart: org.newdawn.slick.Sound.
  *
@@ -7,6 +8,7 @@ export declare class Sound {
     private readonly ref;
     private readonly readyPromise;
     private active;
+    private readonly voices;
     constructor(ref: string);
     constructor(url: URL);
     constructor(input: ArrayBuffer | Blob, ref: string);
@@ -26,7 +28,15 @@ export declare class Sound {
     loop(pitch: number, volume: number): void;
     /** Java Slick2D counterpart: Sound.playing(). */
     playing(): boolean;
-    /** Java Slick2D counterpart: Sound.stop(). */
+    /** Java Slick2D counterpart: Sound.stop(). Stops only this Sound's latest voice, matching Slick parity. */
     stop(): void;
+    /** Capture every live logical voice without manufacturing or resuming a browser audio context. */
+    capturePlaybackState(): SoundPlaybackSnapshot;
+    /**
+     * Atomically replace this Sound's logical voices from durable state.
+     * Physical Web Audio attachment belongs to the accepted playback-generation commit.
+     */
+    restorePlaybackState(snapshot: SoundPlaybackSnapshot): void;
+    private releaseVoice;
 }
 //# sourceMappingURL=Sound.d.ts.map
