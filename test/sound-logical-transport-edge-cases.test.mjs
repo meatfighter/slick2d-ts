@@ -64,6 +64,23 @@ class FakeAudioContext {
     removeEventListener() {}
 }
 
+class FailFirstSourceAudioContext extends FakeAudioContext {
+    static sourceCalls = 0;
+
+    createBufferSource() {
+        if (FailFirstSourceAudioContext.sourceCalls++ === 0) {
+            throw new Error("source creation failed");
+        }
+        return super.createBufferSource();
+    }
+}
+
+class AlwaysFailSourceAudioContext extends FakeAudioContext {
+    createBufferSource() {
+        throw new Error("source creation failed");
+    }
+}
+
 class FakeOfflineAudioContext {
     decodeAudioData(_bytes, ok) {
         const buffer = new FakeAudioBuffer();
@@ -83,12 +100,6 @@ class DelayedOfflineAudioContext {
                 resolve(buffer);
             });
         });
-    }
-}
-
-class AlwaysFailSourceAudioContext extends FakeAudioContext {
-    createBufferSource() {
-        throw new Error("source creation failed");
     }
 }
 
@@ -126,6 +137,7 @@ afterEach(() => {
     ResourceLoader.clearCache();
     FakeAudioSource.created = [];
     FakeAudioContext.created = [];
+    FailFirstSourceAudioContext.sourceCalls = 0;
     DelayedOfflineAudioContext.pending = [];
     delete globalThis.AudioContext;
     delete globalThis.OfflineAudioContext;
@@ -194,6 +206,30 @@ test("stopping a voice while decode is pending prevents any late generation atta
     await settle();
 
     assert.equal(FakeAudioSource.created.length, 0);
+});
+
+test("failed initial native Sound graph releases its logical source slot for a later play", async () => {
+    installAudioGlobals(FakeOfflineAudioContext, FailFirstSourceAudioContext);
+    registerTone();
+    const store = SoundStore.get();
+    store.setMaxSources(3);
+    store.enableExplicitPlaybackGenerations();
+    const sound = new Sound("tone.ogg");
+    await sound.ready();
+    await beginCommitted(store);
+
+    sound.play();
+    await settle();
+
+    assert.equal(sound.playing(), false);
+    assert.equal(store.getPlaybackDiagnostics().logicalEffects, 0);
+
+    sound.play();
+    await settle();
+
+    assert.equal(sound.playing(), true);
+    assert.equal(store.getPlaybackDiagnostics().logicalEffects, 1);
+    assert.equal(store.getPlaybackDiagnostics().effects, 1);
 });
 
 test("SFX reattach failure retires the partial graph and preserves the logical voice for silent gameplay", async () => {
