@@ -80,6 +80,7 @@ function audioFixture() {
     const { SoundStore } = loadModule(
         "slick/openal/SoundStore.ts",
         {
+            "../SoundPlaybackState.js": { isSoundVoicePlaybackSnapshot: () => true },
             "../util/ResourceLoader.js": {
                 ResourceLoadException: Error,
                 ResourceLoader: { getResource: () => null, track: (promise) => promise }
@@ -194,7 +195,7 @@ test("stale retirement leaves a replacement context and generation untouched", a
     f.store.endPlaybackGeneration(second);
 });
 
-test("a music detach failure cannot skip another handle, SFX, output disconnection or close", async () => {
+test("a music detach failure cannot skip another handle, SFX detach, output disconnection or close", async () => {
     const f = audioFixture();
     const generation = await begin(f);
     f.store.track({
@@ -212,17 +213,29 @@ test("a music detach failure cannot skip another handle, SFX, output disconnecti
             f.trace.push("music-second");
         }
     });
-    f.store.activeHandles.add({
+    const sfx = {
+        sourceId: 1,
         playing: () => true,
         stop() {
-            f.trace.push("sfx");
-        }
-    });
+            f.trace.push("sfx-stop");
+        },
+        detachPlaybackGeneration() {
+            f.trace.push("sfx-detach");
+        },
+        capturePlaybackState() {
+            return { looped: false, playbackRate: 1, positionSeconds: 0, gain: 1, spatialPosition: null };
+        },
+        isPlaybackGenerationAttached: () => false,
+        pollLogicalPlayback() {}
+    };
+    f.store.activeHandles.add(sfx);
+    f.store.soundSources[1] = sfx;
     assert.throws(() => f.store.endPlaybackGeneration(generation), AggregateError);
-    for (const label of ["music-fail", "music-second", "sfx", "disconnect", "close"]) assert.ok(f.trace.includes(label), label);
+    for (const label of ["music-fail", "music-second", "sfx-detach", "disconnect", "close"]) assert.ok(f.trace.includes(label), label);
+    assert.ok(!f.trace.includes("sfx-stop"));
     assert.equal(f.store.hasPlaybackGeneration(), false);
     assert.equal(f.store.isPlaybackCommitted(), false);
-    assert.ok(f.store.soundSources.every((handle) => handle === null));
+    assert.equal(f.store.soundSources[1], sfx);
     assert.throws(() => f.store.endPlaybackGeneration(), AggregateError);
     assert.throws(() => f.store.beginPlaybackGenerationFromUserGesture(), AggregateError);
     await assert.rejects(f.store.commitPlaybackGeneration(f.store.getPlaybackGeneration()), AggregateError);
