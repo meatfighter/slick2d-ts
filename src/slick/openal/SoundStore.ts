@@ -1,3 +1,4 @@
+import { isSoundVoicePlaybackSnapshot, type SoundVoicePlaybackSnapshot } from "../SoundPlaybackState.js";
 import { ResourceLoadException, ResourceLoader, type ResourceLoadOptions } from "../util/ResourceLoader.js";
 import { runSettledBatch } from "../util/BatchLoader.js";
 import { Log } from "../util/Log.js";
@@ -27,6 +28,14 @@ export interface AudioPlaybackHandle {
     attachPlaybackGeneration?(): void | Promise<void>;
     playing(): boolean;
     getGain?(): number;
+    isPlaybackGenerationAttached?(): boolean;
+}
+
+export interface SoundPlaybackHandle extends AudioPlaybackHandle {
+    readonly sourceId: number;
+    capturePlaybackState(): SoundVoicePlaybackSnapshot;
+    isPlaybackGenerationAttached(): boolean;
+    pollLogicalPlayback(delta: number): void;
 }
 
 export type PlaybackDiagnostics = Readonly<{
@@ -35,6 +44,7 @@ export type PlaybackDiagnostics = Readonly<{
     committed: boolean;
     silent: boolean;
     effects: number;
+    logicalEffects: number;
     musicHandles: number;
     decodedBuffers: number;
     contextsCreated: number;
@@ -64,7 +74,7 @@ export class SoundStore {
     private decoderPool: DecoderPool = { context: null, active: 0, batches: 0 };
     private activeHandles = new Set<AudioPlaybackHandle>();
     private musicHandles = new Set<AudioPlaybackHandle>();
-    private soundSources: Array<AudioPlaybackHandle | null> = new Array<AudioPlaybackHandle | null>(64).fill(null);
+    private soundSources: Array<SoundPlaybackHandle | null> = new Array<SoundPlaybackHandle | null>(64).fill(null);
     private explicitPlaybackGenerationMode = false;
     private playbackGeneration = 0;
     private playbackRetirementFailure: Error | null = null;
@@ -206,7 +216,7 @@ export class SoundStore {
         );
     }
 
-    /** Accept a prepared generation, attach logical music, and then open its output gate. */
+    /** Accept a prepared generation, attach every logical transport, and then open its output gate. */
     public async commitPlaybackGeneration(generation: number): Promise<boolean> {
         if (this.playbackRetirementFailure !== null) {
             throw this.playbackRetirementFailure;
@@ -218,15 +228,16 @@ export class SoundStore {
         this.playbackCommitted = true;
         this.logicalPlaybackActive = true;
         if (this.context === null) {
-            return false; // Explicit silent gameplay; Music.poll owns the logical clock.
+            return false; // Explicit silent gameplay; Music.poll/SoundStore.poll own logical clocks.
         }
         const context = this.context;
         if (String(context.state) !== "running") {
             this.discardUnusablePlayback();
             return false;
         }
+        const handles = Array.from(this.activeHandles);
         const results = await Promise.allSettled(
-            Array.from(this.musicHandles, (handle) => {
+            handles.map((handle) => {
                 try {
                     return Promise.resolve(handle.attachPlaybackGeneration?.());
                 } catch (error) {
@@ -266,11 +277,9 @@ export class SoundStore {
                 failures.push(error);
             }
         };
-        attempt(() => this.detachMusic());
-        attempt(() => this.stopSoundEffects());
+        attempt(() => this.detachPlaybackHandles());
         this.playbackGeneration++;
         attempt(() => this.retirePlaybackContext());
-        attempt(() => this.resetSoundSources());
         if (failures.length !== 0) {
             this.playbackRetirementFailure ??= new AggregateError(failures, "Unable to retire the playback generation safely.");
         }
@@ -279,17 +288,22 @@ export class SoundStore {
         }
     }
 
-    private detachMusic(): void {
+    private detachPlaybackHandles(): void {
         const failures: unknown[] = [];
-        for (const handle of Array.from(this.musicHandles)) {
+        for (const handle of Array.from(this.activeHandles)) {
             try {
-                handle.detachPlaybackGeneration?.();
+                if (handle.detachPlaybackGeneration !== undefined) {
+                    handle.detachPlaybackGeneration();
+                } else {
+                    // Unknown legacy handles cannot safely retain a graph tied to the old context.
+                    handle.stop();
+                }
             } catch (error) {
                 failures.push(error);
             }
         }
         if (failures.length !== 0) {
-            throw new AggregateError(failures, "Unable to detach every music graph.");
+            throw new AggregateError(failures, "Unable to detach every playback graph.");
         }
     }
 
@@ -395,6 +409,18 @@ export class SoundStore {
         this.soundWorksFlag = this.context !== null && String(this.context.state) === "running";
     }
 
+    /** Advance detached SFX only while accepted gameplay itself is advancing silently. */
+    public poll(delta: number): void {
+        if (this.explicitPlaybackGenerationMode && !this.logicalPlaybackActive) {
+            return;
+        }
+        for (const handle of Array.from(this.activeHandles)) {
+            if (!this.musicHandles.has(handle) && isSoundPlaybackHandle(handle)) {
+                handle.pollLogicalPlayback(delta);
+            }
+        }
+    }
+
     public isMusicPlaying(): boolean {
         return Array.from(this.musicHandles).some((handle) => handle.playing());
     }
@@ -409,7 +435,11 @@ export class SoundStore {
                 try {
                     handle.stop();
                 } catch (error) {
-                    this.releaseEffect(handle);
+                    if (isSoundPlaybackHandle(handle)) {
+                        this.releaseEffect(handle);
+                    } else {
+                        this.activeHandles.delete(handle);
+                    }
                     Log.error("Unable to stop a sound-effect handle", error);
                 }
             }
@@ -464,7 +494,7 @@ export class SoundStore {
         for (let i = limit; i < this.soundSources.length; i++) {
             this.soundSources[i]?.stop();
         }
-        const sources = new Array<AudioPlaybackHandle | null>(max).fill(null);
+        const sources = new Array<SoundPlaybackHandle | null>(max).fill(null);
         for (let i = 1; i < Math.min(limit, this.soundSources.length); i++) {
             sources[i] = this.soundSources[i] ?? null;
         }
@@ -593,7 +623,15 @@ export class SoundStore {
         }
     }
 
-    public playSound(ref: string, pitch: number, volume: number, loop: boolean, onEnded?: () => void, position?: AudioPosition): AudioPlaybackHandle | null {
+    public playSound(
+        ref: string,
+        pitch: number,
+        volume: number,
+        loop: boolean,
+        onEnded?: () => void,
+        position?: AudioPosition,
+        onDisposed?: (handle: SoundPlaybackHandle) => void
+    ): SoundPlaybackHandle | null {
         this.init();
         const context = this.getAudioContext();
         const bus = this.getSoundBus();
@@ -604,14 +642,83 @@ export class SoundStore {
         if (sourceId < 0) {
             return null;
         }
-        const handle = new EffectPlayback(this, sourceId, this.playbackGeneration, context, bus, pitch, volume * this.soundVolume, loop, position, onEnded);
+        const handle = new EffectPlayback(
+            this,
+            ref,
+            sourceId,
+            pitch,
+            volume * this.soundVolume,
+            loop,
+            position,
+            onEnded,
+            onDisposed,
+            0,
+            this.getDecodedAudioBuffer(ref)
+        );
         this.activeHandles.add(handle);
         this.soundSources[sourceId] = handle;
-        void this.loadAudioBuffer(ref).then(
-            (buffer) => handle.start(buffer),
-            (error) => handle.fail(error, ref)
-        );
+        void handle.attachPlaybackGeneration().catch((error) => handle.failInitial(error));
         return handle;
+    }
+
+    /**
+     * Replace one Sound owner's complete logical voice set without touching browser playback.
+     * Existing source slots owned by the replaced voices may be reused transactionally.
+     */
+    public replaceSoundPlaybacks(
+        ref: string,
+        existing: readonly SoundPlaybackHandle[],
+        snapshots: readonly SoundVoicePlaybackSnapshot[],
+        onDisposed?: (handle: SoundPlaybackHandle) => void
+    ): Array<SoundPlaybackHandle | null> {
+        this.ensureLogicalInitialization();
+        for (const snapshot of snapshots) {
+            if (!isSoundVoicePlaybackSnapshot(snapshot)) {
+                throw new TypeError("Invalid sound voice playback snapshot");
+            }
+        }
+        const decoded = this.getDecodedAudioBuffer(ref);
+        const shouldRestore = snapshots.map((snapshot) => !(decoded !== null && !snapshot.looped && snapshot.positionSeconds >= decoded.duration));
+        const required = shouldRestore.filter(Boolean).length;
+        const replaceable = new Set(existing);
+        const sourceIds = this.findReplacementSoundSourceIds(replaceable, required);
+        if (sourceIds === null) {
+            throw new RangeError("Insufficient sound-effect source capacity to restore playback state");
+        }
+        let sourceIndex = 0;
+        const planned = snapshots.map((snapshot, index): SoundPlaybackHandle | null => {
+            if (!shouldRestore[index]) {
+                return null;
+            }
+            const sourceId = sourceIds[sourceIndex++];
+            if (sourceId === undefined) {
+                throw new Error("Sound source restoration plan is incomplete");
+            }
+            return new EffectPlayback(
+                this,
+                ref,
+                sourceId,
+                snapshot.playbackRate,
+                snapshot.gain,
+                snapshot.looped,
+                snapshot.spatialPosition === null ? undefined : { ...snapshot.spatialPosition },
+                undefined,
+                onDisposed,
+                snapshot.positionSeconds,
+                decoded
+            );
+        });
+        for (const handle of existing) {
+            handle.stop();
+        }
+        for (const handle of planned) {
+            if (handle === null) {
+                continue;
+            }
+            this.activeHandles.add(handle);
+            this.soundSources[handle.sourceId] = handle;
+        }
+        return planned;
     }
 
     public track(handle: AudioPlaybackHandle): void {
@@ -625,21 +732,33 @@ export class SoundStore {
     }
 
     /** Internal SFX owner hook; source slots are released only by their current handle. */
-    public releaseEffect(handle: AudioPlaybackHandle): void {
+    public releaseEffect(handle: SoundPlaybackHandle): void {
         this.activeHandles.delete(handle);
         const id = handle.sourceId;
-        if (id !== undefined && this.soundSources[id] === handle) {
+        if (this.soundSources[id] === handle) {
             this.soundSources[id] = null;
         }
     }
 
     public getPlaybackDiagnostics(): PlaybackDiagnostics {
+        let logicalEffects = 0;
+        let effects = 0;
+        for (const handle of this.activeHandles) {
+            if (this.musicHandles.has(handle) || !handle.playing()) {
+                continue;
+            }
+            logicalEffects++;
+            if (handle.isPlaybackGenerationAttached?.() ?? true) {
+                effects++;
+            }
+        }
         return {
             generation: this.playbackGeneration,
             ownedContext: this.hasPlaybackGeneration(),
             committed: this.playbackCommitted,
             silent: this.isSilentPlaybackActive(),
-            effects: this.activeHandles.size - this.musicHandles.size,
+            effects,
+            logicalEffects,
             musicHandles: this.musicHandles.size,
             decodedBuffers: this.decodedBuffers.size,
             contextsCreated: this.contextsCreated,
@@ -817,7 +936,7 @@ export class SoundStore {
     }
 
     private resetSoundSources(): void {
-        this.soundSources = new Array<AudioPlaybackHandle | null>(this.maxSources).fill(null);
+        this.soundSources = new Array<SoundPlaybackHandle | null>(this.maxSources).fill(null);
     }
 
     private findFreeSoundSource(): number {
@@ -827,6 +946,17 @@ export class SoundStore {
             }
         }
         return -1;
+    }
+
+    private findReplacementSoundSourceIds(replaceable: ReadonlySet<SoundPlaybackHandle>, count: number): number[] | null {
+        const ids: number[] = [];
+        for (let i = 1; i < this.maxSources - 1 && ids.length < count; i++) {
+            const handle = this.soundSources[i] ?? null;
+            if (handle === null || !handle.playing() || replaceable.has(handle)) {
+                ids.push(i);
+            }
+        }
+        return ids.length === count ? ids : null;
     }
 
     public static disconnect(node: AudioNode | null): void {
@@ -894,7 +1024,7 @@ export class SoundStore {
 
     private discardUnusablePlayback(): void {
         const failures: unknown[] = [];
-        for (const operation of [() => this.detachMusic(), () => this.stopSoundEffects(), () => this.retirePlaybackContext()]) {
+        for (const operation of [() => this.detachPlaybackHandles(), () => this.retirePlaybackContext()]) {
             try {
                 operation();
             } catch (error) {
@@ -912,26 +1042,41 @@ export class SoundStore {
     }
 }
 
-/** A stopped handle retains no context, bus, source, gain, or panner. */
-class EffectPlayback implements AudioPlaybackHandle {
+/** A logical SFX voice survives playback-generation retirement; only its native graph is disposable. */
+class EffectPlayback implements SoundPlaybackHandle {
     private source: AudioBufferSourceNode | null = null;
+    private sourceContext: AudioContext | null = null;
     private gain: GainNode | null = null;
     private panner: PannerNode | null = null;
+    private buffer: AudioBuffer | null;
     private active = true;
-    private sourceGain = 0;
+    private sourceGain: number;
+    private readonly playbackRate: number;
+    private positionOffset: number;
+    private startedAt = 0;
+    private startToken = 0;
+    private disposedNotified = false;
+    private readonly spatialPosition: AudioPosition | undefined;
 
     public constructor(
         private readonly store: SoundStore,
+        private readonly ref: string,
         public readonly sourceId: number,
-        private readonly generation: number,
-        private context: AudioContext | null,
-        private bus: GainNode | null,
-        private readonly pitch: number,
-        private readonly volume: number,
+        pitch: number,
+        volume: number,
         private readonly loop: boolean,
-        private readonly position: AudioPosition | undefined,
-        private onEnded: (() => void) | undefined
-    ) {}
+        position: AudioPosition | undefined,
+        private onEnded: (() => void) | undefined,
+        private onDisposed: ((handle: SoundPlaybackHandle) => void) | undefined,
+        offset: number,
+        buffer: AudioBuffer | null
+    ) {
+        this.playbackRate = Number.isFinite(pitch) ? Math.max(0.25, Math.min(4, pitch)) : 1;
+        this.sourceGain = Number.isFinite(volume) ? Math.max(0, volume) : 0;
+        this.spatialPosition = position === undefined ? undefined : { ...position };
+        this.buffer = buffer;
+        this.positionOffset = buffer === null ? this.sanitizeOffset(offset) : this.normalizeOffset(buffer, offset);
+    }
 
     public playing(): boolean {
         return this.active;
@@ -941,104 +1086,212 @@ class EffectPlayback implements AudioPlaybackHandle {
         return this.sourceGain;
     }
 
+    public isPlaybackGenerationAttached(): boolean {
+        return this.active && this.source !== null && this.sourceContext !== null;
+    }
+
+    public capturePlaybackState(): SoundVoicePlaybackSnapshot {
+        return {
+            looped: this.loop,
+            playbackRate: this.playbackRate,
+            positionSeconds: this.getPosition(),
+            gain: this.sourceGain,
+            spatialPosition: this.spatialPosition === undefined ? null : { ...this.spatialPosition }
+        };
+    }
+
     public stop(): void {
-        this.dispose(true);
+        this.dispose(true, false);
     }
 
-    public start(buffer: AudioBuffer): void {
-        if (!this.isCurrent() || !this.store.soundsOn()) {
-            this.stop();
+    public detachPlaybackGeneration(): void {
+        if (!this.active) {
             return;
         }
-        const context = this.context;
-        const bus = this.bus;
-        if (context === null || bus === null) {
-            this.stop();
-            return;
+        this.startToken++;
+        this.positionOffset = this.getPosition();
+        this.stopSourceGraph(true);
+    }
+
+    public attachPlaybackGeneration(): Promise<void> {
+        if (!this.active) {
+            return Promise.resolve();
         }
+        const store = this.store;
+        if (store.isUsingExplicitPlaybackGenerations() && !store.isPlaybackCommitted()) {
+            return Promise.resolve();
+        }
+        const context = store.getAudioContext();
+        const bus = store.getSoundBus();
+        if (context === null || bus === null || String(context.state) !== "running") {
+            return Promise.resolve();
+        }
+        if (this.source !== null && this.sourceContext === context) {
+            return Promise.resolve();
+        }
+        const generation = store.getPlaybackGeneration();
+        const token = ++this.startToken;
+        const attach = (buffer: AudioBuffer): void => {
+            if (
+                token !== this.startToken ||
+                !this.active ||
+                (store.isUsingExplicitPlaybackGenerations() && (!store.isPlaybackGenerationCurrent(generation, context) || !store.isPlaybackCommitted()))
+            ) {
+                return;
+            }
+            this.buffer = buffer;
+            this.positionOffset = this.normalizeOffset(buffer, this.positionOffset);
+            if (!this.loop && this.positionOffset >= buffer.duration) {
+                this.dispose(false, false);
+                return;
+            }
+            this.startSource(buffer, context, bus, generation);
+        };
         try {
-            this.source = context.createBufferSource();
-            this.gain = context.createGain();
-            this.source.buffer = buffer;
-            this.source.loop = this.loop;
-            this.source.playbackRate.value = Number.isFinite(this.pitch) ? Math.max(0.25, Math.min(4, this.pitch)) : 1;
-            this.sourceGain = Number.isFinite(this.volume) ? Math.max(0, this.volume) : 0;
-            this.gain.gain.value = this.sourceGain;
-            this.source.connect(this.gain);
-            this.connectPosition(context, this.gain, bus);
-            this.source.onended = () => {
-                const notify = this.isCurrent() && !this.loop ? this.onEnded : undefined;
-                this.dispose(false);
-                this.notify(notify);
-            };
-            this.source.start();
+            const cached = this.buffer ?? store.getDecodedAudioBuffer(this.ref);
+            if (cached !== null) {
+                attach(cached);
+                return Promise.resolve();
+            }
+            return store.loadAudioBuffer(this.ref).then(attach);
         } catch (error) {
-            this.fail(error, "sound graph");
+            return Promise.reject(error);
         }
     }
 
-    public fail(error: unknown, ref: string): void {
-        const current = this.isCurrent();
-        const notify = current ? this.onEnded : undefined;
-        this.dispose(true);
-        if (current) {
-            Log.error(`Failed to play sound: ${ref}`, error);
-            this.notify(notify);
-        }
-    }
-
-    private isCurrent(): boolean {
-        return (
-            this.active &&
-            this.context !== null &&
-            this.store.isPlaybackGenerationCurrent(this.generation, this.context) &&
-            this.store.isPlaybackCommitted() &&
-            String(this.context.state) === "running"
-        );
-    }
-
-    private connectPosition(context: AudioContext, gain: GainNode, bus: GainNode): void {
-        if (this.position === undefined || typeof context.createPanner !== "function") {
-            gain.connect(bus);
+    public pollLogicalPlayback(delta: number): void {
+        if (!this.active || this.source !== null || !this.store.isSilentPlaybackActive()) {
             return;
         }
+        const buffer = this.buffer ?? this.store.getDecodedAudioBuffer(this.ref);
+        if (buffer === null) {
+            return;
+        }
+        this.buffer = buffer;
+        const elapsed = Number.isFinite(delta) ? Math.max(0, delta) : 0;
+        const raw = this.positionOffset + (elapsed / 1000) * this.playbackRate;
+        if (!this.loop && raw >= buffer.duration) {
+            this.positionOffset = Math.max(0, buffer.duration);
+            this.dispose(false, true);
+            return;
+        }
+        this.positionOffset = this.normalizeOffset(buffer, raw);
+    }
+
+    public failInitial(error: unknown): void {
+        if (!this.active) {
+            return;
+        }
+        const ended = this.onEnded;
+        this.dispose(true, false);
+        Log.error(`Failed to play sound: ${this.ref}`, error);
+        this.notifyEnded(ended);
+    }
+
+    private getPosition(): number {
+        const context = this.sourceContext;
+        if (context === null || this.source === null) {
+            return this.positionOffset;
+        }
+        const position = this.positionOffset + Math.max(0, context.currentTime - this.startedAt) * this.playbackRate;
+        return this.buffer === null ? this.sanitizeOffset(position) : this.normalizeOffset(this.buffer, position);
+    }
+
+    private startSource(buffer: AudioBuffer, context: AudioContext, bus: GainNode, generation: number): void {
+        if (this.store.isUsingExplicitPlaybackGenerations() && !this.store.isPlaybackGenerationCurrent(generation, context)) {
+            return;
+        }
+        this.stopSourceGraph(true);
+        let source: AudioBufferSourceNode | null = null;
+        let gain: GainNode | null = null;
+        let panner: PannerNode | null = null;
         try {
-            const panner = context.createPanner();
+            source = context.createBufferSource();
+            gain = context.createGain();
+            source.buffer = buffer;
+            source.loop = this.loop;
+            source.playbackRate.value = this.playbackRate;
+            gain.gain.value = this.sourceGain;
+            source.connect(gain);
+            panner = this.connectPosition(context, gain, bus);
+            this.positionOffset = this.normalizeOffset(buffer, this.positionOffset);
+            this.startedAt = context.currentTime;
+            this.source = source;
+            this.sourceContext = context;
+            this.gain = gain;
             this.panner = panner;
+            const startedSource = source;
+            source.onended = () => {
+                if (!this.active || this.source !== startedSource || this.sourceContext !== context) {
+                    return;
+                }
+                this.positionOffset = Math.max(0, buffer.duration);
+                this.clearCurrentSource(false);
+                if (!this.loop) {
+                    this.dispose(false, true);
+                }
+            };
+            source.start(0, this.positionOffset);
+        } catch (error) {
+            if (this.source === source) {
+                this.source = null;
+                this.sourceContext = null;
+                this.gain = null;
+                this.panner = null;
+            }
+            this.cleanupSourceGraph(source, gain, panner, true);
+            throw error;
+        }
+    }
+
+    private connectPosition(context: AudioContext, gain: GainNode, bus: GainNode): PannerNode | null {
+        if (this.spatialPosition === undefined || typeof context.createPanner !== "function") {
+            gain.connect(bus);
+            return null;
+        }
+        let panner: PannerNode | null = null;
+        try {
+            panner = context.createPanner();
             panner.panningModel = "equalpower";
             panner.distanceModel = "inverse";
             panner.refDistance = 1;
             panner.maxDistance = 10000;
             panner.rolloffFactor = 1;
             if ("positionX" in panner) {
-                panner.positionX.value = this.position.x;
-                panner.positionY.value = this.position.y;
-                panner.positionZ.value = this.position.z;
+                panner.positionX.value = this.spatialPosition.x;
+                panner.positionY.value = this.spatialPosition.y;
+                panner.positionZ.value = this.spatialPosition.z;
             } else {
                 const legacy = panner as unknown as { setPosition(x: number, y: number, z: number): void };
-                legacy.setPosition(this.position.x, this.position.y, this.position.z);
+                legacy.setPosition(this.spatialPosition.x, this.spatialPosition.y, this.spatialPosition.z);
             }
             gain.connect(panner);
             panner.connect(bus);
+            return panner;
         } catch {
             SoundStore.disconnect(gain);
-            SoundStore.disconnect(this.panner);
-            this.panner = null;
+            SoundStore.disconnect(panner);
             gain.connect(bus);
+            return null;
         }
     }
 
-    private dispose(stopSource: boolean): void {
+    private stopSourceGraph(stopSource: boolean): void {
         const source = this.source;
         const gain = this.gain;
         const panner = this.panner;
-        this.active = false;
         this.source = null;
+        this.sourceContext = null;
         this.gain = null;
         this.panner = null;
-        this.context = null;
-        this.bus = null;
-        this.onEnded = undefined;
+        this.cleanupSourceGraph(source, gain, panner, stopSource);
+    }
+
+    private clearCurrentSource(stopSource: boolean): void {
+        this.stopSourceGraph(stopSource);
+    }
+
+    private cleanupSourceGraph(source: AudioBufferSourceNode | null, gain: GainNode | null, panner: PannerNode | null, stopSource: boolean): void {
         if (source !== null) {
             source.onended = null;
             if (stopSource) {
@@ -1052,14 +1305,61 @@ class EffectPlayback implements AudioPlaybackHandle {
         SoundStore.disconnect(source);
         SoundStore.disconnect(gain);
         SoundStore.disconnect(panner);
-        this.store.releaseEffect(this);
     }
 
-    private notify(callback: (() => void) | undefined): void {
+    private dispose(stopSource: boolean, notifyEnded: boolean): void {
+        if (!this.active) {
+            return;
+        }
+        this.startToken++;
+        this.active = false;
+        this.stopSourceGraph(stopSource);
+        this.store.releaseEffect(this);
+        const disposed = this.onDisposed;
+        const ended = notifyEnded ? this.onEnded : undefined;
+        this.onDisposed = undefined;
+        this.onEnded = undefined;
+        if (!this.disposedNotified) {
+            this.disposedNotified = true;
+            this.notifyDisposed(disposed);
+        }
+        this.notifyEnded(ended);
+    }
+
+    private notifyDisposed(callback: ((handle: SoundPlaybackHandle) => void) | undefined): void {
+        try {
+            callback?.(this);
+        } catch (error) {
+            Log.error("Sound disposal callback failed", error);
+        }
+    }
+
+    private notifyEnded(callback: (() => void) | undefined): void {
         try {
             callback?.();
         } catch (error) {
             Log.error("Sound completion callback failed", error);
         }
     }
+
+    private sanitizeOffset(offset: number): number {
+        return Number.isFinite(offset) ? Math.max(0, offset) : 0;
+    }
+
+    private normalizeOffset(buffer: AudioBuffer, offset: number): number {
+        const value = this.sanitizeOffset(offset);
+        const duration = buffer.duration;
+        if (!Number.isFinite(duration)) {
+            return value;
+        }
+        return duration <= 0 ? 0 : this.loop ? value % duration : Math.min(value, duration);
+    }
+}
+
+function isSoundPlaybackHandle(handle: AudioPlaybackHandle): handle is SoundPlaybackHandle {
+    return (
+        typeof handle.sourceId === "number" &&
+        typeof (handle as Partial<SoundPlaybackHandle>).capturePlaybackState === "function" &&
+        typeof (handle as Partial<SoundPlaybackHandle>).pollLogicalPlayback === "function"
+    );
 }

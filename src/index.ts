@@ -23,6 +23,7 @@ export * from "./slick/ScalableGame.js";
 export * from "./slick/ScalableGame2.js";
 export * from "./slick/SlickException.js";
 export * from "./slick/Sound.js";
+export * from "./slick/SoundPlaybackState.js";
 export * from "./slick/SpriteSheet.js";
 export * from "./slick/XMLPackedSheet.js";
 export * from "./slick/openal/PlaybackSession.js";

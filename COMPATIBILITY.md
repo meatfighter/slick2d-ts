@@ -11,6 +11,18 @@
 - Browser gamepad slots are compacted into dense Slick controller numbers for each poll: usable browser slots such as 0 and 3 are exposed as Slick controllers 0 and 1. Calibration remains keyed by the physical browser index and reported controller identity. Ports can opt additional calibrated axis pairs into the four normal controller-direction controls through `Input.setAdditionalControllerDirectionAxes(...)`; those axes are sampled once during the normal input poll.
 - Browser-reserved keys or gestures may still be intercepted by the user agent. Keyboard, pointer, wheel, context-menu, and touch-action suppression follow browser focus and security rules.
 
+## Browser Sound Voice Persistence
+
+These APIs and lifecycle rules extend Slick's short-effect `Sound` abstraction for browser PWAs while preserving its Java-facing play/stop behavior:
+
+- Each successful `Sound.play(...)`, `Sound.playAt(...)`, or `Sound.loop(...)` invocation owns an independent logical effect voice. In explicit playback-generation mode, retiring a generation freezes and detaches those logical voices from disposable Web Audio nodes; a later accepted generation recreates the native source graphs and resumes each voice from its exact sample offset.
+- Playback-generation retirement is not a stop operation. `Sound.stop()`, `SoundStore.stopSoundEffect(...)`, `SoundStore.stopSoundEffects()`, `SoundStore.stopAllPlayback()`, `clear()`, `destroy()`, and `disable()` remain destructive and permanently release the affected logical voices.
+- `Sound.capturePlaybackState()` and `Sound.restorePlaybackState(...)` are browser persistence helpers analogous to `Music` playback snapshots. Their data contains logical voice properties only: loop state, playback rate, sample position, effective per-voice gain, optional spatial coordinates, and which voice is the `Sound` object's latest/active voice. Browser `AudioContext`, source/gain/panner nodes, playback-generation identifiers, and source-slot identifiers are never persisted.
+- Multiple overlapping voices belonging to one `Sound` are captured independently. For Slick compatibility, `Sound.playing()` and `Sound.stop()` still refer only to that `Sound` object's latest remembered voice; an older overlapping voice may remain alive even when `Sound.playing()` returns `false`.
+- A newly requested sound effect still requires a viable committed playback generation. Logical persistence does not turn a failed new `play()` request into a silent voice. Existing detached/restored voices can, however, advance on the accepted logical game clock if gameplay is deliberately continuing in silent-audio mode.
+- `PlaybackDiagnostics.effects` counts effect voices with a physical source attached to the current generation. `PlaybackDiagnostics.logicalEffects` counts live logical effect voices whether attached or detached. This keeps the PWA menu invariant observable: a retired generation can have zero physical effects while retaining logical voices for Continue.
+- Sound-volume changes remain non-retroactive to already-created voices. A detached voice retains the effective gain it had when started and does not multiply the current global sound volume again when it is reattached.
+
 ## Browser Rendering Extensions
 
 These APIs are available for browser ports that need whole-scene display treatments. They are not Java Slick2D APIs:

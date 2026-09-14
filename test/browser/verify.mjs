@@ -53,9 +53,8 @@ function noopGame(title) {
 const audioLifecycleRef = "audio/browser-lifecycle.wav";
 let audioLifecycleReady = null;
 
-function silentWavBytes() {
+function silentWavBytes(sampleCount = 80) {
     const sampleRate = 8000;
-    const sampleCount = 80;
     const bytes = new ArrayBuffer(44 + sampleCount * 2);
     const view = new DataView(bytes);
     const writeAscii = (offset, value) => {
@@ -106,6 +105,52 @@ async function runSoundLifecycleCycle() {
     await new Promise((resolve) => setTimeout(resolve, 0));
     handle.stop();
     await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+async function verifySoundGenerationResumeOffset() {
+    const ref = "audio/browser-sound-generation.wav";
+    ResourceLoader.registerResource(ref, silentWavBytes(16_000));
+    const store = SoundStore.get();
+    store.enableExplicitPlaybackGenerations();
+    await store.preloadAudioBuffer(ref);
+
+    const sourcePrototype = globalThis.AudioBufferSourceNode?.prototype;
+    assert(sourcePrototype && typeof sourcePrototype.start === "function", "AudioBufferSourceNode.start is unavailable for SFX resume verification");
+    const originalStart = sourcePrototype.start;
+    const startOffsets = [];
+    sourcePrototype.start = function (when = 0, offset = 0, duration) {
+        startOffsets.push(offset);
+        return duration === undefined ? originalStart.call(this, when, offset) : originalStart.call(this, when, offset, duration);
+    };
+
+    let handle = null;
+    try {
+        assert(await store.beginPlaybackGenerationFromUserGesture(true), "Could not create the first SFX playback generation");
+        assert(await store.commitPlaybackGeneration(store.getPlaybackGeneration()), "Could not commit the first SFX playback generation");
+
+        handle = store.playSound(ref, 1, 1, false);
+        assert(handle !== null, "Could not create the browser SFX test voice");
+        await new Promise((resolve) => setTimeout(resolve, 80));
+
+        store.endPlaybackGeneration();
+        const frozenPosition = handle.capturePlaybackState().positionSeconds;
+        assert(frozenPosition > 0.005 && frozenPosition < 1.5, `SFX did not freeze at a usable nonzero offset: ${frozenPosition}`);
+        const retired = store.getPlaybackDiagnostics();
+        assert(retired.effects === 0 && retired.logicalEffects === 1, "Retired SFX generation did not preserve exactly one detached logical voice");
+
+        assert(await store.beginPlaybackGenerationFromUserGesture(true), "Could not create the replacement SFX playback generation");
+        assert(await store.commitPlaybackGeneration(store.getPlaybackGeneration()), "Could not commit the replacement SFX playback generation");
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        assert(startOffsets.length >= 2, `Expected two native SFX starts across generation replacement, got ${startOffsets.length}`);
+        const resumedOffset = startOffsets.at(-1);
+        assert(resumedOffset > 0.005, `Replacement SFX source restarted at zero: ${resumedOffset}`);
+        assert(closeTo(resumedOffset, frozenPosition, 0.05), `Replacement SFX source offset ${resumedOffset} did not match frozen ${frozenPosition}`);
+        assert(store.getPlaybackDiagnostics().effects === 1, "Replacement SFX generation did not attach its logical voice");
+    } finally {
+        handle?.stop();
+        sourcePrototype.start = originalStart;
+    }
 }
 
 function cleanupAudioLifecycle() {
@@ -544,6 +589,9 @@ async function run() {
 
     await verifyDefaultFontLifecycleAndContextRestore();
     passed.push("default-font container/context lifecycle");
+
+    await verifySoundGenerationResumeOffset();
+    passed.push("SFX playback-generation offset resume");
 
     await prepareAudioLifecycle();
     passed.push("audio lifecycle fixture");
