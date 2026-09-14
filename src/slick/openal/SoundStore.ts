@@ -313,27 +313,51 @@ export class SoundStore {
     }
 
     public destroy(): void {
-        this.endPlaybackGeneration();
+        let retirementFailure: unknown = null;
+        try {
+            this.endPlaybackGeneration();
+        } catch (error) {
+            retirementFailure = error;
+        }
         this.stopAllPlayback();
         this.clearDecodedBuffers();
         this.decoderPool = { context: null, active: 0, batches: 0 };
         this.inited = false;
         this.musicEnabled = false;
         this.soundsEnabled = false;
+        if (retirementFailure !== null) {
+            throw retirementFailure;
+        }
     }
 
     public destroyPreservingAudioCache(): void {
-        this.endPlaybackGeneration();
+        let retirementFailure: unknown = null;
+        try {
+            this.endPlaybackGeneration();
+        } catch (error) {
+            retirementFailure = error;
+        }
         this.stopAllPlayback();
         // User preferences and decoded buffers belong to the page, not the retired game.
+        if (retirementFailure !== null) {
+            throw retirementFailure;
+        }
     }
 
     public disable(): void {
         this.ensureLogicalInitialization();
         this.musicEnabled = false;
         this.soundsEnabled = false;
-        this.endPlaybackGeneration();
+        let retirementFailure: unknown = null;
+        try {
+            this.endPlaybackGeneration();
+        } catch (error) {
+            retirementFailure = error;
+        }
         this.clear();
+        if (retirementFailure !== null) {
+            throw retirementFailure;
+        }
     }
 
     public setDeferredLoading(deferred: boolean): void {
@@ -1056,6 +1080,7 @@ class EffectPlayback implements SoundPlaybackHandle {
     private startedAt = 0;
     private startToken = 0;
     private disposedNotified = false;
+    private completionPending = false;
     private readonly spatialPosition: AudioPosition | undefined;
 
     public constructor(
@@ -1110,6 +1135,9 @@ class EffectPlayback implements SoundPlaybackHandle {
         }
         this.startToken++;
         this.positionOffset = this.getPosition();
+        if (!this.loop && this.buffer !== null && this.positionOffset >= this.buffer.duration) {
+            this.completionPending = true;
+        }
         this.stopSourceGraph(true);
     }
 
@@ -1142,9 +1170,12 @@ class EffectPlayback implements SoundPlaybackHandle {
             this.buffer = buffer;
             this.positionOffset = this.normalizeOffset(buffer, this.positionOffset);
             if (!this.loop && this.positionOffset >= buffer.duration) {
-                this.dispose(false, false);
+                // Retirement must never deliver completion from inside the audio commit
+                // transaction. Preserve it until the first accepted game-clock poll.
+                this.completionPending = true;
                 return;
             }
+            this.completionPending = false;
             this.startSource(buffer, context, bus, generation);
         };
         try {
@@ -1160,7 +1191,14 @@ class EffectPlayback implements SoundPlaybackHandle {
     }
 
     public pollLogicalPlayback(delta: number): void {
-        if (!this.active || this.source !== null || !this.store.isSilentPlaybackActive()) {
+        if (!this.active) {
+            return;
+        }
+        if (this.completionPending) {
+            this.dispose(false, true);
+            return;
+        }
+        if (this.source !== null || !this.store.isSilentPlaybackActive()) {
             return;
         }
         const buffer = this.buffer ?? this.store.getDecodedAudioBuffer(this.ref);
@@ -1216,6 +1254,7 @@ class EffectPlayback implements SoundPlaybackHandle {
             panner = this.connectPosition(context, gain, bus);
             this.positionOffset = this.normalizeOffset(buffer, this.positionOffset);
             this.startedAt = context.currentTime;
+            this.completionPending = false;
             this.source = source;
             this.sourceContext = context;
             this.gain = gain;
