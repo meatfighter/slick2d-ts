@@ -116,6 +116,22 @@ test("successful PWA retry does not overwrite an intentional disabled-audio choi
     assert.equal(store.soundsOn(), false);
 });
 
+test("full SoundStore destruction reinitializes application audio defaults on the next logical lifetime", async () => {
+    setAudioContext(WorkingContext);
+    const store = freshStore();
+
+    assert.equal(await store.beginPlaybackGenerationFromUserGesture(), true);
+    store.setMusicOn(false);
+    store.setSoundsOn(false);
+    store.destroy();
+
+    assert.equal(store.hasPlaybackGeneration(), false);
+
+    const next = freshStore();
+    assert.equal(next.musicOn(), true);
+    assert.equal(next.soundsOn(), true);
+});
+
 test("physical generation replacement retains independently selected music and sound flags", async () => {
     setAudioContext(WorkingContext);
     const store = freshStore();
