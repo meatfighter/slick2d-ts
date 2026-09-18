@@ -40,8 +40,16 @@ export declare class Music {
     play(pitch: number, volume: number): void;
     loop(): void;
     loop(pitch: number, volume: number): void;
+    /**
+     * Pause this logical Music transport without changing SoundStore.musicOn().
+     * The exact transport position remains durable across playback generations.
+     */
     pause(): void;
     stop(): void;
+    /**
+     * Resume this logical Music transport without changing the application-wide
+     * Music enable preference. A globally disabled Music policy still wins.
+     */
     resume(): void;
     playing(): boolean;
     getTransportState(): MusicTransportState;

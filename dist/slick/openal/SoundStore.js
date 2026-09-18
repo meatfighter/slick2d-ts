@@ -84,7 +84,11 @@ export class SoundStore {
             this.endPlaybackGeneration();
         }
     }
-    /** Constructor and native resume execute before returning to the activation handler. */
+    /**
+     * Constructor and native resume execute before returning to the activation handler.
+     * Playback generations replace disposable browser output only. They deliberately
+     * preserve the application-level music/sound enable preferences.
+     */
     beginPlaybackGenerationFromUserGesture(deferPlayback = false) {
         this.enableExplicitPlaybackGenerations();
         this.endPlaybackGeneration();
@@ -301,6 +305,14 @@ export class SoundStore {
     isDeferredLoading() {
         return this.deferredLoading;
     }
+    /**
+     * Set the application-wide Music enable preference.
+     *
+     * This is not an individual Music transport pause control. The preference
+     * intentionally survives playback-generation retirement and
+     * destroyPreservingAudioCache(). Games that need to freeze one logical track
+     * should use Music.pause()/resume() and persist that transport state instead.
+     */
     setMusicOn(music) {
         this.ensureLogicalInitialization();
         this.musicEnabled = music;
@@ -316,6 +328,7 @@ export class SoundStore {
             }
         }
     }
+    /** Return the application-wide Music enable preference. */
     isMusicOn() {
         return this.musicEnabled;
     }
@@ -334,13 +347,23 @@ export class SoundStore {
     getSoundVolume() {
         return this.soundVolume;
     }
+    /**
+     * Set the application-wide Sound enable preference.
+     *
+     * Disabling Sounds is intentionally non-retroactive: existing logical voices
+     * are not destroyed merely because future Sound starts are disabled. This
+     * preference survives playback-generation retirement and should not be used
+     * as a serialized substitute for exact SoundPlaybackSnapshot state.
+     */
     setSoundsOn(sounds) {
         this.ensureLogicalInitialization();
         this.soundsEnabled = sounds;
     }
+    /** Return the application-wide Sound enable preference. */
     soundsOn() {
         return this.soundsEnabled;
     }
+    /** Return the application-wide Music enable preference. */
     musicOn() {
         return this.musicEnabled;
     }

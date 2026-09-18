@@ -97,6 +97,10 @@ export class Music {
     loop(pitch = 1, volume = 1) {
         this.start(true, pitch, volume);
     }
+    /**
+     * Pause this logical Music transport without changing SoundStore.musicOn().
+     * The exact transport position remains durable across playback generations.
+     */
     pause() {
         if (this.endPending || Music.currentMusic !== this || !this.playingFlag) {
             return;
@@ -119,6 +123,10 @@ export class Music {
         this.fadeState = null;
         this.endPending = Music.currentMusic === this;
     }
+    /**
+     * Resume this logical Music transport without changing the application-wide
+     * Music enable preference. A globally disabled Music policy still wins.
+     */
     resume() {
         if (this.endPending || Music.currentMusic !== this) {
             return;
