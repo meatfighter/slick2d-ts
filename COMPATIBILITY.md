@@ -11,6 +11,20 @@
 - Browser gamepad slots are compacted into dense Slick controller numbers for each poll: usable browser slots such as 0 and 3 are exposed as Slick controllers 0 and 1. Calibration remains keyed by the physical browser index and reported controller identity. Ports can opt additional calibrated axis pairs into the four normal controller-direction controls through `Input.setAdditionalControllerDirectionAxes(...)`; those axes are sampled once during the normal input poll.
 - Browser-reserved keys or gestures may still be intercepted by the user agent. Keyboard, pointer, wheel, context-menu, and touch-action suppression follow browser focus and security rules.
 
+## Global Audio Enable Flags Versus Logical Transport State
+
+`SoundStore.setMusicOn(...)` and `SoundStore.setSoundsOn(...)` are application-wide logical enable preferences. They intentionally survive explicit PWA playback-generation retirement and `destroyPreservingAudioCache()`; replacing a browser `AudioContext` must not silently rewrite a user's or host application's Music/Sound policy.
+
+Those flags are not substitutes for exact game transport state:
+
+- Pause one logical track with `Music.pause()` / `Music.resume()`. A paused `Music` retains its exact transport position and remains paused across playback-generation replacement without changing `SoundStore.musicOn()`.
+- Persist individual Music transport state with `Music.capturePlaybackState()` / `restorePlaybackState(...)`.
+- Persist short-effect voices with `Sound.capturePlaybackState()` / `restorePlaybackState(...)`.
+- `setSoundsOn(false)` prevents new Sound starts but is deliberately non-retroactive to already-live logical voices, so the flag cannot describe the complete state of existing effects.
+- Game-state serializers should not save these application-wide flags merely to encode a gameplay pause or exact logical audio state. A host with real Music/Sound user preferences should persist them in its application/browser preference layer instead.
+
+Playback-generation state remains a third, separate lifetime: browser `AudioContext`, native source/gain nodes, and generation identifiers are disposable physical resources and are never durable game state.
+
 ## Browser Sound Voice Persistence
 
 These APIs and lifecycle rules extend Slick's short-effect `Sound` abstraction for browser PWAs while preserving its Java-facing play/stop behavior:
