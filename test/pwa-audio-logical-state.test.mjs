@@ -103,6 +103,26 @@ for (const [name, ctor] of [
     });
 }
 
+test("zero volume remains enabled application audio policy across generation replacement", async () => {
+    setAudioContext(WorkingContext);
+    const store = freshStore();
+
+    store.setMusicVolume(0);
+    store.setSoundVolume(0);
+    assert.equal(store.musicOn(), true);
+    assert.equal(store.soundsOn(), true);
+
+    assert.equal(await store.beginPlaybackGenerationFromUserGesture(), true);
+    const generation = store.getPlaybackGeneration();
+    store.endPlaybackGeneration(generation);
+    assert.equal(await store.beginPlaybackGenerationFromUserGesture(), true);
+
+    assert.equal(store.getMusicVolume(), 0);
+    assert.equal(store.getSoundVolume(), 0);
+    assert.equal(store.musicOn(), true);
+    assert.equal(store.soundsOn(), true);
+});
+
 test("successful PWA retry does not overwrite an intentional disabled-audio choice", async () => {
     setAudioContext(undefined);
     const store = freshStore();
