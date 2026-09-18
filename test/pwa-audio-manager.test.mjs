@@ -257,7 +257,7 @@ test("PWA Continue rebuilds looping music at its preserved position on the fresh
     assert.equal(music.playing(), true);
 });
 
-test("PWA generation replacement preserves an explicitly paused Music without restarting it", async () => {
+test("PWA generation replacement preserves an explicitly paused Music without changing global Music policy", async () => {
     installAudioGlobals();
     const manager = PwaAudioManager.get();
     manager.install();
@@ -269,16 +269,32 @@ test("PWA generation replacement preserves an explicitly paused Music without re
     await music.ready();
     music.loop();
     await settleAudioStart();
+    const firstSource = FakeAudioSource.created.at(-1);
+    SoundStore.get().getAudioContext().currentTime = 2.5;
+
+    assert.equal(SoundStore.get().musicOn(), true);
     music.pause();
+    assert.equal(SoundStore.get().musicOn(), true);
     const sourceCount = FakeAudioSource.created.length;
 
     manager.endPlaybackGeneration();
+    assert.equal(SoundStore.get().musicOn(), true);
     assert.equal(await manager.beginPlaybackGeneration(), true);
     await settleAudioStart();
 
     assert.equal(music.isPaused(), true);
     assert.equal(music.playing(), false);
+    assert.equal(SoundStore.get().musicOn(), true);
     assert.equal(FakeAudioSource.created.length, sourceCount);
+
+    music.resume();
+    await settleAudioStart();
+
+    const resumedSource = FakeAudioSource.created.at(-1);
+    assert.notEqual(resumedSource, firstSource);
+    assert.equal(resumedSource.startCalls[0].offset, 2.5);
+    assert.equal(music.playing(), true);
+    assert.equal(SoundStore.get().musicOn(), true);
 });
 
 test("PWA retirement cannot resurrect a naturally ended track before the next Music poll", async () => {
