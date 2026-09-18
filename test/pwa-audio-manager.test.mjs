@@ -275,6 +275,8 @@ test("PWA generation replacement preserves an explicitly paused Music without ch
     assert.equal(SoundStore.get().musicOn(), true);
     music.pause();
     assert.equal(SoundStore.get().musicOn(), true);
+    SoundStore.get().setMusicOn(true);
+    assert.equal(music.isPaused(), true, "reapplying enabled application policy must not unpause an explicitly paused Music");
     const sourceCount = FakeAudioSource.created.length;
 
     manager.endPlaybackGeneration();
