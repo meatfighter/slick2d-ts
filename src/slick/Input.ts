@@ -1385,7 +1385,10 @@ export class Input {
                 }
             } catch {
                 this.gamepadEnumerationFailed = true;
+                this.baselineControllersOnNextPoll = true;
                 // Treat browser/controller enumeration failure as no connected controllers for this poll.
+                // The next successful poll establishes a held-state baseline because
+                // transitions that occurred while enumeration failed are unknowable.
             }
         }
         this.gamepadsCached = true;
