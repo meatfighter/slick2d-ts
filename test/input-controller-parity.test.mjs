@@ -130,6 +130,7 @@ test("controller press and release callbacks use separate down and one-shot stat
     const events = [];
     input.addControllerListener(listener(events));
 
+    input.poll(800, 600); // establish the initial connected-device baseline
     pad.buttons[0] = button(true);
     input.poll(800, 600);
 
@@ -156,6 +157,7 @@ test("redundant resume while already running does not suppress a fresh controlle
     const events = [];
     input.addControllerListener(listener(events));
 
+    input.poll(800, 600); // establish the initial connected-device baseline
     input.resume();
     pad.buttons[0] = button(true);
     input.poll(800, 600);
@@ -171,6 +173,7 @@ test("resume baselines held controller state without synthesizing a pressed edge
     const events = [];
     input.addControllerListener(listener(events));
 
+    input.poll(800, 600);
     pad.buttons[0] = button(true);
     input.poll(800, 600);
     assert.equal(input.isControlPressed(4, 0), true);
@@ -231,6 +234,7 @@ test("controller directional edge callbacks fire press and release", () => {
     const events = [];
     input.addControllerListener(listener(events));
 
+    input.poll(800, 600);
     pad.buttons[14] = button(true);
     input.poll(800, 600);
     pad.buttons[14] = button(false);
@@ -409,15 +413,16 @@ test("ANY_CONTROLLER and specific controller helpers share the cached snapshot",
     assert.equal(provider.calls, 1);
 });
 
-test("controller disconnect clears stale down state before reconnect", () => {
+test("controller reconnect baselines held state instead of synthesizing a press", () => {
     const pad = gamepad();
-    pad.buttons[0] = button(true);
     let snapshot = [pad];
     installGamepadProvider(() => snapshot);
     const input = new Input(600);
     const events = [];
     input.addControllerListener(listener(events));
 
+    input.poll(800, 600);
+    pad.buttons[0] = button(true);
     input.poll(800, 600);
     assert.equal(input.isControlPressed(4, 0), true);
 
@@ -427,11 +432,9 @@ test("controller disconnect clears stale down state before reconnect", () => {
     snapshot = [pad];
     input.poll(800, 600);
 
-    assert.deepEqual(events, [
-        ["buttonPressed", 0, 1],
-        ["buttonPressed", 0, 1]
-    ]);
-    assert.equal(input.isControlPressed(4, 0), true);
+    assert.deepEqual(events, [["buttonPressed", 0, 1]]);
+    assert.equal(input.isButtonPressed(0, 0), true);
+    assert.equal(input.isControlPressed(4, 0), false);
 });
 
 test("additional calibrated controller axes feed the normal directional state once per poll", () => {
@@ -489,4 +492,127 @@ test("disabled controllers do not report stale cached directions", () => {
     assert.equal(input.isControlPressed(6, 0), false);
     assert.equal(input.isControllerLeft(0), false);
     assert.equal(input.isControllerLeft(Input.ANY_CONTROLLER), false);
+});
+
+
+test("controller sample status distinguishes enumeration uncertainty from a valid empty sample", () => {
+    const pad = gamepad();
+    let mode = "pad";
+    installGamepadProvider(() => {
+        if (mode === "throw") throw new Error("temporary Gamepad API failure");
+        return mode === "empty" ? [] : [pad];
+    });
+    const input = new Input(600);
+
+    input.poll(800, 600);
+    const initial = { ...input.getControllerSampleStatus() };
+    assert.equal(initial.valid, true);
+    assert.equal(initial.available, true);
+    assert.equal(input.getControllerCount(), 1);
+
+    mode = "throw";
+    input.poll(800, 600);
+    const failed = { ...input.getControllerSampleStatus() };
+    assert.equal(failed.valid, false);
+    assert.equal(failed.available, true);
+    assert.equal(input.getControllerCount(), 1, "uncertainty retains the last valid physical baseline");
+
+    mode = "empty";
+    input.poll(800, 600);
+    const empty = { ...input.getControllerSampleStatus() };
+    assert.equal(empty.valid, true);
+    assert.equal(input.getControllerCount(), 0);
+    assert.ok(empty.sequence > failed.sequence);
+});
+
+test("same-index reconnect event changes connection generation and baselines a held replacement", () => {
+    const previousWindow = globalThis.window;
+    const windowListeners = new Map();
+    globalThis.window = {
+        addEventListener(type, fn) {
+            windowListeners.set(type, fn);
+        },
+        removeEventListener(type, fn) {
+            if (windowListeners.get(type) === fn) windowListeners.delete(type);
+        }
+    };
+    const first = gamepad({ id: "same", index: 0 });
+    let current = first;
+    installGamepadProvider(() => [current]);
+    try {
+        const input = new Input(600);
+        input.bindToElement({
+            addEventListener() {},
+            removeEventListener() {}
+        });
+        input.poll(800, 600);
+        const firstGeneration = input.getControllerConnectionGeneration(0);
+
+        const replacement = gamepad({ id: "same", index: 0 });
+        replacement.buttons[0] = button(true);
+        current = replacement;
+        windowListeners.get("gamepaddisconnected")?.({ gamepad: first });
+        windowListeners.get("gamepadconnected")?.({ gamepad: replacement });
+        input.poll(800, 600);
+
+        assert.ok(input.getControllerConnectionGeneration(0) > firstGeneration);
+        assert.equal(input.isButtonPressed(0, 0), true);
+        assert.equal(input.isControlPressed(4, 0), false);
+        input.unbind();
+    } finally {
+        if (previousWindow === undefined) delete globalThis.window;
+        else globalThis.window = previousWindow;
+    }
+});
+
+test("raw-layout buttons 12 through 15 remain action buttons instead of standardized D-pad aliases", () => {
+    const pad = gamepad({ mapping: "" });
+    installGamepads([pad]);
+    const input = new Input(600);
+    const events = [];
+    input.addControllerListener(listener(events));
+    input.poll(800, 600);
+
+    pad.buttons[14] = button(true);
+    input.poll(800, 600);
+
+    assert.equal(input.isControllerLeft(0), false);
+    assert.equal(input.isControllerButtonDirectional(14, 0), false);
+    assert.equal(input.isControlPressed(18, 0), true);
+    assert.deepEqual(events, [["buttonPressed", 0, 15]]);
+});
+
+test("standard-layout D-pad buttons remain directional and are not duplicated as action buttons", () => {
+    const pad = gamepad();
+    installGamepads([pad]);
+    const input = new Input(600);
+    const events = [];
+    input.addControllerListener(listener(events));
+    input.poll(800, 600);
+
+    pad.buttons[14] = button(true);
+    input.poll(800, 600);
+
+    assert.equal(input.isControllerButtonDirectional(14, 0), true);
+    assert.equal(input.isControllerLeft(0), true);
+    assert.equal(input.isControlPressed(0, 0), true);
+    assert.equal(input.isControlPressed(18, 0), false);
+    assert.deepEqual(events, [["leftPressed", 0]]);
+});
+
+test("explicit baseline sampling seeds calibrated axes without dispatching controller actions", () => {
+    const pad = gamepad({ axes: [0, 0, 0.8, -0.7] });
+    installGamepads([pad]);
+    const input = new Input(600);
+    const events = [];
+    input.addControllerListener(listener(events));
+    input.setAdditionalControllerDirectionAxes([{ horizontalAxis: 2, verticalAxis: 3 }]);
+
+    const status = input.sampleControllersForBaseline();
+
+    assert.equal(status.valid, true);
+    assert.equal(status.baselineOnly, true);
+    assert.equal(input.isControllerLeft(0), false);
+    assert.equal(input.isControllerUp(0), false);
+    assert.deepEqual(events, []);
 });
