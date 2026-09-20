@@ -767,8 +767,11 @@ export class Input {
 
     /** Java Slick2D counterpart: Input.resume(). */
     public resume(): void {
+        const wasPaused = this.paused;
         this.paused = false;
-        this.baselineControllersOnNextPoll = true;
+        if (wasPaused) {
+            this.baselineControllersOnNextPoll = true;
+        }
     }
 
     private readonly handleKeyDown = (event: KeyboardEvent): void => {
