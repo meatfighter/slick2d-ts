@@ -257,6 +257,11 @@ export class Input {
         return Input.keyNames.get(code) ?? `KEY_${code}`;
     }
 
+    /** Browser extension: true only for Slick key codes this adapter can emit from KeyboardEvent.code. */
+    public static isBrowserKeyCodeSupported(code: number): boolean {
+        return Number.isInteger(code) && Input.browserKeyCodes.has(code);
+    }
+
     /** Java Slick2D counterpart: Input(int height). */
     public constructor(height: number) {
         void height;
@@ -1753,6 +1758,8 @@ export class Input {
         ["Power", Input.KEY_POWER],
         ["Sleep", Input.KEY_SLEEP]
     ]);
+
+    private static readonly browserKeyCodes = new Set<number>(Input.eventCodeToKey.values());
 
     private static readonly keyNames = new Map<number, string>([
         [Input.KEY_CIRCUMFLEX, "KEY_CIRCUMFLEX"],
