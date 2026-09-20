@@ -1364,11 +1364,15 @@ export class Input {
     private refreshGamepads(): GamepadSnapshot {
         this.cachedGamepads.length = 0;
         if (typeof navigator !== "undefined" && navigator.getGamepads) {
-            const browserGamepads = navigator.getGamepads();
-            for (const gamepad of browserGamepads) {
-                if (Input.isUsableGamepad(gamepad)) {
-                    this.cachedGamepads.push(gamepad);
+            try {
+                const browserGamepads = navigator.getGamepads();
+                for (const gamepad of browserGamepads) {
+                    if (Input.isUsableGamepad(gamepad)) {
+                        this.cachedGamepads.push(gamepad);
+                    }
                 }
+            } catch {
+                // Treat browser/controller enumeration failure as no connected controllers.
             }
         }
         this.gamepadsCached = true;
