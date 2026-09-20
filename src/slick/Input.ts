@@ -223,6 +223,7 @@ export class Input {
     private lastClickTime = Number.NEGATIVE_INFINITY;
     private readonly mousePressX = new Map<number, number>();
     private readonly mousePressY = new Map<number, number>();
+    private readonly cancelledMouseReleases = new Set<number>();
     private activePointerId: number | null = null;
     private capturedPointerTarget: Element | null = null;
     private preventDefaultElement: HTMLElement | null = null;
@@ -1115,9 +1116,11 @@ export class Input {
                     }
                     const pressX = this.mousePressX.get(a);
                     const pressY = this.mousePressY.get(a);
+                    const cancelled = this.cancelledMouseReleases.delete(a);
                     this.mousePressX.delete(a);
                     this.mousePressY.delete(a);
                     if (
+                        !cancelled &&
                         pressX !== undefined &&
                         pressY !== undefined &&
                         Math.abs(b - pressX) <= this.mouseClickTolerance &&
@@ -1332,6 +1335,7 @@ export class Input {
         this.eventCount = 0;
         this.mousePressX.clear();
         this.mousePressY.clear();
+        this.cancelledMouseReleases.clear();
         this.dispatchGeneration++;
     }
 
@@ -1409,6 +1413,7 @@ export class Input {
         for (const button of this.downMouse) {
             this.mousePressX.delete(button);
             this.mousePressY.delete(button);
+            this.cancelledMouseReleases.add(button);
             this.enqueueEvent(Input.EVENT_MOUSE_RELEASED, button, this.mouseX, this.mouseY, 0, 0, timestamp);
         }
         this.downMouse.clear();
@@ -1448,6 +1453,7 @@ export class Input {
         this.downMouse.clear();
         this.mousePressX.clear();
         this.mousePressY.clear();
+        this.cancelledMouseReleases.clear();
     }
 
     private clearClickHistory(): void {
@@ -1473,7 +1479,7 @@ export class Input {
         let topologyChanged = false;
         this.seenControllers.clear();
         for (let controller = 0; controller < gamepads.length; controller++) {
-            if (generation !== null && !this.isDispatchCurrent(generation)) return false;
+            if (generation !== null && !this.isControllerDispatchCurrent(generation)) return false;
             const gamepad = gamepads[controller]!;
             const ownerChanged = this.prepareLogicalControllerOwner(controller, gamepad);
             topologyChanged ||= ownerChanged;
@@ -1658,7 +1664,7 @@ export class Input {
         const key = Input.controlKey(controller, control);
         const wasDown = this.controlDown.has(key);
         if (down === wasDown) {
-            return generation === null || this.isDispatchCurrent(generation);
+            return generation === null || this.isControllerDispatchCurrent(generation);
         }
         if (down) {
             this.controlDown.add(key);
@@ -1670,26 +1676,26 @@ export class Input {
         }
 
         if (baselineOnly) {
-            return generation === null || this.isDispatchCurrent(generation);
+            return generation === null || this.isControllerDispatchCurrent(generation);
         }
 
         this.beginEventDispatch(Input.now());
         try {
             for (const listener of this.dispatchControllerListeners) {
-                if (generation !== null && !this.isDispatchCurrent(generation)) break;
+                if (generation !== null && !this.isControllerDispatchCurrent(generation)) break;
                 if (this.controllerListeners.includes(listener) && isAccepting(listener)) {
                     if (down) {
                         Input.dispatchControllerPressed(listener, controller, control);
                     } else {
                         Input.dispatchControllerReleased(listener, controller, control);
                     }
-                    if (this.eventConsumed || (generation !== null && !this.isDispatchCurrent(generation))) break;
+                    if (this.eventConsumed || (generation !== null && !this.isControllerDispatchCurrent(generation))) break;
                 }
             }
         } finally {
             this.endEventDispatch();
         }
-        return generation === null || this.isDispatchCurrent(generation);
+        return generation === null || this.isControllerDispatchCurrent(generation);
     }
 
     private anyController(controller: number, predicate: (gamepad: Gamepad) => boolean): boolean {
@@ -1759,7 +1765,11 @@ export class Input {
     }
 
     private isDispatchCurrent(generation: number): boolean {
-        return generation === this.dispatchGeneration && !this.paused && Input.browserHasInputFocus() && !Input.controllersDisabled;
+        return generation === this.dispatchGeneration && !this.paused && Input.browserHasInputFocus();
+    }
+
+    private isControllerDispatchCurrent(generation: number): boolean {
+        return this.isDispatchCurrent(generation) && !Input.controllersDisabled;
     }
 
     private getFrameGamepads(): GamepadSnapshot {
