@@ -252,6 +252,24 @@ test("controller poll refreshes gamepads once and helpers reuse the frame snapsh
     ]);
 });
 
+test("browser gamepad enumeration failure is contained as no connected controllers", () => {
+    Object.defineProperty(globalThis, "navigator", {
+        configurable: true,
+        value: {
+            getGamepads() {
+                throw new Error("gamepad enumeration failed");
+            }
+        },
+        writable: true
+    });
+    const input = new Input(600);
+
+    assert.doesNotThrow(() => input.poll(800, 600));
+    assert.equal(input.getControllerCount(), 0);
+    assert.equal(input.isControllerLeft(Input.ANY_CONTROLLER), false);
+    assert.equal(input.isButtonPressed(0, Input.ANY_CONTROLLER), false);
+});
+
 test("controller helpers lazily refresh once before the first poll", () => {
     const firstPad = gamepad({ axes: [0, -1] });
     firstPad.buttons[2] = button(true);
