@@ -149,6 +149,66 @@ test("controller press and release callbacks use separate down and one-shot stat
     ]);
 });
 
+test("resume baselines held controller state without synthesizing a pressed edge", () => {
+    const pad = gamepad();
+    installGamepads([pad]);
+    const input = new Input(600);
+    const events = [];
+    input.addControllerListener(listener(events));
+
+    pad.buttons[0] = button(true);
+    input.poll(800, 600);
+    assert.equal(input.isControlPressed(4, 0), true);
+    events.length = 0;
+
+    input.pause();
+    input.resume();
+    input.poll(800, 600);
+
+    assert.equal(input.isButtonPressed(0, 0), true, "held physical state must still be visible after resume");
+    assert.equal(input.isControlPressed(4, 0), false, "resume baseline must not synthesize a one-shot press");
+    assert.deepEqual(events, [], "resume baseline must not dispatch a controllerPressed callback");
+
+    pad.buttons[0] = button(false);
+    input.poll(800, 600);
+    assert.deepEqual(events, [["buttonReleased", 0, 1]], "release after resume baseline must still be observable");
+
+    pad.buttons[0] = button(true);
+    input.poll(800, 600);
+    assert.equal(input.isControlPressed(4, 0), true);
+    assert.deepEqual(events, [
+        ["buttonReleased", 0, 1],
+        ["buttonPressed", 0, 1]
+    ]);
+});
+
+test("resume baselines held controller directions without synthesizing directional edges", () => {
+    const pad = gamepad();
+    installGamepads([pad]);
+    const input = new Input(600);
+    const events = [];
+    input.addControllerListener(listener(events));
+
+    input.pause();
+    pad.buttons[14] = button(true);
+    input.resume();
+    input.poll(800, 600);
+
+    assert.equal(input.isControllerLeft(0), true);
+    assert.equal(input.isControlPressed(0, 0), false);
+    assert.deepEqual(events, []);
+
+    pad.buttons[14] = button(false);
+    input.poll(800, 600);
+    pad.buttons[14] = button(true);
+    input.poll(800, 600);
+
+    assert.deepEqual(events, [
+        ["leftReleased", 0],
+        ["leftPressed", 0]
+    ]);
+});
+
 test("controller directional edge callbacks fire press and release", () => {
     const pad = gamepad();
     installGamepads([pad]);
