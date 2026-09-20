@@ -1416,8 +1416,9 @@ export class Input {
         this.downMouse.delete(button);
         this.enqueueEvent(Input.EVENT_MOUSE_RELEASED, button, this.mouseX, this.mouseY, 0, 0, Input.eventTimestamp(event));
         if (this.downMouse.size === 0) {
-            this.releaseCapturedPointer();
+            const activePointerId = this.activePointerId;
             this.activePointerId = null;
+            this.releaseCapturedPointer(activePointerId);
         }
     }
 
@@ -1435,8 +1436,9 @@ export class Input {
             this.enqueueEvent(Input.EVENT_MOUSE_RELEASED, button, this.mouseX, this.mouseY, 0, 0, timestamp);
         }
         this.downMouse.clear();
-        this.releaseCapturedPointer();
+        const activePointerId = this.activePointerId;
         this.activePointerId = null;
+        this.releaseCapturedPointer(activePointerId);
     }
 
     private capturePointer(event: PointerEvent): void {
@@ -1452,22 +1454,24 @@ export class Input {
         }
     }
 
-    private releaseCapturedPointer(): void {
-        if (this.capturedPointerTarget && this.activePointerId !== null && typeof this.capturedPointerTarget.releasePointerCapture === "function") {
+    private releaseCapturedPointer(pointerId: number | null): void {
+        const target = this.capturedPointerTarget;
+        this.capturedPointerTarget = null;
+        if (target && pointerId !== null && typeof target.releasePointerCapture === "function") {
             try {
-                if (typeof this.capturedPointerTarget.hasPointerCapture !== "function" || this.capturedPointerTarget.hasPointerCapture(this.activePointerId)) {
-                    this.capturedPointerTarget.releasePointerCapture(this.activePointerId);
+                if (typeof target.hasPointerCapture !== "function" || target.hasPointerCapture(pointerId)) {
+                    target.releasePointerCapture(pointerId);
                 }
             } catch {
                 // Cancellation/blur/unbind cleanup is idempotent even if capture already ended.
             }
         }
-        this.capturedPointerTarget = null;
     }
 
     private resetPointerState(): void {
-        this.releaseCapturedPointer();
+        const activePointerId = this.activePointerId;
         this.activePointerId = null;
+        this.releaseCapturedPointer(activePointerId);
         this.downMouse.clear();
         this.mousePressX.clear();
         this.mousePressY.clear();
