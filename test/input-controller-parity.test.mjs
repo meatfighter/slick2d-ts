@@ -149,6 +149,21 @@ test("controller press and release callbacks use separate down and one-shot stat
     ]);
 });
 
+test("redundant resume while already running does not suppress a fresh controller press", () => {
+    const pad = gamepad();
+    installGamepads([pad]);
+    const input = new Input(600);
+    const events = [];
+    input.addControllerListener(listener(events));
+
+    input.resume();
+    pad.buttons[0] = button(true);
+    input.poll(800, 600);
+
+    assert.equal(input.isControlPressed(4, 0), true);
+    assert.deepEqual(events, [["buttonPressed", 0, 1]]);
+});
+
 test("resume baselines held controller state without synthesizing a pressed edge", () => {
     const pad = gamepad();
     installGamepads([pad]);
