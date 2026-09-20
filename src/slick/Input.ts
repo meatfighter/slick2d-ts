@@ -233,6 +233,7 @@ export class Input {
     private browserInputCapture = true;
     private browserInputCaptureConfigured = false;
     private readonly cachedGamepads: Gamepad[] = [];
+    private readonly pendingGamepads: Gamepad[] = [];
     private gamepadsCached = false;
     private gamepadCacheGeneration = -1;
     private gamepadEnumerationFailed = false;
@@ -253,7 +254,9 @@ export class Input {
     };
     private additionalControllerDirectionAxes: number[] = [];
     private readonly additionalControllerAxisBaselines = new Float64Array(Input.BROWSER_CONTROLLER_LIMIT * Input.BROWSER_AXIS_LIMIT);
-    private readonly additionalControllerAxisOwners = new Array<string | null>(Input.BROWSER_CONTROLLER_LIMIT).fill(null);
+    private readonly additionalControllerAxisOwnerIds = new Array<string | null>(Input.BROWSER_CONTROLLER_LIMIT).fill(null);
+    private readonly additionalControllerAxisOwnerMappings = new Array<string>(Input.BROWSER_CONTROLLER_LIMIT).fill("");
+    private readonly additionalControllerAxisOwnerSlotGenerations = new Uint32Array(Input.BROWSER_CONTROLLER_LIMIT);
     private additionalControllerAxisThreshold = 0.5;
     private additionalControllerAxisRecenterThreshold = 0.05;
 
@@ -336,7 +339,9 @@ export class Input {
     /** Browser controller helper: clears learned neutral positions for configured additional axes. */
     public resetAdditionalControllerDirectionAxisCalibration(): void {
         this.additionalControllerAxisBaselines.fill(Number.NaN);
-        this.additionalControllerAxisOwners.fill(null);
+        this.additionalControllerAxisOwnerIds.fill(null);
+        this.additionalControllerAxisOwnerMappings.fill("");
+        this.additionalControllerAxisOwnerSlotGenerations.fill(0);
     }
 
     /** Browser parity helper: attaches DOM listeners to an element/window. */
@@ -1585,8 +1590,8 @@ export class Input {
     }
 
     private clearDisconnectedAxisCalibration(): void {
-        for (let physicalIndex = 0; physicalIndex < this.additionalControllerAxisOwners.length; physicalIndex++) {
-            if (this.additionalControllerAxisOwners[physicalIndex] === null) {
+        for (let physicalIndex = 0; physicalIndex < this.additionalControllerAxisOwnerIds.length; physicalIndex++) {
+            if (this.additionalControllerAxisOwnerIds[physicalIndex] === null) {
                 continue;
             }
             let found = false;
@@ -1625,11 +1630,18 @@ export class Input {
         if (controller < 0 || controller >= Input.BROWSER_CONTROLLER_LIMIT) {
             return;
         }
+        const id = gamepad.id || "";
+        const mapping = gamepad.mapping || "";
         const slotGeneration = this.browserSlotGenerations[controller]!;
-        const owner = `${gamepad.id || ""}\u0000${gamepad.mapping || ""}\u0000${slotGeneration}`;
-        if (this.additionalControllerAxisOwners[controller] !== owner) {
+        if (
+            this.additionalControllerAxisOwnerIds[controller] !== id ||
+            this.additionalControllerAxisOwnerMappings[controller] !== mapping ||
+            this.additionalControllerAxisOwnerSlotGenerations[controller] !== slotGeneration
+        ) {
             this.resetAdditionalControllerAxisCalibration(controller);
-            this.additionalControllerAxisOwners[controller] = owner;
+            this.additionalControllerAxisOwnerIds[controller] = id;
+            this.additionalControllerAxisOwnerMappings[controller] = mapping;
+            this.additionalControllerAxisOwnerSlotGenerations[controller] = slotGeneration;
         }
     }
 
@@ -1639,7 +1651,9 @@ export class Input {
         }
         const start = controller * Input.BROWSER_AXIS_LIMIT;
         this.additionalControllerAxisBaselines.fill(Number.NaN, start, start + Input.BROWSER_AXIS_LIMIT);
-        this.additionalControllerAxisOwners[controller] = null;
+        this.additionalControllerAxisOwnerIds[controller] = null;
+        this.additionalControllerAxisOwnerMappings[controller] = "";
+        this.additionalControllerAxisOwnerSlotGenerations[controller] = 0;
     }
 
     private isControllerControlDown(control: number, controller: number): boolean {
@@ -1730,7 +1744,7 @@ export class Input {
             return this.cachedGamepads;
         }
 
-        const nextGamepads: Gamepad[] = [];
+        this.pendingGamepads.length = 0;
         try {
             const browserGamepads = navigator.getGamepads();
             for (const gamepad of browserGamepads) {
@@ -1739,13 +1753,14 @@ export class Input {
                     gamepad.index >= 0 &&
                     gamepad.index < Input.BROWSER_CONTROLLER_LIMIT
                 ) {
-                    nextGamepads.push(gamepad);
-                    if (nextGamepads.length === Input.BROWSER_CONTROLLER_LIMIT) {
+                    this.pendingGamepads.push(gamepad);
+                    if (this.pendingGamepads.length === Input.BROWSER_CONTROLLER_LIMIT) {
                         break;
                     }
                 }
             }
         } catch {
+            this.pendingGamepads.length = 0;
             this.gamepadEnumerationFailed = true;
             this.baselineControllersOnNextPoll = true;
             this.gamepadsCached = true;
@@ -1756,10 +1771,8 @@ export class Input {
             return this.cachedGamepads;
         }
 
-        this.cachedGamepads.length = 0;
-        for (const gamepad of nextGamepads) {
-            this.cachedGamepads.push(gamepad);
-        }
+        Input.copyArray(this.pendingGamepads, this.cachedGamepads);
+        this.pendingGamepads.length = 0;
         this.gamepadsCached = true;
         this.gamepadCacheGeneration = Input.gamepadCacheGeneration;
         this.controllerStateSnapshotReady = false;
