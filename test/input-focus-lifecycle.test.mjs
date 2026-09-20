@@ -115,6 +115,53 @@ test("blur and hidden-page lifecycle clear held browser input before focus retur
     }
 });
 
+test("keyboard key held through pause stays suppressed until a real keyup", () => {
+    const target = eventTarget();
+    const input = new Input(600);
+    input.bindToElement(target);
+
+    target.dispatch("keydown", keyEvent("KeyW", "w"));
+    assert.equal(input.isKeyDown(Input.KEY_W), true);
+
+    input.pause();
+    input.resume();
+
+    target.dispatch("keydown", keyEvent("KeyW", "w")); // browser repeat while still physically held
+    input.poll(800, 600);
+    assert.equal(input.isKeyDown(Input.KEY_W), false);
+    assert.equal(input.isKeyPressed(Input.KEY_W), false);
+
+    target.dispatch("keyup", keyEvent("KeyW", "w"));
+    target.dispatch("keydown", keyEvent("KeyW", "w"));
+    input.poll(800, 600);
+    assert.equal(input.isKeyDown(Input.KEY_W), true);
+    assert.equal(input.isKeyPressed(Input.KEY_W), true);
+
+    input.unbind();
+});
+
+test("keyboard key first pressed while paused cannot leak into the resumed game", () => {
+    const target = eventTarget();
+    const input = new Input(600);
+    input.bindToElement(target);
+
+    input.pause();
+    target.dispatch("keydown", keyEvent("KeyW", "w"));
+    input.resume();
+
+    target.dispatch("keydown", keyEvent("KeyW", "w")); // repeat after resume
+    input.poll(800, 600);
+    assert.equal(input.isKeyDown(Input.KEY_W), false);
+    assert.equal(input.isKeyPressed(Input.KEY_W), false);
+
+    target.dispatch("keyup", keyEvent("KeyW", "w"));
+    target.dispatch("keydown", keyEvent("KeyW", "w"));
+    input.poll(800, 600);
+    assert.equal(input.isKeyPressed(Input.KEY_W), true);
+
+    input.unbind();
+});
+
 test("controller held across browser blur is baselined instead of reported as a fresh press", () => {
     const previousWindow = globalThis.window;
     const previousDocument = globalThis.document;
