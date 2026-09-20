@@ -140,6 +140,67 @@ test("keyboard key held through pause stays suppressed until a real keyup", () =
     input.unbind();
 });
 
+test("keyup on the PWA/menu window clears a suspended game-key latch", () => {
+    const previousWindow = globalThis.window;
+    const windowTarget = eventTarget();
+    globalThis.window = windowTarget;
+
+    try {
+        const target = eventTarget();
+        const input = new Input(600);
+        input.bindToElement(target);
+
+        target.dispatch("keydown", keyEvent("KeyW", "w"));
+        input.pause();
+
+        // Focus is on the PWA menu, so the game target never receives this keyup.
+        windowTarget.dispatch("keyup", keyEvent("KeyW", "w"));
+
+        input.resume();
+        target.dispatch("keydown", keyEvent("KeyW", "w"));
+        input.poll(800, 600);
+
+        assert.equal(input.isKeyDown(Input.KEY_W), true);
+        assert.equal(input.isKeyPressed(Input.KEY_W), true, "a key released in the menu must work on its first fresh post-Continue press");
+
+        input.unbind();
+    } finally {
+        if (previousWindow === undefined) delete globalThis.window;
+        else globalThis.window = previousWindow;
+    }
+});
+
+test("game key first pressed while PWA menu owns focus stays suppressed after Continue", () => {
+    const previousWindow = globalThis.window;
+    const windowTarget = eventTarget();
+    globalThis.window = windowTarget;
+
+    try {
+        const target = eventTarget();
+        const input = new Input(600);
+        input.bindToElement(target);
+
+        input.pause();
+        windowTarget.dispatch("keydown", keyEvent("KeyW", "w"));
+
+        input.resume();
+        target.dispatch("keydown", keyEvent("KeyW", "w")); // repeat/continued hold after canvas focus returns
+        input.poll(800, 600);
+        assert.equal(input.isKeyDown(Input.KEY_W), false);
+        assert.equal(input.isKeyPressed(Input.KEY_W), false);
+
+        windowTarget.dispatch("keyup", keyEvent("KeyW", "w"));
+        target.dispatch("keydown", keyEvent("KeyW", "w"));
+        input.poll(800, 600);
+        assert.equal(input.isKeyPressed(Input.KEY_W), true);
+
+        input.unbind();
+    } finally {
+        if (previousWindow === undefined) delete globalThis.window;
+        else globalThis.window = previousWindow;
+    }
+});
+
 test("keyboard key first pressed while paused cannot leak into the resumed game", () => {
     const target = eventTarget();
     const input = new Input(600);
