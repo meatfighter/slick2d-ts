@@ -11,6 +11,15 @@ export interface ControllerDirectionAxisPair {
     readonly horizontalAxis: number;
     readonly verticalAxis: number;
 }
+
+export interface ControllerSampleStatus {
+    readonly sequence: number;
+    readonly available: boolean;
+    readonly valid: boolean;
+    readonly topologyGeneration: number;
+    readonly baselineOnly: boolean;
+}
+
 const ACTIVE_EVENT_OPTIONS: AddEventListenerOptions = { passive: false };
 
 function isAccepting(listener: { isAcceptingInput(): boolean }): boolean {
@@ -163,6 +172,8 @@ export class Input {
     private static readonly POV_HAT_LEFT = [3 / 7, 5 / 7, 1];
     private static readonly BROWSER_CONTROLLER_LIMIT = 16;
     private static readonly BROWSER_AXIS_LIMIT = 16;
+    /** Browser extension: maximum physical buttons sampled from one Gamepad. */
+    public static readonly BROWSER_CONTROLLER_BUTTON_LIMIT = 64;
 
     private static controllersDisabled = false;
     private static gamepadCacheGeneration = 0;
@@ -212,6 +223,8 @@ export class Input {
     private lastClickTime = Number.NEGATIVE_INFINITY;
     private readonly mousePressX = new Map<number, number>();
     private readonly mousePressY = new Map<number, number>();
+    private activePointerId: number | null = null;
+    private capturedPointerTarget: Element | null = null;
     private preventDefaultElement: HTMLElement | null = null;
     private preventDefaultTouchAction: string | null = null;
     private browserInputCapture = true;
@@ -223,6 +236,18 @@ export class Input {
     private controllerStateSnapshotReady = false;
     private readonly controllerPhysicalIndices = new Int32Array(Input.BROWSER_CONTROLLER_LIMIT).fill(-1);
     private readonly controllerPhysicalIds = new Array<string | null>(Input.BROWSER_CONTROLLER_LIMIT).fill(null);
+    private readonly controllerPhysicalSlotGenerations = new Uint32Array(Input.BROWSER_CONTROLLER_LIMIT);
+    private readonly controllerMappings = new Array<string>(Input.BROWSER_CONTROLLER_LIMIT).fill("");
+    private readonly controllerConnectionGenerations = new Uint32Array(Input.BROWSER_CONTROLLER_LIMIT);
+    private readonly browserSlotGenerations = new Uint32Array(Input.BROWSER_CONTROLLER_LIMIT);
+    private nextControllerConnectionGeneration = 0;
+    private readonly controllerSampleStatus = {
+        sequence: 0,
+        available: false,
+        valid: true,
+        topologyGeneration: 0,
+        baselineOnly: true
+    };
     private additionalControllerDirectionAxes: number[] = [];
     private readonly additionalControllerAxisBaselines = new Float64Array(Input.BROWSER_CONTROLLER_LIMIT * Input.BROWSER_AXIS_LIMIT);
     private readonly additionalControllerAxisOwners = new Array<string | null>(Input.BROWSER_CONTROLLER_LIMIT).fill(null);
@@ -241,6 +266,8 @@ export class Input {
     private dispatchingEvent = false;
     private eventConsumed = false;
     private dispatchedEventTime = 0;
+    private dispatchGeneration = 0;
+    private pollInProgress = false;
 
     /**
      * Java Slick2D counterpart: Input.disableControllers().
@@ -318,11 +345,17 @@ export class Input {
         target.addEventListener("pointerdown", this.handlePointerDown as EventListener);
         target.addEventListener("pointerup", this.handlePointerUp as EventListener);
         target.addEventListener("pointermove", this.handlePointerMove as EventListener);
+        target.addEventListener("pointercancel", this.handlePointerCancel as EventListener);
+        target.addEventListener("lostpointercapture", this.handleLostPointerCapture as EventListener);
         target.addEventListener("wheel", this.handleWheel as EventListener, ACTIVE_EVENT_OPTIONS);
         target.addEventListener("contextmenu", this.handleContextMenu as EventListener, ACTIVE_EVENT_OPTIONS);
         if (typeof window !== "undefined") {
             window.addEventListener("keydown", this.handleGlobalKeyDown);
             window.addEventListener("keyup", this.handleGlobalKeyUp);
+            window.addEventListener("pointerup", this.handleGlobalPointerUp);
+            window.addEventListener("pointercancel", this.handleGlobalPointerCancel);
+            window.addEventListener("gamepadconnected", this.handleGamepadTopologyEvent);
+            window.addEventListener("gamepaddisconnected", this.handleGamepadTopologyEvent);
             window.addEventListener("blur", this.handleFocusLost);
         }
         if (typeof document !== "undefined") {
@@ -374,11 +407,17 @@ export class Input {
         this.target.removeEventListener("pointerdown", this.handlePointerDown as EventListener);
         this.target.removeEventListener("pointerup", this.handlePointerUp as EventListener);
         this.target.removeEventListener("pointermove", this.handlePointerMove as EventListener);
+        this.target.removeEventListener("pointercancel", this.handlePointerCancel as EventListener);
+        this.target.removeEventListener("lostpointercapture", this.handleLostPointerCapture as EventListener);
         this.target.removeEventListener("wheel", this.handleWheel as EventListener);
         this.target.removeEventListener("contextmenu", this.handleContextMenu as EventListener);
         if (typeof window !== "undefined") {
             window.removeEventListener("keydown", this.handleGlobalKeyDown);
             window.removeEventListener("keyup", this.handleGlobalKeyUp);
+            window.removeEventListener("pointerup", this.handleGlobalPointerUp);
+            window.removeEventListener("pointercancel", this.handleGlobalPointerCancel);
+            window.removeEventListener("gamepadconnected", this.handleGamepadTopologyEvent);
+            window.removeEventListener("gamepaddisconnected", this.handleGamepadTopologyEvent);
             window.removeEventListener("blur", this.handleFocusLost);
         }
         if (typeof document !== "undefined") {
@@ -557,7 +596,7 @@ export class Input {
 
     /** Java Slick2D counterpart: Input.isButtonPressed(int, int). */
     public isButtonPressed(index: number, controller: number): boolean {
-        if (Input.controllersDisabled) {
+        if (Input.controllersDisabled || !Number.isInteger(index) || index < 0 || index >= Input.BROWSER_CONTROLLER_BUTTON_LIMIT) {
             return false;
         }
         const gamepads = this.getFrameGamepads();
@@ -592,6 +631,57 @@ export class Input {
         return this.isButtonPressed(index, controller);
     }
 
+    /** Browser controller helper: status for the most recent Gamepad API sample. */
+    public getControllerSampleStatus(): ControllerSampleStatus {
+        return this.controllerSampleStatus;
+    }
+
+    /** Browser controller helper: runtime generation of the device owning a dense controller slot. */
+    public getControllerConnectionGeneration(controller: number): number {
+        if (!Number.isInteger(controller) || controller < 0 || controller >= Input.BROWSER_CONTROLLER_LIMIT) {
+            return 0;
+        }
+        return this.controllerConnectionGenerations[controller]!;
+    }
+
+    /** Browser controller helper: current Gamepad.mapping value for a dense controller slot. */
+    public getControllerMapping(controller: number): string {
+        if (!Number.isInteger(controller) || controller < 0) {
+            return "";
+        }
+        return this.getFrameGamepads()[controller]?.mapping ?? "";
+    }
+
+    /** Browser controller helper: true when a physical button is a standardized D-pad control. */
+    public isControllerButtonDirectional(index: number, controller: number): boolean {
+        if (!Number.isInteger(index) || index < 0 || index >= Input.BROWSER_CONTROLLER_BUTTON_LIMIT) {
+            return false;
+        }
+        const gamepad = this.getFrameGamepads()[controller];
+        return gamepad !== undefined && Input.isStandardDpadButton(gamepad, index);
+    }
+
+    /**
+     * Browser lifecycle helper: samples controllers and establishes their held-state baseline
+     * without dispatching application callbacks. Use before resumed simulation can consume raw levels.
+     */
+    public sampleControllersForBaseline(): ControllerSampleStatus {
+        if (this.pollInProgress) {
+            throw new Error("Input controller baseline sampling is not reentrant with poll()");
+        }
+        if (Input.controllersDisabled) {
+            this.invalidateGamepads();
+            this.clearAllControllerState();
+            this.publishControllerSample(false, true, true);
+            return this.controllerSampleStatus;
+        }
+        this.refreshGamepads();
+        if (this.controllerSampleStatus.valid) {
+            this.pollControllers(true);
+        }
+        return this.controllerSampleStatus;
+    }
+
     /** Java Slick2D counterpart: Input.getControllerCount(). */
     public getControllerCount(): number {
         return Input.controllersDisabled ? 0 : this.getFrameGamepads().length;
@@ -602,7 +692,8 @@ export class Input {
         if (Input.controllersDisabled) {
             return 0;
         }
-        return this.getFrameGamepads()[controller]?.buttons.length ?? 0;
+        const count = this.getFrameGamepads()[controller]?.buttons.length ?? 0;
+        return Math.min(count, Input.BROWSER_CONTROLLER_BUTTON_LIMIT);
     }
 
     /** Java Slick2D counterpart: Input.getAxisCount(int). */
@@ -713,6 +804,9 @@ export class Input {
 
     /** Java Slick2D counterpart: Input.poll(int, int). */
     public poll(_width: number, _height: number): void {
+        if (this.pollInProgress) {
+            throw new Error("Input.poll() is not reentrant");
+        }
         if (!Input.browserHasInputFocus()) {
             this.clearInputStateForBrowserSuspension();
             return;
@@ -724,30 +818,64 @@ export class Input {
             return;
         }
 
-        this.snapshotListeners();
+        this.pollInProgress = true;
+        const generation = this.dispatchGeneration;
+        let primaryError: unknown = null;
+        let hasPrimaryError = false;
         this.startedListeners.length = 0;
-        for (const listener of this.lifecycleListeners) {
-            if (isAccepting(listener)) {
-                listener.inputStarted();
-                this.startedListeners.push(listener);
-            }
-        }
 
         try {
-            this.dispatchQueuedEvents();
-            if (Input.controllersDisabled) {
-                this.invalidateGamepads();
-                this.clearAllControllerState();
-            } else {
-                this.refreshGamepads();
-                this.pollControllers();
+            this.snapshotListeners();
+            for (const listener of this.lifecycleListeners) {
+                if (!this.isDispatchCurrent(generation)) {
+                    break;
+                }
+                if (isAccepting(listener)) {
+                    listener.inputStarted();
+                    this.startedListeners.push(listener);
+                    if (!this.isDispatchCurrent(generation)) {
+                        break;
+                    }
+                }
             }
+
+            if (this.isDispatchCurrent(generation)) {
+                this.dispatchQueuedEvents(generation);
+            }
+            if (this.isDispatchCurrent(generation)) {
+                if (Input.controllersDisabled) {
+                    this.invalidateGamepads();
+                    this.clearAllControllerState();
+                    this.publishControllerSample(false, true, true);
+                } else {
+                    this.refreshGamepads();
+                    if (this.controllerSampleStatus.valid && this.isDispatchCurrent(generation)) {
+                        this.pollControllers(false, generation);
+                    }
+                }
+            }
+        } catch (error) {
+            primaryError = error;
+            hasPrimaryError = true;
         } finally {
             this.dispatchingEvent = false;
             this.eventConsumed = false;
             for (const listener of this.startedListeners) {
-                listener.inputEnded();
+                try {
+                    listener.inputEnded();
+                } catch (error) {
+                    if (!hasPrimaryError) {
+                        primaryError = error;
+                        hasPrimaryError = true;
+                    }
+                }
             }
+            this.startedListeners.length = 0;
+            this.pollInProgress = false;
+        }
+
+        if (hasPrimaryError) {
+            throw primaryError;
         }
     }
 
@@ -842,33 +970,50 @@ export class Input {
         if (this.paused || !this.shouldAcceptPointerEvent(event)) {
             return;
         }
+        const pointerId = Input.pointerIdFromEvent(event);
+        if (this.activePointerId !== null && this.activePointerId !== pointerId) {
+            return;
+        }
         this.preventBrowserDefault(event);
+        if (this.activePointerId === null) {
+            this.activePointerId = pointerId;
+            this.capturePointer(event);
+        }
         const button = Input.mouseButtonFromEvent(event);
         this.updateMouse(event);
-        this.downMouse.add(button);
-        this.enqueueEvent(Input.EVENT_MOUSE_PRESSED, button, this.mouseX, this.mouseY, 0, 0, Input.eventTimestamp(event));
+        if (!this.downMouse.has(button)) {
+            this.downMouse.add(button);
+            this.enqueueEvent(Input.EVENT_MOUSE_PRESSED, button, this.mouseX, this.mouseY, 0, 0, Input.eventTimestamp(event));
+        }
     };
 
     private readonly handlePointerUp = (event: PointerEvent): void => {
-        const accepted = this.shouldAcceptPointerEvent(event);
-        if (this.paused || (!accepted && this.downMouse.size === 0)) {
-            return;
-        }
-        if (accepted || this.downMouse.size > 0) {
-            this.preventBrowserDefault(event);
-        }
-        const button = Input.mouseButtonFromEvent(event);
-        this.updateMouse(event);
-        this.downMouse.delete(button);
-        this.enqueueEvent(Input.EVENT_MOUSE_RELEASED, button, this.mouseX, this.mouseY, 0, 0, Input.eventTimestamp(event));
+        this.releasePointerButton(event, true);
+    };
+
+    private readonly handleGlobalPointerUp = (event: PointerEvent): void => {
+        this.releasePointerButton(event, false);
+    };
+
+    private readonly handlePointerCancel = (event: PointerEvent): void => {
+        this.cancelPointer(event);
+    };
+
+    private readonly handleGlobalPointerCancel = (event: PointerEvent): void => {
+        this.cancelPointer(event);
+    };
+
+    private readonly handleLostPointerCapture = (event: PointerEvent): void => {
+        this.cancelPointer(event);
     };
 
     private readonly handlePointerMove = (event: PointerEvent): void => {
         const accepted = this.shouldAcceptPointerEvent(event);
-        if (this.paused || (!accepted && this.downMouse.size === 0)) {
+        const pointerId = Input.pointerIdFromEvent(event);
+        if (this.paused || (this.activePointerId !== null && this.activePointerId !== pointerId) || (!accepted && this.downMouse.size === 0)) {
             return;
         }
-        if (accepted || this.downMouse.size > 0) {
+        if (accepted) {
             this.preventBrowserDefault(event);
         }
         const oldX = this.mouseX;
@@ -909,6 +1054,14 @@ export class Input {
         }
     };
 
+    private readonly handleGamepadTopologyEvent = (event: GamepadEvent): void => {
+        const index = event.gamepad?.index;
+        if (Number.isInteger(index) && index >= 0 && index < Input.BROWSER_CONTROLLER_LIMIT) {
+            this.browserSlotGenerations[index] = (this.browserSlotGenerations[index]! + 1) >>> 0;
+        }
+        this.invalidateGamepads();
+    };
+
     private snapshotListeners(): void {
         Input.copyArray(this.keyListeners, this.dispatchKeyListeners);
         Input.copyArray(this.mouseListeners, this.dispatchMouseListeners);
@@ -927,9 +1080,9 @@ export class Input {
         }
     }
 
-    private dispatchQueuedEvents(): void {
-        const eventsToDispatch = this.eventCount;
-        for (let eventIndex = 0; eventIndex < eventsToDispatch; eventIndex++) {
+    private dispatchQueuedEvents(generation: number): void {
+        let remaining = this.eventCount;
+        while (remaining-- > 0 && this.eventCount > 0 && this.isDispatchCurrent(generation)) {
             const index = this.eventHead;
             const type = this.eventTypes[index]!;
             const a = this.eventA[index]!;
@@ -944,19 +1097,22 @@ export class Input {
             switch (type) {
                 case Input.EVENT_KEY_PRESSED:
                     this.pressedKeys.add(a);
-                    this.dispatchKeyPressed(a, character === 0 ? "\0" : String.fromCharCode(character), timestamp);
+                    this.dispatchKeyPressed(a, character === 0 ? "\0" : String.fromCharCode(character), timestamp, generation);
                     break;
                 case Input.EVENT_KEY_RELEASED:
-                    this.dispatchKeyReleased(a, character === 0 ? "\0" : String.fromCharCode(character), timestamp);
+                    this.dispatchKeyReleased(a, character === 0 ? "\0" : String.fromCharCode(character), timestamp, generation);
                     break;
                 case Input.EVENT_MOUSE_PRESSED:
                     this.pressedMouse.add(a);
                     this.mousePressX.set(a, b);
                     this.mousePressY.set(a, c);
-                    this.dispatchMousePressed(a, b, c, timestamp);
+                    this.dispatchMousePressed(a, b, c, timestamp, generation);
                     break;
                 case Input.EVENT_MOUSE_RELEASED: {
-                    this.dispatchMouseReleased(a, b, c, timestamp);
+                    this.dispatchMouseReleased(a, b, c, timestamp, generation);
+                    if (!this.isDispatchCurrent(generation)) {
+                        break;
+                    }
                     const pressX = this.mousePressX.get(a);
                     const pressY = this.mousePressY.get(a);
                     this.mousePressX.delete(a);
@@ -967,18 +1123,18 @@ export class Input {
                         Math.abs(b - pressX) <= this.mouseClickTolerance &&
                         Math.abs(c - pressY) <= this.mouseClickTolerance
                     ) {
-                        this.considerDoubleClickAt(a, b, c, timestamp);
+                        this.considerDoubleClickAt(a, b, c, timestamp, generation);
                     }
                     break;
                 }
                 case Input.EVENT_MOUSE_MOVED:
-                    this.dispatchMouseMoved(a, b, c, d, false, timestamp);
+                    this.dispatchMouseMoved(a, b, c, d, false, timestamp, generation);
                     break;
                 case Input.EVENT_MOUSE_DRAGGED:
-                    this.dispatchMouseMoved(a, b, c, d, true, timestamp);
+                    this.dispatchMouseMoved(a, b, c, d, true, timestamp, generation);
                     break;
                 case Input.EVENT_MOUSE_WHEEL:
-                    this.dispatchMouseWheel(a, timestamp);
+                    this.dispatchMouseWheel(a, timestamp, generation);
                     break;
             }
         }
@@ -987,12 +1143,15 @@ export class Input {
         }
     }
 
-    private considerDoubleClickAt(button: number, x: number, y: number, timestamp: number): void {
+    private considerDoubleClickAt(button: number, x: number, y: number, timestamp: number, generation: number = this.dispatchGeneration): void {
+        if (!this.isDispatchCurrent(generation)) {
+            return;
+        }
         const elapsed = timestamp - this.lastClickTime;
         const withinTime = elapsed >= 0 && elapsed <= this.doubleClickDelay;
         const withinDistance = Math.abs(x - this.lastClickX) <= this.mouseClickTolerance && Math.abs(y - this.lastClickY) <= this.mouseClickTolerance;
         const doubleClick = button === this.lastClickButton && withinTime && withinDistance;
-        this.dispatchMouseClicked(button, x, y, doubleClick ? 2 : 1, timestamp);
+        this.dispatchMouseClicked(button, x, y, doubleClick ? 2 : 1, timestamp, generation);
         if (doubleClick) {
             this.lastClickButton = -1;
             this.lastClickTime = Number.NEGATIVE_INFINITY;
@@ -1004,99 +1163,113 @@ export class Input {
         }
     }
 
-    private dispatchKeyPressed(key: number, character: string, timestamp: number): void {
+    private dispatchKeyPressed(key: number, character: string, timestamp: number, generation: number): void {
         this.beginEventDispatch(timestamp);
-        for (const listener of this.dispatchKeyListeners) {
-            if (isAccepting(listener)) {
-                listener.keyPressed(key, character);
-                if (this.eventConsumed) {
-                    break;
+        try {
+            for (const listener of this.dispatchKeyListeners) {
+                if (!this.isDispatchCurrent(generation)) break;
+                if (this.keyListeners.includes(listener) && isAccepting(listener)) {
+                    listener.keyPressed(key, character);
+                    if (this.eventConsumed || !this.isDispatchCurrent(generation)) break;
                 }
             }
+        } finally {
+            this.endEventDispatch();
         }
-        this.endEventDispatch();
     }
 
-    private dispatchKeyReleased(key: number, character: string, timestamp: number): void {
+    private dispatchKeyReleased(key: number, character: string, timestamp: number, generation: number): void {
         this.beginEventDispatch(timestamp);
-        for (const listener of this.dispatchKeyListeners) {
-            if (isAccepting(listener)) {
-                listener.keyReleased(key, character);
-                if (this.eventConsumed) {
-                    break;
+        try {
+            for (const listener of this.dispatchKeyListeners) {
+                if (!this.isDispatchCurrent(generation)) break;
+                if (this.keyListeners.includes(listener) && isAccepting(listener)) {
+                    listener.keyReleased(key, character);
+                    if (this.eventConsumed || !this.isDispatchCurrent(generation)) break;
                 }
             }
+        } finally {
+            this.endEventDispatch();
         }
-        this.endEventDispatch();
     }
 
-    private dispatchMousePressed(button: number, x: number, y: number, timestamp: number): void {
+    private dispatchMousePressed(button: number, x: number, y: number, timestamp: number, generation: number): void {
         this.beginEventDispatch(timestamp);
-        for (const listener of this.dispatchMouseListeners) {
-            if (isAccepting(listener)) {
-                listener.mousePressed(button, x, y);
-                if (this.eventConsumed) {
-                    break;
+        try {
+            for (const listener of this.dispatchMouseListeners) {
+                if (!this.isDispatchCurrent(generation)) break;
+                if (this.mouseListeners.includes(listener) && isAccepting(listener)) {
+                    listener.mousePressed(button, x, y);
+                    if (this.eventConsumed || !this.isDispatchCurrent(generation)) break;
                 }
             }
+        } finally {
+            this.endEventDispatch();
         }
-        this.endEventDispatch();
     }
 
-    private dispatchMouseReleased(button: number, x: number, y: number, timestamp: number): void {
+    private dispatchMouseReleased(button: number, x: number, y: number, timestamp: number, generation: number): void {
         this.beginEventDispatch(timestamp);
-        for (const listener of this.dispatchMouseListeners) {
-            if (isAccepting(listener)) {
-                listener.mouseReleased(button, x, y);
-                if (this.eventConsumed) {
-                    break;
+        try {
+            for (const listener of this.dispatchMouseListeners) {
+                if (!this.isDispatchCurrent(generation)) break;
+                if (this.mouseListeners.includes(listener) && isAccepting(listener)) {
+                    listener.mouseReleased(button, x, y);
+                    if (this.eventConsumed || !this.isDispatchCurrent(generation)) break;
                 }
             }
+        } finally {
+            this.endEventDispatch();
         }
-        this.endEventDispatch();
     }
 
-    private dispatchMouseClicked(button: number, x: number, y: number, count: number, timestamp: number): void {
+    private dispatchMouseClicked(button: number, x: number, y: number, count: number, timestamp: number, generation: number): void {
         this.beginEventDispatch(timestamp);
-        for (const listener of this.dispatchMouseListeners) {
-            if (isAccepting(listener)) {
-                listener.mouseClicked(button, x, y, count);
-                if (this.eventConsumed) {
-                    break;
+        try {
+            for (const listener of this.dispatchMouseListeners) {
+                if (!this.isDispatchCurrent(generation)) break;
+                if (this.mouseListeners.includes(listener) && isAccepting(listener)) {
+                    listener.mouseClicked(button, x, y, count);
+                    if (this.eventConsumed || !this.isDispatchCurrent(generation)) break;
                 }
             }
+        } finally {
+            this.endEventDispatch();
         }
-        this.endEventDispatch();
     }
 
-    private dispatchMouseMoved(oldX: number, oldY: number, newX: number, newY: number, dragged: boolean, timestamp: number): void {
+    private dispatchMouseMoved(oldX: number, oldY: number, newX: number, newY: number, dragged: boolean, timestamp: number, generation: number): void {
         this.beginEventDispatch(timestamp);
-        for (const listener of this.dispatchMouseListeners) {
-            if (isAccepting(listener)) {
-                if (dragged) {
-                    listener.mouseDragged(oldX, oldY, newX, newY);
-                } else {
-                    listener.mouseMoved(oldX, oldY, newX, newY);
-                }
-                if (this.eventConsumed) {
-                    break;
+        try {
+            for (const listener of this.dispatchMouseListeners) {
+                if (!this.isDispatchCurrent(generation)) break;
+                if (this.mouseListeners.includes(listener) && isAccepting(listener)) {
+                    if (dragged) {
+                        listener.mouseDragged(oldX, oldY, newX, newY);
+                    } else {
+                        listener.mouseMoved(oldX, oldY, newX, newY);
+                    }
+                    if (this.eventConsumed || !this.isDispatchCurrent(generation)) break;
                 }
             }
+        } finally {
+            this.endEventDispatch();
         }
-        this.endEventDispatch();
     }
 
-    private dispatchMouseWheel(change: number, timestamp: number): void {
+    private dispatchMouseWheel(change: number, timestamp: number, generation: number): void {
         this.beginEventDispatch(timestamp);
-        for (const listener of this.dispatchMouseListeners) {
-            if (isAccepting(listener)) {
-                listener.mouseWheelMoved(change);
-                if (this.eventConsumed) {
-                    break;
+        try {
+            for (const listener of this.dispatchMouseListeners) {
+                if (!this.isDispatchCurrent(generation)) break;
+                if (this.mouseListeners.includes(listener) && isAccepting(listener)) {
+                    listener.mouseWheelMoved(change);
+                    if (this.eventConsumed || !this.isDispatchCurrent(generation)) break;
                 }
             }
+        } finally {
+            this.endEventDispatch();
         }
-        this.endEventDispatch();
     }
 
     private beginEventDispatch(timestamp: number): void {
@@ -1159,6 +1332,7 @@ export class Input {
         this.eventCount = 0;
         this.mousePressX.clear();
         this.mousePressY.clear();
+        this.dispatchGeneration++;
     }
 
     private clearPressedRecords(): void {
@@ -1170,7 +1344,8 @@ export class Input {
     private clearAllInputState(): void {
         this.downKeys.clear();
         this.suppressedKeysUntilRelease.clear();
-        this.downMouse.clear();
+        this.resetPointerState();
+        this.clearClickHistory();
         this.clearAllControllerState();
         this.clearPressedRecords();
         this.clearQueuedEvents();
@@ -1182,7 +1357,8 @@ export class Input {
             this.suppressedKeysUntilRelease.add(key);
         }
         this.downKeys.clear();
-        this.downMouse.clear();
+        this.resetPointerState();
+        this.clearClickHistory();
         this.clearAllControllerState();
         this.clearPressedRecords();
         this.clearQueuedEvents();
@@ -1196,7 +1372,89 @@ export class Input {
         this.seenControllers.clear();
         this.controllerPhysicalIndices.fill(-1);
         this.controllerPhysicalIds.fill(null);
+        this.controllerPhysicalSlotGenerations.fill(0);
+        this.controllerMappings.fill("");
+        this.controllerConnectionGenerations.fill(0);
         this.controllerStateSnapshotReady = false;
+    }
+
+    private releasePointerButton(event: PointerEvent, preventDefault: boolean): void {
+        const pointerId = Input.pointerIdFromEvent(event);
+        if (this.paused || this.activePointerId === null || this.activePointerId !== pointerId) {
+            return;
+        }
+        const button = Input.mouseButtonFromEvent(event);
+        if (!this.downMouse.has(button)) {
+            return;
+        }
+        if (preventDefault && this.shouldAcceptPointerEvent(event)) {
+            this.preventBrowserDefault(event);
+        }
+        this.updateMouse(event);
+        this.downMouse.delete(button);
+        this.enqueueEvent(Input.EVENT_MOUSE_RELEASED, button, this.mouseX, this.mouseY, 0, 0, Input.eventTimestamp(event));
+        if (this.downMouse.size === 0) {
+            this.releaseCapturedPointer();
+            this.activePointerId = null;
+        }
+    }
+
+    private cancelPointer(event: PointerEvent): void {
+        const pointerId = Input.pointerIdFromEvent(event);
+        if (this.activePointerId === null || this.activePointerId !== pointerId) {
+            return;
+        }
+        this.updateMouse(event);
+        const timestamp = Input.eventTimestamp(event);
+        for (const button of this.downMouse) {
+            this.mousePressX.delete(button);
+            this.mousePressY.delete(button);
+            this.enqueueEvent(Input.EVENT_MOUSE_RELEASED, button, this.mouseX, this.mouseY, 0, 0, timestamp);
+        }
+        this.downMouse.clear();
+        this.releaseCapturedPointer();
+        this.activePointerId = null;
+    }
+
+    private capturePointer(event: PointerEvent): void {
+        const target = event.currentTarget;
+        if (typeof Element === "undefined" || !(target instanceof Element) || typeof target.setPointerCapture !== "function") {
+            return;
+        }
+        try {
+            target.setPointerCapture(Input.pointerIdFromEvent(event));
+            this.capturedPointerTarget = target;
+        } catch {
+            this.capturedPointerTarget = null;
+        }
+    }
+
+    private releaseCapturedPointer(): void {
+        if (this.capturedPointerTarget && this.activePointerId !== null && typeof this.capturedPointerTarget.releasePointerCapture === "function") {
+            try {
+                if (typeof this.capturedPointerTarget.hasPointerCapture !== "function" || this.capturedPointerTarget.hasPointerCapture(this.activePointerId)) {
+                    this.capturedPointerTarget.releasePointerCapture(this.activePointerId);
+                }
+            } catch {
+                // Cancellation/blur/unbind cleanup is idempotent even if capture already ended.
+            }
+        }
+        this.capturedPointerTarget = null;
+    }
+
+    private resetPointerState(): void {
+        this.releaseCapturedPointer();
+        this.activePointerId = null;
+        this.downMouse.clear();
+        this.mousePressX.clear();
+        this.mousePressY.clear();
+    }
+
+    private clearClickHistory(): void {
+        this.lastClickButton = -1;
+        this.lastClickX = 0;
+        this.lastClickY = 0;
+        this.lastClickTime = Number.NEGATIVE_INFINITY;
     }
 
     private updateMouse(event: PointerEvent): void {
@@ -1209,13 +1467,17 @@ export class Input {
         this.mouseY = Math.floor(this.absoluteMouseY * this.scaleY + this.offsetY);
     }
 
-    private pollControllers(): void {
+    private pollControllers(forceBaseline: boolean = false, generation: number | null = null): boolean {
         const gamepads = this.getFrameGamepads();
-        const baselineOnly = this.baselineControllersOnNextPoll;
+        const sampleBaselineOnly = forceBaseline || this.baselineControllersOnNextPoll;
+        let topologyChanged = false;
         this.seenControllers.clear();
         for (let controller = 0; controller < gamepads.length; controller++) {
+            if (generation !== null && !this.isDispatchCurrent(generation)) return false;
             const gamepad = gamepads[controller]!;
-            this.prepareLogicalControllerOwner(controller, gamepad);
+            const ownerChanged = this.prepareLogicalControllerOwner(controller, gamepad);
+            topologyChanged ||= ownerChanged;
+            const baselineOnly = sampleBaselineOnly || ownerChanged;
             this.seenControllers.add(controller);
             if (this.additionalControllerDirectionAxes.length > 0) {
                 this.prepareAdditionalControllerAxisCalibration(gamepad);
@@ -1234,42 +1496,67 @@ export class Input {
                 up ||= vertical < -this.additionalControllerAxisThreshold;
                 down ||= vertical > this.additionalControllerAxisThreshold;
             }
-            this.updateControlState(controller, 0, left, baselineOnly);
-            this.updateControlState(controller, 1, right, baselineOnly);
-            this.updateControlState(controller, 2, up, baselineOnly);
-            this.updateControlState(controller, 3, down, baselineOnly);
-            for (let index = 0; index < gamepad.buttons.length; index++) {
-                if (!Input.isStandardDpadButton(index)) {
-                    this.updateControlState(controller, 4 + index, gamepad.buttons[index]?.pressed === true, baselineOnly);
+            if (!this.updateControlState(controller, 0, left, baselineOnly, generation)) return false;
+            if (!this.updateControlState(controller, 1, right, baselineOnly, generation)) return false;
+            if (!this.updateControlState(controller, 2, up, baselineOnly, generation)) return false;
+            if (!this.updateControlState(controller, 3, down, baselineOnly, generation)) return false;
+            const buttonCount = Math.min(gamepad.buttons.length, Input.BROWSER_CONTROLLER_BUTTON_LIMIT);
+            for (let index = 0; index < buttonCount; index++) {
+                if (!Input.isStandardDpadButton(gamepad, index)) {
+                    if (!this.updateControlState(controller, 4 + index, gamepad.buttons[index]?.pressed === true, baselineOnly, generation)) return false;
                 }
             }
         }
 
         for (let controller = gamepads.length; controller < this.controllerPhysicalIndices.length; controller++) {
             if (this.controllerPhysicalIndices[controller] !== -1) {
+                topologyChanged = true;
                 this.clearControllerState(controller);
                 this.controllerPhysicalIndices[controller] = -1;
                 this.controllerPhysicalIds[controller] = null;
+                this.controllerPhysicalSlotGenerations[controller] = 0;
+                this.controllerMappings[controller] = "";
+                this.controllerConnectionGenerations[controller] = 0;
             }
+        }
+        if (topologyChanged) {
+            this.controllerSampleStatus.topologyGeneration = (this.controllerSampleStatus.topologyGeneration + 1) >>> 0;
         }
         this.clearDisconnectedAxisCalibration();
         this.controllerStateSnapshotReady = true;
-        if (!this.gamepadEnumerationFailed) {
-            this.baselineControllersOnNextPoll = false;
-        }
+        this.controllerSampleStatus.baselineOnly = sampleBaselineOnly;
+        this.baselineControllersOnNextPoll = false;
+        return true;
     }
 
-    private prepareLogicalControllerOwner(controller: number, gamepad: Gamepad): void {
+    private prepareLogicalControllerOwner(controller: number, gamepad: Gamepad): boolean {
         if (controller >= this.controllerPhysicalIndices.length) {
-            return;
+            return false;
         }
         const physicalIndex = gamepad.index;
         const id = gamepad.id || "";
-        if (this.controllerPhysicalIndices[controller] !== physicalIndex || this.controllerPhysicalIds[controller] !== id) {
+        const mapping = gamepad.mapping || "";
+        const slotGeneration =
+            physicalIndex >= 0 && physicalIndex < this.browserSlotGenerations.length ? this.browserSlotGenerations[physicalIndex]! : 0;
+        if (
+            this.controllerPhysicalIndices[controller] !== physicalIndex ||
+            this.controllerPhysicalIds[controller] !== id ||
+            this.controllerMappings[controller] !== mapping ||
+            this.controllerPhysicalSlotGenerations[controller] !== slotGeneration
+        ) {
             this.clearControllerState(controller);
             this.controllerPhysicalIndices[controller] = physicalIndex;
             this.controllerPhysicalIds[controller] = id;
+            this.controllerMappings[controller] = mapping;
+            this.controllerPhysicalSlotGenerations[controller] = slotGeneration;
+            this.nextControllerConnectionGeneration = (this.nextControllerConnectionGeneration + 1) >>> 0;
+            if (this.nextControllerConnectionGeneration === 0) {
+                this.nextControllerConnectionGeneration = 1;
+            }
+            this.controllerConnectionGenerations[controller] = this.nextControllerConnectionGeneration;
+            return true;
         }
+        return false;
     }
 
     private clearControllerState(controller: number): void {
@@ -1361,11 +1648,17 @@ export class Input {
         return this.controlDown.has(Input.controlKey(controller, control));
     }
 
-    private updateControlState(controller: number, control: number, down: boolean, baselineOnly: boolean = false): void {
+    private updateControlState(
+        controller: number,
+        control: number,
+        down: boolean,
+        baselineOnly: boolean = false,
+        generation: number | null = null
+    ): boolean {
         const key = Input.controlKey(controller, control);
         const wasDown = this.controlDown.has(key);
         if (down === wasDown) {
-            return;
+            return generation === null || this.isDispatchCurrent(generation);
         }
         if (down) {
             this.controlDown.add(key);
@@ -1377,23 +1670,26 @@ export class Input {
         }
 
         if (baselineOnly) {
-            return;
+            return generation === null || this.isDispatchCurrent(generation);
         }
 
         this.beginEventDispatch(Input.now());
-        for (const listener of this.dispatchControllerListeners) {
-            if (isAccepting(listener)) {
-                if (down) {
-                    Input.dispatchControllerPressed(listener, controller, control);
-                } else {
-                    Input.dispatchControllerReleased(listener, controller, control);
-                }
-                if (this.eventConsumed) {
-                    break;
+        try {
+            for (const listener of this.dispatchControllerListeners) {
+                if (generation !== null && !this.isDispatchCurrent(generation)) break;
+                if (this.controllerListeners.includes(listener) && isAccepting(listener)) {
+                    if (down) {
+                        Input.dispatchControllerPressed(listener, controller, control);
+                    } else {
+                        Input.dispatchControllerReleased(listener, controller, control);
+                    }
+                    if (this.eventConsumed || (generation !== null && !this.isDispatchCurrent(generation))) break;
                 }
             }
+        } finally {
+            this.endEventDispatch();
         }
-        this.endEventDispatch();
+        return generation === null || this.isDispatchCurrent(generation);
     }
 
     private anyController(controller: number, predicate: (gamepad: Gamepad) => boolean): boolean {
@@ -1414,28 +1710,56 @@ export class Input {
     }
 
     private refreshGamepads(): GamepadSnapshot {
-        this.cachedGamepads.length = 0;
         this.gamepadEnumerationFailed = false;
-        if (typeof navigator !== "undefined" && navigator.getGamepads) {
-            try {
-                const browserGamepads = navigator.getGamepads();
-                for (const gamepad of browserGamepads) {
-                    if (Input.isUsableGamepad(gamepad)) {
-                        this.cachedGamepads.push(gamepad);
-                    }
+        const available = typeof navigator !== "undefined" && typeof navigator.getGamepads === "function";
+        if (!available) {
+            this.cachedGamepads.length = 0;
+            this.gamepadsCached = true;
+            this.gamepadCacheGeneration = Input.gamepadCacheGeneration;
+            this.controllerStateSnapshotReady = false;
+            this.publishControllerSample(false, true, this.baselineControllersOnNextPoll);
+            return this.cachedGamepads;
+        }
+
+        const nextGamepads: Gamepad[] = [];
+        try {
+            const browserGamepads = navigator.getGamepads();
+            for (const gamepad of browserGamepads) {
+                if (Input.isUsableGamepad(gamepad)) {
+                    nextGamepads.push(gamepad);
                 }
-            } catch {
-                this.gamepadEnumerationFailed = true;
-                this.baselineControllersOnNextPoll = true;
-                // Treat browser/controller enumeration failure as no connected controllers for this poll.
-                // The next successful poll establishes a held-state baseline because
-                // transitions that occurred while enumeration failed are unknowable.
             }
+        } catch {
+            this.gamepadEnumerationFailed = true;
+            this.baselineControllersOnNextPoll = true;
+            this.gamepadsCached = true;
+            this.gamepadCacheGeneration = Input.gamepadCacheGeneration;
+            this.publishControllerSample(true, false, true);
+            // Keep the last valid physical/controller baseline. A failed enumeration is
+            // uncertainty, not evidence that every controller was released.
+            return this.cachedGamepads;
+        }
+
+        this.cachedGamepads.length = 0;
+        for (const gamepad of nextGamepads) {
+            this.cachedGamepads.push(gamepad);
         }
         this.gamepadsCached = true;
         this.gamepadCacheGeneration = Input.gamepadCacheGeneration;
         this.controllerStateSnapshotReady = false;
+        this.publishControllerSample(true, true, this.baselineControllersOnNextPoll);
         return this.cachedGamepads;
+    }
+
+    private publishControllerSample(available: boolean, valid: boolean, baselineOnly: boolean): void {
+        this.controllerSampleStatus.sequence = (this.controllerSampleStatus.sequence + 1) >>> 0;
+        this.controllerSampleStatus.available = available;
+        this.controllerSampleStatus.valid = valid;
+        this.controllerSampleStatus.baselineOnly = baselineOnly;
+    }
+
+    private isDispatchCurrent(generation: number): boolean {
+        return generation === this.dispatchGeneration && !this.paused && Input.browserHasInputFocus() && !Input.controllersDisabled;
     }
 
     private getFrameGamepads(): GamepadSnapshot {
@@ -1470,6 +1794,10 @@ export class Input {
         return Input.eventCodeToKey.get(event.code) ?? 0;
     }
 
+    private static pointerIdFromEvent(event: PointerEvent): number {
+        return Number.isInteger(event.pointerId) ? event.pointerId : 0;
+    }
+
     private static mouseButtonFromEvent(event: PointerEvent): number {
         switch (event.button) {
             case 0:
@@ -1493,19 +1821,31 @@ export class Input {
     }
 
     private static isGamepadLeft(gamepad: Gamepad): boolean {
-        return Input.readGamepadAxis(gamepad, 0) < -0.5 || gamepad.buttons[14]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_LEFT);
+        return (
+            Input.readGamepadAxis(gamepad, 0) < -0.5 ||
+            (gamepad.mapping === "standard" ? gamepad.buttons[14]?.pressed === true : Input.isGamepadPovHat(gamepad, Input.POV_HAT_LEFT))
+        );
     }
 
     private static isGamepadRight(gamepad: Gamepad): boolean {
-        return Input.readGamepadAxis(gamepad, 0) > 0.5 || gamepad.buttons[15]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_RIGHT);
+        return (
+            Input.readGamepadAxis(gamepad, 0) > 0.5 ||
+            (gamepad.mapping === "standard" ? gamepad.buttons[15]?.pressed === true : Input.isGamepadPovHat(gamepad, Input.POV_HAT_RIGHT))
+        );
     }
 
     private static isGamepadUp(gamepad: Gamepad): boolean {
-        return Input.readGamepadAxis(gamepad, 1) < -0.5 || gamepad.buttons[12]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_UP);
+        return (
+            Input.readGamepadAxis(gamepad, 1) < -0.5 ||
+            (gamepad.mapping === "standard" ? gamepad.buttons[12]?.pressed === true : Input.isGamepadPovHat(gamepad, Input.POV_HAT_UP))
+        );
     }
 
     private static isGamepadDown(gamepad: Gamepad): boolean {
-        return Input.readGamepadAxis(gamepad, 1) > 0.5 || gamepad.buttons[13]?.pressed === true || Input.isGamepadPovHat(gamepad, Input.POV_HAT_DOWN);
+        return (
+            Input.readGamepadAxis(gamepad, 1) > 0.5 ||
+            (gamepad.mapping === "standard" ? gamepad.buttons[13]?.pressed === true : Input.isGamepadPovHat(gamepad, Input.POV_HAT_DOWN))
+        );
     }
 
     private static isGamepadPovHat(gamepad: Gamepad, values: readonly number[]): boolean {
@@ -1561,8 +1901,8 @@ export class Input {
         }
     }
 
-    private static isStandardDpadButton(index: number): boolean {
-        return index >= 12 && index <= 15;
+    private static isStandardDpadButton(gamepad: Gamepad, index: number): boolean {
+        return gamepad.mapping === "standard" && index >= 12 && index <= 15;
     }
 
     private static controlKey(controller: number, control: number): number {
