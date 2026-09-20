@@ -249,6 +249,34 @@ test("inputEnded failures do not prevent later lifecycle cleanup", () => {
     assert.deepEqual(lifecycle, ["first-start", "second-start", "first-end", "second-end"]);
 });
 
+test("listener removal during inputStarted prevents a later lifecycle start", () => {
+    const input = new Input(600);
+    const lifecycle = [];
+    const second = inputListener({
+        inputStarted() {
+            lifecycle.push("second-start");
+        },
+        inputEnded() {
+            lifecycle.push("second-end");
+        }
+    });
+    const first = inputListener({
+        inputStarted() {
+            lifecycle.push("first-start");
+            input.removeKeyListener(second);
+        },
+        inputEnded() {
+            lifecycle.push("first-end");
+        }
+    });
+    input.addKeyListener(first);
+    input.addKeyListener(second);
+
+    input.poll(800, 600);
+
+    assert.deepEqual(lifecycle, ["first-start", "first-end"]);
+});
+
 test("listener removal during dispatch takes effect before the next listener callback", () => {
     const target = eventTarget();
     const input = new Input(600);
