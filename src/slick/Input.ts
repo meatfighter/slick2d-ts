@@ -704,7 +704,7 @@ export class Input {
     /** Java Slick2D counterpart: Input.poll(int, int). */
     public poll(_width: number, _height: number): void {
         if (!Input.browserHasInputFocus()) {
-            this.clearAllInputState();
+            this.clearInputStateForBrowserSuspension();
             return;
         }
         if (this.paused) {
@@ -868,12 +868,12 @@ export class Input {
     };
 
     private readonly handleFocusLost = (): void => {
-        this.clearAllInputState();
+        this.clearInputStateForBrowserSuspension();
     };
 
     private readonly handleVisibilityChange = (): void => {
         if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-            this.clearAllInputState();
+            this.clearInputStateForBrowserSuspension();
         }
     };
 
@@ -1142,6 +1142,11 @@ export class Input {
         this.clearPressedRecords();
         this.clearQueuedEvents();
         this.invalidateGamepads();
+    }
+
+    private clearInputStateForBrowserSuspension(): void {
+        this.clearAllInputState();
+        this.baselineControllersOnNextPoll = true;
     }
 
     private clearAllControllerState(): void {
