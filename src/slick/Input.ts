@@ -838,6 +838,9 @@ export class Input {
                 if (!this.isDispatchCurrent(generation)) {
                     break;
                 }
+                if (!this.isLifecycleListenerRegistered(listener)) {
+                    continue;
+                }
                 if (isAccepting(listener)) {
                     listener.inputStarted();
                     this.startedListeners.push(listener);
@@ -1069,6 +1072,14 @@ export class Input {
         }
         this.invalidateGamepads();
     };
+
+    private isLifecycleListenerRegistered(listener: ControlledInputReciever): boolean {
+        return (
+            this.keyListeners.includes(listener as KeyListener) ||
+            this.mouseListeners.includes(listener as MouseListener) ||
+            this.controllerListeners.includes(listener as ControllerListener)
+        );
+    }
 
     private snapshotListeners(): void {
         Input.copyArray(this.keyListeners, this.dispatchKeyListeners);
