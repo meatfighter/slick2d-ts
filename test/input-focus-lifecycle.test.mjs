@@ -44,8 +44,6 @@ function pointerEvent(button) {
     };
 }
 
-
-
 function gamepadButton(pressed = false) {
     return { pressed, touched: pressed, value: pressed ? 1 : 0 };
 }
