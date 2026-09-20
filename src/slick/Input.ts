@@ -1442,8 +1442,17 @@ export class Input {
     }
 
     private capturePointer(event: PointerEvent): void {
-        const target = event.currentTarget;
-        if (typeof Element === "undefined" || !(target instanceof Element) || typeof target.setPointerCapture !== "function") {
+        if (typeof Element === "undefined") {
+            return;
+        }
+        const eventTarget = event.target;
+        const target =
+            eventTarget instanceof Element && typeof eventTarget.setPointerCapture === "function"
+                ? eventTarget
+                : this.preventDefaultElement instanceof Element && typeof this.preventDefaultElement.setPointerCapture === "function"
+                  ? this.preventDefaultElement
+                  : null;
+        if (target === null) {
             return;
         }
         try {
