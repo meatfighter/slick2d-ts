@@ -243,6 +243,15 @@ test("known but unmapped legacy Java key constants have stable names", () => {
     assert.equal(Input.getKeyName(Input.KEY_UNLABELED), "KEY_UNLABELED");
 });
 
+test("browser key support predicate distinguishes reachable and legacy-only Slick key codes", () => {
+    assert.equal(Input.isBrowserKeyCodeSupported(Input.KEY_A), true);
+    assert.equal(Input.isBrowserKeyCodeSupported(Input.KEY_ENTER), true);
+    assert.equal(Input.isBrowserKeyCodeSupported(Input.KEY_UP), true);
+    assert.equal(Input.isBrowserKeyCodeSupported(Input.KEY_CIRCUMFLEX), false);
+    assert.equal(Input.isBrowserKeyCodeSupported(999), false);
+    assert.equal(Input.isBrowserKeyCodeSupported(1.5), false);
+});
+
 test("browser pointer buttons are translated to Slick mouse constants", () => {
     const target = eventTarget();
     const input = new Input(600);
