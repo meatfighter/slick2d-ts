@@ -267,6 +267,40 @@ test("controller poll refreshes gamepads once and helpers reuse the frame snapsh
     ]);
 });
 
+test("normal gameplay enumeration failure baselines the next successful controller poll", () => {
+    const pad = gamepad();
+    let calls = 0;
+    installGamepadProvider(() => {
+        calls++;
+        if (calls === 2) {
+            throw new Error("transient enumeration failure");
+        }
+        return [pad];
+    });
+    const input = new Input(600);
+    const events = [];
+    input.addControllerListener(listener(events));
+
+    input.poll(800, 600);
+    pad.buttons[0] = button(true);
+    input.poll(800, 600); // enumeration fails; transition is unknowable
+    input.poll(800, 600); // held state becomes the new baseline
+
+    assert.equal(input.isButtonPressed(0, 0), true);
+    assert.equal(input.isControlPressed(4, 0), false);
+    assert.deepEqual(events, []);
+
+    pad.buttons[0] = button(false);
+    input.poll(800, 600);
+    pad.buttons[0] = button(true);
+    input.poll(800, 600);
+    assert.equal(input.isControlPressed(4, 0), true);
+    assert.deepEqual(events, [
+        ["buttonReleased", 0, 1],
+        ["buttonPressed", 0, 1]
+    ]);
+});
+
 test("resume baseline survives a transient gamepad enumeration failure", () => {
     const pad = gamepad();
     pad.buttons[0] = button(true);
