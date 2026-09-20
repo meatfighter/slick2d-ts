@@ -352,6 +352,18 @@ test("browser gamepad enumeration failure is contained as no connected controlle
     assert.equal(input.isButtonPressed(0, Input.ANY_CONTROLLER), false);
 });
 
+test("browser controller enumeration is capped at the public 16-controller limit", () => {
+    const pads = Array.from({ length: 20 }, (_, index) => gamepad({ id: `pad-${index}`, index }));
+    installGamepads(pads);
+    const input = new Input(600);
+
+    input.poll(800, 600);
+
+    assert.equal(input.getControllerCount(), Input.BROWSER_CONTROLLER_LIMIT);
+    assert.equal(input.getControllerConnectionGeneration(Input.BROWSER_CONTROLLER_LIMIT - 1) > 0, true);
+    assert.equal(input.getControllerConnectionGeneration(Input.BROWSER_CONTROLLER_LIMIT), 0);
+});
+
 test("controller helpers lazily refresh once before the first poll", () => {
     const firstPad = gamepad({ axes: [0, -1] });
     firstPad.buttons[2] = button(true);
