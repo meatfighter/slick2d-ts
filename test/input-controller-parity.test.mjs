@@ -271,10 +271,11 @@ test("resume baseline survives a transient gamepad enumeration failure", () => {
     input.resume();
 
     assert.doesNotThrow(() => input.poll(800, 600));
-    assert.equal(input.getControllerCount(), 1, "helper access after the failed poll may refresh the controller list");
+    assert.equal(input.getControllerCount(), 0, "the failed enumeration is cached as no controllers for that frame");
 
     input.poll(800, 600);
 
+    assert.equal(input.getControllerCount(), 1);
     assert.equal(input.isButtonPressed(0, 0), true);
     assert.equal(input.isControlPressed(4, 0), false, "held controller must still be baselined after transient enumeration failure");
     assert.deepEqual(events, []);
