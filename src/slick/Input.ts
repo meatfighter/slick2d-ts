@@ -193,6 +193,7 @@ export class Input {
     private readonly startedListeners: ControlledInputReciever[] = [];
     private target: TargetElement | null = null;
     private paused = false;
+    private baselineControllersOnNextPoll = false;
     private scaleX = 1;
     private scaleY = 1;
     private offsetX = 0;
@@ -766,6 +767,7 @@ export class Input {
     /** Java Slick2D counterpart: Input.resume(). */
     public resume(): void {
         this.paused = false;
+        this.baselineControllersOnNextPoll = true;
     }
 
     private readonly handleKeyDown = (event: KeyboardEvent): void => {
@@ -1159,6 +1161,7 @@ export class Input {
 
     private pollControllers(): void {
         const gamepads = this.getFrameGamepads();
+        const baselineOnly = this.baselineControllersOnNextPoll;
         this.seenControllers.clear();
         for (let controller = 0; controller < gamepads.length; controller++) {
             const gamepad = gamepads[controller]!;
@@ -1181,13 +1184,13 @@ export class Input {
                 up ||= vertical < -this.additionalControllerAxisThreshold;
                 down ||= vertical > this.additionalControllerAxisThreshold;
             }
-            this.updateControlState(controller, 0, left);
-            this.updateControlState(controller, 1, right);
-            this.updateControlState(controller, 2, up);
-            this.updateControlState(controller, 3, down);
+            this.updateControlState(controller, 0, left, baselineOnly);
+            this.updateControlState(controller, 1, right, baselineOnly);
+            this.updateControlState(controller, 2, up, baselineOnly);
+            this.updateControlState(controller, 3, down, baselineOnly);
             for (let index = 0; index < gamepad.buttons.length; index++) {
                 if (!Input.isStandardDpadButton(index)) {
-                    this.updateControlState(controller, 4 + index, gamepad.buttons[index]?.pressed === true);
+                    this.updateControlState(controller, 4 + index, gamepad.buttons[index]?.pressed === true, baselineOnly);
                 }
             }
         }
@@ -1201,6 +1204,7 @@ export class Input {
         }
         this.clearDisconnectedAxisCalibration();
         this.controllerStateSnapshotReady = true;
+        this.baselineControllersOnNextPoll = false;
     }
 
     private prepareLogicalControllerOwner(controller: number, gamepad: Gamepad): void {
@@ -1305,7 +1309,7 @@ export class Input {
         return this.controlDown.has(Input.controlKey(controller, control));
     }
 
-    private updateControlState(controller: number, control: number, down: boolean): void {
+    private updateControlState(controller: number, control: number, down: boolean, baselineOnly: boolean = false): void {
         const key = Input.controlKey(controller, control);
         const wasDown = this.controlDown.has(key);
         if (down === wasDown) {
@@ -1313,9 +1317,15 @@ export class Input {
         }
         if (down) {
             this.controlDown.add(key);
-            this.controlPressed.add(key);
+            if (!baselineOnly) {
+                this.controlPressed.add(key);
+            }
         } else {
             this.controlDown.delete(key);
+        }
+
+        if (baselineOnly) {
+            return;
         }
 
         this.beginEventDispatch(Input.now());
