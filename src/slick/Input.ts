@@ -218,6 +218,7 @@ export class Input {
     private readonly cachedGamepads: Gamepad[] = [];
     private gamepadsCached = false;
     private gamepadCacheGeneration = -1;
+    private gamepadEnumerationFailed = false;
     private controllerStateSnapshotReady = false;
     private readonly controllerPhysicalIndices = new Int32Array(Input.BROWSER_CONTROLLER_LIMIT).fill(-1);
     private readonly controllerPhysicalIds = new Array<string | null>(Input.BROWSER_CONTROLLER_LIMIT).fill(null);
@@ -1204,7 +1205,9 @@ export class Input {
         }
         this.clearDisconnectedAxisCalibration();
         this.controllerStateSnapshotReady = true;
-        this.baselineControllersOnNextPoll = false;
+        if (!this.gamepadEnumerationFailed) {
+            this.baselineControllersOnNextPoll = false;
+        }
     }
 
     private prepareLogicalControllerOwner(controller: number, gamepad: Gamepad): void {
@@ -1363,6 +1366,7 @@ export class Input {
 
     private refreshGamepads(): GamepadSnapshot {
         this.cachedGamepads.length = 0;
+        this.gamepadEnumerationFailed = false;
         if (typeof navigator !== "undefined" && navigator.getGamepads) {
             try {
                 const browserGamepads = navigator.getGamepads();
@@ -1372,7 +1376,8 @@ export class Input {
                     }
                 }
             } catch {
-                // Treat browser/controller enumeration failure as no connected controllers.
+                this.gamepadEnumerationFailed = true;
+                // Treat browser/controller enumeration failure as no connected controllers for this poll.
             }
         }
         this.gamepadsCached = true;
