@@ -1625,7 +1625,8 @@ export class Input {
         if (controller < 0 || controller >= Input.BROWSER_CONTROLLER_LIMIT) {
             return;
         }
-        const owner = gamepad.id || "";
+        const slotGeneration = this.browserSlotGenerations[controller]!;
+        const owner = `${gamepad.id || ""}\u0000${gamepad.mapping || ""}\u0000${slotGeneration}`;
         if (this.additionalControllerAxisOwners[controller] !== owner) {
             this.resetAdditionalControllerAxisCalibration(controller);
             this.additionalControllerAxisOwners[controller] = owner;
