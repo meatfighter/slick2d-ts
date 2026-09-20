@@ -321,6 +321,8 @@ export class Input {
         target.addEventListener("wheel", this.handleWheel as EventListener, ACTIVE_EVENT_OPTIONS);
         target.addEventListener("contextmenu", this.handleContextMenu as EventListener, ACTIVE_EVENT_OPTIONS);
         if (typeof window !== "undefined") {
+            window.addEventListener("keydown", this.handleGlobalKeyDown);
+            window.addEventListener("keyup", this.handleGlobalKeyUp);
             window.addEventListener("blur", this.handleFocusLost);
         }
         if (typeof document !== "undefined") {
@@ -375,6 +377,8 @@ export class Input {
         this.target.removeEventListener("wheel", this.handleWheel as EventListener);
         this.target.removeEventListener("contextmenu", this.handleContextMenu as EventListener);
         if (typeof window !== "undefined") {
+            window.removeEventListener("keydown", this.handleGlobalKeyDown);
+            window.removeEventListener("keyup", this.handleGlobalKeyUp);
             window.removeEventListener("blur", this.handleFocusLost);
         }
         if (typeof document !== "undefined") {
@@ -779,6 +783,23 @@ export class Input {
             this.baselineControllersOnNextPoll = true;
         }
     }
+
+    private readonly handleGlobalKeyDown = (event: KeyboardEvent): void => {
+        if (!this.paused) {
+            return;
+        }
+        const key = Input.keyCodeFromEvent(event);
+        if (key !== 0) {
+            this.suppressedKeysUntilRelease.add(key);
+        }
+    };
+
+    private readonly handleGlobalKeyUp = (event: KeyboardEvent): void => {
+        const key = Input.keyCodeFromEvent(event);
+        if (key !== 0) {
+            this.suppressedKeysUntilRelease.delete(key);
+        }
+    };
 
     private readonly handleKeyDown = (event: KeyboardEvent): void => {
         const key = Input.keyCodeFromEvent(event);
