@@ -1734,7 +1734,11 @@ export class Input {
         try {
             const browserGamepads = navigator.getGamepads();
             for (const gamepad of browserGamepads) {
-                if (Input.isUsableGamepad(gamepad)) {
+                if (
+                    Input.isUsableGamepad(gamepad) &&
+                    gamepad.index >= 0 &&
+                    gamepad.index < Input.BROWSER_CONTROLLER_LIMIT
+                ) {
                     nextGamepads.push(gamepad);
                     if (nextGamepads.length === Input.BROWSER_CONTROLLER_LIMIT) {
                         break;
