@@ -176,6 +176,7 @@ export class Input {
     private static readonly EVENT_MOUSE_WHEEL = 7;
 
     private readonly downKeys = new Set<number>();
+    private readonly suppressedKeysUntilRelease = new Set<number>();
     private readonly pressedKeys = new Set<number>();
     private readonly downMouse = new Set<number>();
     private readonly pressedMouse = new Set<number>();
@@ -762,7 +763,7 @@ export class Input {
     /** Java Slick2D counterpart: Input.pause(). */
     public pause(): void {
         this.paused = true;
-        this.clearAllInputState();
+        this.clearInputStateForBrowserSuspension();
     }
 
     /** Java Slick2D counterpart: Input.resume(). */
@@ -782,7 +783,11 @@ export class Input {
         if (this.shouldPreventDefault(event, key)) {
             event.preventDefault();
         }
-        if (this.paused || !this.shouldAcceptGameKey(event)) {
+        if (this.paused) {
+            this.suppressedKeysUntilRelease.add(key);
+            return;
+        }
+        if (!this.shouldAcceptGameKey(event) || this.suppressedKeysUntilRelease.has(key)) {
             return;
         }
         const wasDown = this.downKeys.has(key);
@@ -801,6 +806,7 @@ export class Input {
             event.preventDefault();
         }
         this.downKeys.delete(key);
+        this.suppressedKeysUntilRelease.delete(key);
         if (!this.paused && this.shouldAcceptGameKey(event)) {
             this.enqueueEvent(Input.EVENT_KEY_RELEASED, key, 0, 0, 0, event.key?.length === 1 ? event.key.charCodeAt(0) : 0, Input.eventTimestamp(event));
         }
@@ -1137,6 +1143,7 @@ export class Input {
 
     private clearAllInputState(): void {
         this.downKeys.clear();
+        this.suppressedKeysUntilRelease.clear();
         this.downMouse.clear();
         this.clearAllControllerState();
         this.clearPressedRecords();
@@ -1145,7 +1152,15 @@ export class Input {
     }
 
     private clearInputStateForBrowserSuspension(): void {
-        this.clearAllInputState();
+        for (const key of this.downKeys) {
+            this.suppressedKeysUntilRelease.add(key);
+        }
+        this.downKeys.clear();
+        this.downMouse.clear();
+        this.clearAllControllerState();
+        this.clearPressedRecords();
+        this.clearQueuedEvents();
+        this.invalidateGamepads();
         this.baselineControllersOnNextPoll = true;
     }
 
