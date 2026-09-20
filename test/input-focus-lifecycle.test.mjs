@@ -44,6 +44,27 @@ function pointerEvent(button) {
     };
 }
 
+
+
+function gamepadButton(pressed = false) {
+    return { pressed, touched: pressed, value: pressed ? 1 : 0 };
+}
+
+function gamepad(pressed = false) {
+    const buttons = Array.from({ length: 16 }, () => gamepadButton(false));
+    buttons[0] = gamepadButton(pressed);
+    return {
+        axes: [0, 0],
+        buttons,
+        connected: true,
+        id: "focus-pad",
+        index: 0,
+        mapping: "standard",
+        timestamp: 1,
+        vibrationActuator: null
+    };
+}
+
 test("blur and hidden-page lifecycle clear held browser input before focus returns", () => {
     const previousWindow = globalThis.window;
     const previousDocument = globalThis.document;
@@ -95,3 +116,97 @@ test("blur and hidden-page lifecycle clear held browser input before focus retur
         }
     }
 });
+
+test("controller held across browser blur is baselined instead of reported as a fresh press", () => {
+    const previousWindow = globalThis.window;
+    const previousDocument = globalThis.document;
+    const previousNavigator = globalThis.navigator;
+    const windowTarget = eventTarget();
+    let focused = true;
+    const documentTarget = {
+        ...eventTarget(),
+        visibilityState: "visible",
+        hasFocus: () => focused
+    };
+    let pad = gamepad(false);
+    globalThis.window = windowTarget;
+    globalThis.document = documentTarget;
+    Object.defineProperty(globalThis, "navigator", {
+        configurable: true,
+        value: { getGamepads: () => [pad] },
+        writable: true
+    });
+
+    try {
+        const target = eventTarget();
+        const input = new Input(600);
+        input.bindToElement(target);
+
+        input.poll(800, 600);
+        assert.equal(input.isControlPressed(4, 0), false);
+
+        focused = false;
+        windowTarget.dispatch("blur");
+        pad = gamepad(true);
+
+        focused = true;
+        input.poll(800, 600);
+        assert.equal(input.isButtonPressed(0, 0), true);
+        assert.equal(input.isControlPressed(4, 0), false, "held button from unfocused time must only establish the resumed baseline");
+
+        pad = gamepad(false);
+        input.poll(800, 600);
+        pad = gamepad(true);
+        input.poll(800, 600);
+        assert.equal(input.isControlPressed(4, 0), true, "a fresh press after release must still be reported");
+
+        input.unbind();
+    } finally {
+        if (previousWindow === undefined) delete globalThis.window;
+        else globalThis.window = previousWindow;
+        if (previousDocument === undefined) delete globalThis.document;
+        else globalThis.document = previousDocument;
+        if (previousNavigator === undefined) delete globalThis.navigator;
+        else Object.defineProperty(globalThis, "navigator", { configurable: true, value: previousNavigator, writable: true });
+    }
+});
+
+test("polling while unfocused preserves controller baseline until focus returns", () => {
+    const previousDocument = globalThis.document;
+    const previousNavigator = globalThis.navigator;
+    let focused = false;
+    const documentTarget = {
+        visibilityState: "visible",
+        hasFocus: () => focused
+    };
+    let pad = gamepad(true);
+    globalThis.document = documentTarget;
+    Object.defineProperty(globalThis, "navigator", {
+        configurable: true,
+        value: { getGamepads: () => [pad] },
+        writable: true
+    });
+
+    try {
+        const input = new Input(600);
+
+        input.poll(800, 600);
+        focused = true;
+        input.poll(800, 600);
+
+        assert.equal(input.isButtonPressed(0, 0), true);
+        assert.equal(input.isControlPressed(4, 0), false);
+
+        pad = gamepad(false);
+        input.poll(800, 600);
+        pad = gamepad(true);
+        input.poll(800, 600);
+        assert.equal(input.isControlPressed(4, 0), true);
+    } finally {
+        if (previousDocument === undefined) delete globalThis.document;
+        else globalThis.document = previousDocument;
+        if (previousNavigator === undefined) delete globalThis.navigator;
+        else Object.defineProperty(globalThis, "navigator", { configurable: true, value: previousNavigator, writable: true });
+    }
+});
+
