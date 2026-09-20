@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { afterEach, test } from "node:test";
 import { Input } from "../dist/index.js";
 
@@ -350,6 +351,15 @@ test("browser gamepad enumeration failure is contained as no connected controlle
     assert.equal(input.getControllerCount(), 0);
     assert.equal(input.isControllerLeft(Input.ANY_CONTROLLER), false);
     assert.equal(input.isButtonPressed(0, Input.ANY_CONTROLLER), false);
+});
+
+test("controller sampling reuses scratch storage instead of allocating per frame", () => {
+    const source = readFileSync(new URL("../src/slick/Input.ts", import.meta.url), "utf8");
+    assert.match(source, /private readonly pendingGamepads: Gamepad\[\] = \[\]/);
+    assert.match(source, /Input\.copyArray\(this\.pendingGamepads, this\.cachedGamepads\)/);
+    assert.doesNotMatch(source, /const nextGamepads: Gamepad\[\] = \[\]/);
+    assert.doesNotMatch(source, /const owner = `\$\{gamepad\.id/);
+    assert.match(source, /additionalControllerAxisOwnerSlotGenerations/);
 });
 
 test("browser controller enumeration is capped at the public 16-controller limit", () => {
