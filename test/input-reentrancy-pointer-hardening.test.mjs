@@ -403,6 +403,81 @@ test("outside-window release clears the pointer owner without preventing unrelat
     }
 });
 
+test("synchronous lostpointercapture during release cannot reenter pointer cancellation", () => {
+    const previousElement = globalThis.Element;
+    class CapturingElement {
+        constructor() {
+            this.listeners = new Map();
+            this.captured = new Set();
+            this.releaseCalls = 0;
+        }
+        addEventListener(type, listener) {
+            const list = this.listeners.get(type) ?? [];
+            list.push(listener);
+            this.listeners.set(type, list);
+        }
+        removeEventListener(type, listener) {
+            const list = this.listeners.get(type) ?? [];
+            this.listeners.set(type, list.filter((candidate) => candidate !== listener));
+        }
+        dispatch(type, event = {}) {
+            event.currentTarget = this;
+            for (const listener of [...(this.listeners.get(type) ?? [])]) listener(event);
+        }
+        setPointerCapture(pointerId) {
+            this.captured.add(pointerId);
+        }
+        hasPointerCapture(pointerId) {
+            return this.captured.has(pointerId);
+        }
+        releasePointerCapture(pointerId) {
+            this.releaseCalls++;
+            this.captured.delete(pointerId);
+            this.dispatch("lostpointercapture", pointerEvent(pointerId));
+        }
+        getBoundingClientRect() {
+            return { left: 0, top: 0 };
+        }
+    }
+    globalThis.Element = CapturingElement;
+    try {
+        const target = new CapturingElement();
+        const input = new Input(600);
+        const events = [];
+        input.bindToElement(target);
+        input.addMouseListener(
+            inputListener({
+                mousePressed(button) {
+                    events.push(["pressed", button]);
+                },
+                mouseReleased(button) {
+                    events.push(["released", button]);
+                },
+                mouseClicked(button) {
+                    events.push(["clicked", button]);
+                }
+            })
+        );
+
+        target.dispatch("pointerdown", pointerEvent(11, 0, 10, 10));
+        input.poll(800, 600);
+        target.dispatch("pointerup", pointerEvent(11, 0, 10, 10));
+        input.poll(800, 600);
+
+        assert.equal(target.releaseCalls, 1);
+        assert.equal(input.isMouseButtonDown(Input.MOUSE_LEFT_BUTTON), false);
+        assert.deepEqual(events, [
+            ["pressed", Input.MOUSE_LEFT_BUTTON],
+            ["released", Input.MOUSE_LEFT_BUTTON],
+            ["clicked", Input.MOUSE_LEFT_BUTTON]
+        ]);
+        input.unbind();
+    } finally {
+        if (previousElement === undefined) delete globalThis.Element;
+        else globalThis.Element = previousElement;
+    }
+});
+
 test("single-primary-pointer policy ignores a second simultaneous pointer", () => {
     const target = eventTarget();
     const input = new Input(600);
