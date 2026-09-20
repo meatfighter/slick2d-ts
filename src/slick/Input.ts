@@ -174,6 +174,8 @@ export class Input {
     private static readonly BROWSER_AXIS_LIMIT = 16;
     /** Browser extension: maximum physical buttons sampled from one Gamepad. */
     public static readonly BROWSER_CONTROLLER_BUTTON_LIMIT = 64;
+    /** Browser extension: exclusive upper bound for Slick key codes reachable from browser KeyboardEvent.code. */
+    public static readonly BROWSER_KEY_CODE_LIMIT = 256;
 
     private static controllersDisabled = false;
     private static gamepadCacheGeneration = 0;
