@@ -364,6 +364,19 @@ test("browser controller enumeration is capped at the public 16-controller limit
     assert.equal(input.getControllerConnectionGeneration(Input.BROWSER_CONTROLLER_LIMIT), 0);
 });
 
+test("sparse physical gamepad slots outside the tracked range are ignored", () => {
+    const sparse = Array.from({ length: 18 }, () => null);
+    sparse[0] = gamepad({ id: "in-range", index: 0 });
+    sparse[17] = gamepad({ id: "out-of-range", index: 17 });
+    installGamepads(sparse);
+    const input = new Input(600);
+
+    input.poll(800, 600);
+
+    assert.equal(input.getControllerCount(), 1);
+    assert.equal(input.getControllerConnectionGeneration(0) > 0, true);
+});
+
 test("controller helpers lazily refresh once before the first poll", () => {
     const firstPad = gamepad({ axes: [0, -1] });
     firstPad.buttons[2] = button(true);
