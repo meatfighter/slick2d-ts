@@ -1736,6 +1736,9 @@ export class Input {
             for (const gamepad of browserGamepads) {
                 if (Input.isUsableGamepad(gamepad)) {
                     nextGamepads.push(gamepad);
+                    if (nextGamepads.length === Input.BROWSER_CONTROLLER_LIMIT) {
+                        break;
+                    }
                 }
             }
         } catch {
