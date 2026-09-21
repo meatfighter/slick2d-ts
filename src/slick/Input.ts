@@ -236,7 +236,6 @@ export class Input {
     private readonly pendingGamepads: Gamepad[] = [];
     private gamepadsCached = false;
     private gamepadCacheGeneration = -1;
-    private gamepadEnumerationFailed = false;
     private controllerStateSnapshotReady = false;
     private readonly controllerPhysicalIndices = new Int32Array(Input.BROWSER_CONTROLLER_LIMIT).fill(-1);
     private readonly controllerPhysicalIds = new Array<string | null>(Input.BROWSER_CONTROLLER_LIMIT).fill(null);
@@ -1751,7 +1750,6 @@ export class Input {
     }
 
     private refreshGamepads(): GamepadSnapshot {
-        this.gamepadEnumerationFailed = false;
         const available = typeof navigator !== "undefined" && typeof navigator.getGamepads === "function";
         if (!available) {
             this.cachedGamepads.length = 0;
@@ -1775,7 +1773,6 @@ export class Input {
             }
         } catch {
             this.pendingGamepads.length = 0;
-            this.gamepadEnumerationFailed = true;
             this.baselineControllersOnNextPoll = true;
             this.gamepadsCached = true;
             this.gamepadCacheGeneration = Input.gamepadCacheGeneration;
