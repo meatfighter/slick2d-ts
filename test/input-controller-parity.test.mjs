@@ -104,7 +104,7 @@ test("controller directions use browser POV hat axis values", () => {
     ];
 
     for (const [hatValue, expected] of cases) {
-        const pad = gamepad({ axes: [0, 0, 0, 0, 0, 0, 0, 0, 0, hatValue] });
+        const pad = gamepad({ axes: [0, 0, 0, 0, 0, 0, 0, 0, 0, hatValue], mapping: "" });
         installGamepads([pad]);
         const input = new Input(600);
 
@@ -114,7 +114,7 @@ test("controller directions use browser POV hat axis values", () => {
         assert.equal(input.isControllerLeft(0), expected.left, `left for ${hatValue}`);
     }
 
-    const neutralPad = gamepad({ axes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 3.2857142857142856] });
+    const neutralPad = gamepad({ axes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 3.2857142857142856], mapping: "" });
     installGamepads([neutralPad]);
     const input = new Input(600);
 
@@ -165,6 +165,17 @@ test("redundant resume while already running does not suppress a fresh controlle
 
     assert.equal(input.isControlPressed(4, 0), true);
     assert.deepEqual(events, [["buttonPressed", 0, 1]]);
+});
+
+test("standard mapping ignores a nonstandard POV-hat axis alias", () => {
+    const pad = gamepad({ axes: [0, 0, 0, 0, 0, 0, 0, 0, 0, -1] });
+    installGamepads([pad]);
+    const input = new Input(600);
+
+    assert.equal(input.isControllerUp(0), false);
+    assert.equal(input.isControllerRight(0), false);
+    assert.equal(input.isControllerDown(0), false);
+    assert.equal(input.isControllerLeft(0), false);
 });
 
 test("resume baselines held controller state without synthesizing a pressed edge", () => {
