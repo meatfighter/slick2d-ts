@@ -7,6 +7,13 @@ export interface ControllerDirectionAxisPair {
     readonly horizontalAxis: number;
     readonly verticalAxis: number;
 }
+export interface ControllerSampleStatus {
+    readonly sequence: number;
+    readonly available: boolean;
+    readonly valid: boolean;
+    readonly topologyGeneration: number;
+    readonly baselineOnly: boolean;
+}
 /**
  * Java Slick2D counterpart: org.newdawn.slick.Input.
  *
@@ -151,6 +158,10 @@ export declare class Input {
     private static readonly POV_HAT_LEFT;
     private static readonly BROWSER_CONTROLLER_LIMIT;
     private static readonly BROWSER_AXIS_LIMIT;
+    /** Browser extension: maximum physical buttons sampled from one Gamepad. */
+    static readonly BROWSER_CONTROLLER_BUTTON_LIMIT = 64;
+    /** Browser extension: exclusive upper bound for Slick key codes reachable from browser KeyboardEvent.code. */
+    static readonly BROWSER_KEY_CODE_LIMIT = 256;
     private static controllersDisabled;
     private static gamepadCacheGeneration;
     private static readonly INITIAL_EVENT_CAPACITY;
@@ -162,6 +173,7 @@ export declare class Input {
     private static readonly EVENT_MOUSE_DRAGGED;
     private static readonly EVENT_MOUSE_WHEEL;
     private readonly downKeys;
+    private readonly suppressedKeysUntilRelease;
     private readonly pressedKeys;
     private readonly downMouse;
     private readonly pressedMouse;
@@ -179,6 +191,7 @@ export declare class Input {
     private readonly startedListeners;
     private target;
     private paused;
+    private baselineControllersOnNextPoll;
     private scaleX;
     private scaleY;
     private offsetX;
@@ -196,19 +209,32 @@ export declare class Input {
     private lastClickTime;
     private readonly mousePressX;
     private readonly mousePressY;
+    private readonly cancelledMouseReleases;
+    private activePointerId;
+    private capturedPointerTarget;
     private preventDefaultElement;
     private preventDefaultTouchAction;
     private browserInputCapture;
     private browserInputCaptureConfigured;
     private readonly cachedGamepads;
+    private readonly pendingGamepads;
     private gamepadsCached;
     private gamepadCacheGeneration;
     private controllerStateSnapshotReady;
+    private controllerPollCompleted;
     private readonly controllerPhysicalIndices;
     private readonly controllerPhysicalIds;
+    private readonly controllerPhysicalSlotGenerations;
+    private readonly controllerMappings;
+    private readonly controllerConnectionGenerations;
+    private readonly browserSlotGenerations;
+    private nextControllerConnectionGeneration;
+    private readonly controllerSampleStatus;
     private additionalControllerDirectionAxes;
     private readonly additionalControllerAxisBaselines;
-    private readonly additionalControllerAxisOwners;
+    private readonly additionalControllerAxisOwnerIds;
+    private readonly additionalControllerAxisOwnerMappings;
+    private readonly additionalControllerAxisOwnerSlotGenerations;
     private additionalControllerAxisThreshold;
     private additionalControllerAxisRecenterThreshold;
     private eventTypes;
@@ -223,6 +249,8 @@ export declare class Input {
     private dispatchingEvent;
     private eventConsumed;
     private dispatchedEventTime;
+    private dispatchGeneration;
+    private pollInProgress;
     /**
      * Java Slick2D counterpart: Input.disableControllers().
      *
@@ -231,6 +259,8 @@ export declare class Input {
     static disableControllers(): void;
     /** Java Slick2D counterpart: Input.getKeyName(int). */
     static getKeyName(code: number): string;
+    /** Browser extension: true only for Slick key codes this adapter can emit from KeyboardEvent.code. */
+    static isBrowserKeyCodeSupported(code: number): boolean;
     /** Java Slick2D counterpart: Input(int height). */
     constructor(height: number);
     /**
@@ -313,6 +343,19 @@ export declare class Input {
     isButton3Pressed(controller: number): boolean;
     /** Java Slick2D counterpart: Input.isButtonDown(int, int). */
     isButtonDown(index: number, controller: number): boolean;
+    /** Browser controller helper: status for the most recent Gamepad API sample. */
+    getControllerSampleStatus(): ControllerSampleStatus;
+    /** Browser controller helper: runtime generation of the device owning a dense controller slot. */
+    getControllerConnectionGeneration(controller: number): number;
+    /** Browser controller helper: current Gamepad.mapping value for a dense controller slot. */
+    getControllerMapping(controller: number): string;
+    /** Browser controller helper: true when a physical button is a standardized D-pad control. */
+    isControllerButtonDirectional(index: number, controller: number): boolean;
+    /**
+     * Browser lifecycle helper: samples controllers and establishes their held-state baseline
+     * without dispatching application callbacks. Use before resumed simulation can consume raw levels.
+     */
+    sampleControllersForBaseline(): ControllerSampleStatus;
     /** Java Slick2D counterpart: Input.getControllerCount(). */
     getControllerCount(): number;
     /** Browser controller helper: returns the physical button count for a dense logical controller. */
@@ -369,15 +412,23 @@ export declare class Input {
     pause(): void;
     /** Java Slick2D counterpart: Input.resume(). */
     resume(): void;
+    private readonly handleGlobalKeyDown;
+    private readonly handleGlobalKeyUp;
     private readonly handleKeyDown;
     private readonly handleKeyUp;
     private readonly handlePointerDown;
     private readonly handlePointerUp;
+    private readonly handleGlobalPointerUp;
+    private readonly handlePointerCancel;
+    private readonly handleGlobalPointerCancel;
+    private readonly handleLostPointerCapture;
     private readonly handlePointerMove;
     private readonly handleWheel;
     private readonly handleContextMenu;
     private readonly handleFocusLost;
     private readonly handleVisibilityChange;
+    private readonly handleGamepadTopologyEvent;
+    private isLifecycleListenerRegistered;
     private snapshotListeners;
     private appendUniqueLifecycleListeners;
     private dispatchQueuedEvents;
@@ -396,7 +447,14 @@ export declare class Input {
     private clearQueuedEvents;
     private clearPressedRecords;
     private clearAllInputState;
+    private clearInputStateForBrowserSuspension;
     private clearAllControllerState;
+    private releasePointerButton;
+    private cancelPointer;
+    private capturePointer;
+    private releaseCapturedPointer;
+    private resetPointerState;
+    private clearClickHistory;
     private updateMouse;
     private pollControllers;
     private prepareLogicalControllerOwner;
@@ -410,11 +468,15 @@ export declare class Input {
     private updateControlState;
     private anyController;
     private refreshGamepads;
+    private publishControllerSample;
+    private isDispatchCurrent;
+    private isControllerDispatchCurrent;
     private getFrameGamepads;
     private invalidateGamepads;
     private removeFrom;
     private static copyArray;
     private static keyCodeFromEvent;
+    private static pointerIdFromEvent;
     private static mouseButtonFromEvent;
     private static isUsableGamepad;
     private static readGamepadAxis;
@@ -439,6 +501,7 @@ export declare class Input {
     private restorePreventDefaultElementStyle;
     private static isInteractiveElement;
     private static readonly eventCodeToKey;
+    private static readonly browserKeyCodes;
     private static readonly keyNames;
     private static readonly defaultPreventedKeys;
 }
