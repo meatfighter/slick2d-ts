@@ -252,6 +252,7 @@ export class Input {
         topologyGeneration: 0,
         baselineOnly: true
     };
+
     private additionalControllerDirectionAxes: number[] = [];
     private readonly additionalControllerAxisBaselines = new Float64Array(Input.BROWSER_CONTROLLER_LIMIT * Input.BROWSER_AXIS_LIMIT);
     private readonly additionalControllerAxisOwnerIds = new Array<string | null>(Input.BROWSER_CONTROLLER_LIMIT).fill(null);
