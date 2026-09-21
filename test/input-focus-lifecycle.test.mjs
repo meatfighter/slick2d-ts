@@ -315,4 +315,3 @@ test("polling while unfocused preserves controller baseline until focus returns"
         else Object.defineProperty(globalThis, "navigator", { configurable: true, value: previousNavigator, writable: true });
     }
 });
-

@@ -489,7 +489,10 @@ test("synchronous lostpointercapture during release cannot reenter pointer cance
         }
         removeEventListener(type, listener) {
             const list = this.listeners.get(type) ?? [];
-            this.listeners.set(type, list.filter((candidate) => candidate !== listener));
+            this.listeners.set(
+                type,
+                list.filter((candidate) => candidate !== listener)
+            );
         }
         dispatch(type, event = {}) {
             event.currentTarget = this;

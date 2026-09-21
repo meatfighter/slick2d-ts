@@ -529,7 +529,6 @@ test("disabled controllers do not report stale cached directions", () => {
     assert.equal(input.isControllerLeft(Input.ANY_CONTROLLER), false);
 });
 
-
 test("controller sample status distinguishes enumeration uncertainty from a valid empty sample", () => {
     const pad = gamepad();
     let mode = "pad";

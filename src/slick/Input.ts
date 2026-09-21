@@ -1573,8 +1573,7 @@ export class Input {
         const physicalIndex = gamepad.index;
         const id = gamepad.id || "";
         const mapping = gamepad.mapping || "";
-        const slotGeneration =
-            physicalIndex >= 0 && physicalIndex < this.browserSlotGenerations.length ? this.browserSlotGenerations[physicalIndex]! : 0;
+        const slotGeneration = physicalIndex >= 0 && physicalIndex < this.browserSlotGenerations.length ? this.browserSlotGenerations[physicalIndex]! : 0;
         if (
             this.controllerPhysicalIndices[controller] !== physicalIndex ||
             this.controllerPhysicalIds[controller] !== id ||
@@ -1695,13 +1694,7 @@ export class Input {
         return this.controlDown.has(Input.controlKey(controller, control));
     }
 
-    private updateControlState(
-        controller: number,
-        control: number,
-        down: boolean,
-        baselineOnly: boolean = false,
-        generation: number | null = null
-    ): boolean {
+    private updateControlState(controller: number, control: number, down: boolean, baselineOnly: boolean = false, generation: number | null = null): boolean {
         const key = Input.controlKey(controller, control);
         const wasDown = this.controlDown.has(key);
         if (down === wasDown) {
@@ -1772,11 +1765,7 @@ export class Input {
         try {
             const browserGamepads = navigator.getGamepads();
             for (const gamepad of browserGamepads) {
-                if (
-                    Input.isUsableGamepad(gamepad) &&
-                    gamepad.index >= 0 &&
-                    gamepad.index < Input.BROWSER_CONTROLLER_LIMIT
-                ) {
+                if (Input.isUsableGamepad(gamepad) && gamepad.index >= 0 && gamepad.index < Input.BROWSER_CONTROLLER_LIMIT) {
                     this.pendingGamepads.push(gamepad);
                     if (this.pendingGamepads.length === Input.BROWSER_CONTROLLER_LIMIT) {
                         break;
