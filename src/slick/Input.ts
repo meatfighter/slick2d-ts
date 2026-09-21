@@ -237,6 +237,7 @@ export class Input {
     private gamepadsCached = false;
     private gamepadCacheGeneration = -1;
     private controllerStateSnapshotReady = false;
+    private controllerPollCompleted = false;
     private readonly controllerPhysicalIndices = new Int32Array(Input.BROWSER_CONTROLLER_LIMIT).fill(-1);
     private readonly controllerPhysicalIds = new Array<string | null>(Input.BROWSER_CONTROLLER_LIMIT).fill(null);
     private readonly controllerPhysicalSlotGenerations = new Uint32Array(Input.BROWSER_CONTROLLER_LIMIT);
@@ -1398,6 +1399,7 @@ export class Input {
         this.controllerMappings.fill("");
         this.controllerConnectionGenerations.fill(0);
         this.controllerStateSnapshotReady = false;
+        this.controllerPollCompleted = false;
     }
 
     private releasePointerButton(event: PointerEvent, preventDefault: boolean): void {
@@ -1446,12 +1448,15 @@ export class Input {
             return;
         }
         const eventTarget = event.target;
+        const currentTarget = event.currentTarget;
         const target =
             eventTarget instanceof Element && typeof eventTarget.setPointerCapture === "function"
                 ? eventTarget
-                : this.preventDefaultElement instanceof Element && typeof this.preventDefaultElement.setPointerCapture === "function"
-                  ? this.preventDefaultElement
-                  : null;
+                : currentTarget instanceof Element && typeof currentTarget.setPointerCapture === "function"
+                  ? currentTarget
+                  : this.preventDefaultElement instanceof Element && typeof this.preventDefaultElement.setPointerCapture === "function"
+                    ? this.preventDefaultElement
+                    : null;
         if (target === null) {
             return;
         }
@@ -1507,6 +1512,7 @@ export class Input {
     private pollControllers(forceBaseline: boolean = false, generation: number | null = null): boolean {
         const gamepads = this.getFrameGamepads();
         const sampleBaselineOnly = forceBaseline || this.baselineControllersOnNextPoll;
+        const baselineChangedOwners = this.controllerPollCompleted;
         let topologyChanged = false;
         this.seenControllers.clear();
         for (let controller = 0; controller < gamepads.length; controller++) {
@@ -1514,7 +1520,7 @@ export class Input {
             const gamepad = gamepads[controller]!;
             const ownerChanged = this.prepareLogicalControllerOwner(controller, gamepad);
             topologyChanged ||= ownerChanged;
-            const baselineOnly = sampleBaselineOnly || ownerChanged;
+            const baselineOnly = sampleBaselineOnly || (ownerChanged && baselineChangedOwners);
             this.seenControllers.add(controller);
             if (this.additionalControllerDirectionAxes.length > 0) {
                 this.prepareAdditionalControllerAxisCalibration(gamepad);
@@ -1561,6 +1567,7 @@ export class Input {
         }
         this.clearDisconnectedAxisCalibration();
         this.controllerStateSnapshotReady = true;
+        this.controllerPollCompleted = true;
         this.controllerSampleStatus.baselineOnly = sampleBaselineOnly;
         this.baselineControllersOnNextPoll = false;
         return true;
