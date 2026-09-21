@@ -403,6 +403,77 @@ test("outside-window release clears the pointer owner without preventing unrelat
     }
 });
 
+test("window-bound input captures the accepted canvas event target", () => {
+    const previousWindow = globalThis.window;
+    const previousElement = globalThis.Element;
+    const previousNode = globalThis.Node;
+
+    class CanvasElement {
+        constructor() {
+            this.style = { touchAction: "" };
+            this.tagName = "CANVAS";
+            this.isContentEditable = false;
+            this.captured = new Set();
+            this.captureCalls = 0;
+            this.releaseCalls = 0;
+        }
+        contains(node) {
+            return node === this;
+        }
+        setPointerCapture(pointerId) {
+            this.captureCalls++;
+            this.captured.add(pointerId);
+        }
+        hasPointerCapture(pointerId) {
+            return this.captured.has(pointerId);
+        }
+        releasePointerCapture(pointerId) {
+            this.releaseCalls++;
+            this.captured.delete(pointerId);
+        }
+        getBoundingClientRect() {
+            return { left: 0, top: 0 };
+        }
+    }
+
+    const windowTarget = eventTarget();
+    globalThis.window = windowTarget;
+    globalThis.Element = CanvasElement;
+    globalThis.Node = CanvasElement;
+    try {
+        const canvas = new CanvasElement();
+        const input = new Input(600);
+        input.bindToElement(windowTarget);
+        input.setPreventDefaultElement(canvas);
+
+        const down = pointerEvent(21, 0, 20, 30);
+        down.target = canvas;
+        windowTarget.dispatch("pointerdown", down);
+        input.poll(800, 600);
+
+        assert.equal(canvas.captureCalls, 1);
+        assert.equal(canvas.captured.has(21), true);
+        assert.equal(input.isMouseButtonDown(Input.MOUSE_LEFT_BUTTON), true);
+
+        const up = pointerEvent(21, 0, 20, 30);
+        up.target = canvas;
+        windowTarget.dispatch("pointerup", up);
+        input.poll(800, 600);
+
+        assert.equal(canvas.releaseCalls, 1);
+        assert.equal(canvas.captured.has(21), false);
+        assert.equal(input.isMouseButtonDown(Input.MOUSE_LEFT_BUTTON), false);
+        input.unbind();
+    } finally {
+        if (previousWindow === undefined) delete globalThis.window;
+        else globalThis.window = previousWindow;
+        if (previousElement === undefined) delete globalThis.Element;
+        else globalThis.Element = previousElement;
+        if (previousNode === undefined) delete globalThis.Node;
+        else globalThis.Node = previousNode;
+    }
+});
+
 test("synchronous lostpointercapture during release cannot reenter pointer cancellation", () => {
     const previousElement = globalThis.Element;
     class CapturingElement {
