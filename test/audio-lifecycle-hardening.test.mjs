@@ -371,3 +371,54 @@ test("AL.destroy clears pending static Music end state without listener callback
 
     assert.deepEqual(events, []);
 });
+
+for (const completion of ["callback", "promise", "rejection"]) {
+    test(`native decode accounting survives waiter cancellation until ${completion} settlement`, async () => {
+        installAudioGlobals();
+        const store = SoundStore.get();
+        store.enableExplicitPlaybackGenerations();
+        registerTone();
+        let finish;
+        let started;
+        const decoding = new Promise((resolve) => {
+            started = resolve;
+        });
+        Object.defineProperty(globalThis, "OfflineAudioContext", {
+            configurable: true,
+            value: class {
+                decodeAudioData(_bytes, resolve, reject) {
+                    started();
+                    if (completion === "callback") {
+                        finish = () => resolve(new FakeAudioBuffer());
+                        return undefined;
+                    }
+                    return new Promise((ok, fail) => {
+                        finish = () => (completion === "rejection" ? fail(new Error("decode failed")) : ok(new FakeAudioBuffer()));
+                    });
+                }
+            }
+        });
+        const controller = new AbortController();
+        try {
+            const loading = store.loadAudioBuffer("tone.ogg", { signal: controller.signal });
+            await decoding;
+            assert.equal(SoundStore.hasPendingNativeAudioDecodes(), true);
+            controller.abort();
+            await assert.rejects(loading, (error) => error.kind === "abort");
+            let settled = false;
+            const barrier = SoundStore.waitForNativeAudioDecodes().then(() => {
+                settled = true;
+            });
+            await settleAudioStart();
+            assert.equal(settled, false);
+            assert.equal(SoundStore.hasPendingNativeAudioDecodes(), true);
+            finish();
+            await barrier;
+            assert.equal(SoundStore.hasPendingNativeAudioDecodes(), false);
+        } finally {
+            finish?.();
+            await SoundStore.waitForNativeAudioDecodes();
+            delete globalThis.OfflineAudioContext;
+        }
+    });
+}

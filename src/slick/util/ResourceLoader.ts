@@ -441,6 +441,11 @@ export class ResourceLoader {
                 if (response.ok) {
                     return response;
                 }
+                try {
+                    void response.body?.cancel().catch(() => undefined);
+                } catch {
+                    // Body cleanup must not replace the HTTP failure or delay retry.
+                }
                 failure = new ResourceLoadException(`Failed to load resource ${ref}: HTTP ${response.status}`, {
                     ref,
                     url: url.href,

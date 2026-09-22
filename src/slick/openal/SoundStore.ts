@@ -55,6 +55,18 @@ export type PlaybackDiagnostics = Readonly<{
 /** Page-lifetime assets/preferences plus one explicitly owned playback generation. */
 export class SoundStore {
     private static readonly instance = new SoundStore();
+    private static readonly pendingNativeDecodes = new Set<Promise<AudioBuffer>>();
+
+    public static hasPendingNativeAudioDecodes(): boolean {
+        return SoundStore.pendingNativeDecodes.size !== 0;
+    }
+
+    /** Actual native settlement; canceling an exposed waiter does not stop a decoder. */
+    public static async waitForNativeAudioDecodes(): Promise<void> {
+        while (SoundStore.pendingNativeDecodes.size !== 0) {
+            await Promise.allSettled(Array.from(SoundStore.pendingNativeDecodes));
+        }
+    }
     private deferredLoading = false;
     private inited = false;
     private soundWorksFlag = false;
@@ -1041,7 +1053,7 @@ export class SoundStore {
     }
 
     private static decodeAudioData(context: BaseAudioContext, bytes: ArrayBuffer): Promise<AudioBuffer> {
-        return new Promise<AudioBuffer>((resolve, reject) => {
+        const pending = new Promise<AudioBuffer>((resolve, reject) => {
             try {
                 const operation = context.decodeAudioData(bytes, resolve, reject as DecodeErrorCallback);
                 if (operation && typeof operation.then === "function") {
@@ -1051,6 +1063,12 @@ export class SoundStore {
                 reject(error);
             }
         });
+        SoundStore.pendingNativeDecodes.add(pending);
+        const settled = (): void => {
+            SoundStore.pendingNativeDecodes.delete(pending);
+        };
+        void pending.then(settled, settled);
+        return pending;
     }
 
     private static throwIfAborted(signal: AbortSignal | undefined, ref: string): void {

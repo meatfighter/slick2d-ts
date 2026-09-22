@@ -5,6 +5,16 @@ import { Log } from "../util/Log.js";
 /** Page-lifetime assets/preferences plus one explicitly owned playback generation. */
 export class SoundStore {
     static instance = new SoundStore();
+    static pendingNativeDecodes = new Set();
+    static hasPendingNativeAudioDecodes() {
+        return SoundStore.pendingNativeDecodes.size !== 0;
+    }
+    /** Actual native settlement; canceling an exposed waiter does not stop a decoder. */
+    static async waitForNativeAudioDecodes() {
+        while (SoundStore.pendingNativeDecodes.size !== 0) {
+            await Promise.allSettled(Array.from(SoundStore.pendingNativeDecodes));
+        }
+    }
     deferredLoading = false;
     inited = false;
     soundWorksFlag = false;
@@ -896,7 +906,7 @@ export class SoundStore {
         });
     }
     static decodeAudioData(context, bytes) {
-        return new Promise((resolve, reject) => {
+        const pending = new Promise((resolve, reject) => {
             try {
                 const operation = context.decodeAudioData(bytes, resolve, reject);
                 if (operation && typeof operation.then === "function") {
@@ -907,6 +917,12 @@ export class SoundStore {
                 reject(error);
             }
         });
+        SoundStore.pendingNativeDecodes.add(pending);
+        const settled = () => {
+            SoundStore.pendingNativeDecodes.delete(pending);
+        };
+        void pending.then(settled, settled);
+        return pending;
     }
     static throwIfAborted(signal, ref) {
         if (signal?.aborted) {

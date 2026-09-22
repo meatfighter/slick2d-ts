@@ -48,6 +48,10 @@ export type PlaybackDiagnostics = Readonly<{
 /** Page-lifetime assets/preferences plus one explicitly owned playback generation. */
 export declare class SoundStore {
     private static readonly instance;
+    private static readonly pendingNativeDecodes;
+    static hasPendingNativeAudioDecodes(): boolean;
+    /** Actual native settlement; canceling an exposed waiter does not stop a decoder. */
+    static waitForNativeAudioDecodes(): Promise<void>;
     private deferredLoading;
     private inited;
     private soundWorksFlag;

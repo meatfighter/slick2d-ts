@@ -79,3 +79,30 @@ test("audio preload concurrency bounds simultaneous decodes", async () => {
         store.preloadAudioBuffer = originalPreloadAudioBuffer;
     }
 });
+
+for (const cleanup of ["pending", "rejected", "throwing"]) {
+    test(`HTTP failure cancels unused body without waiting for ${cleanup} cleanup`, async () => {
+        ResourceLoader.removeAllResourceLocations();
+        ResourceLoader.addResourceLocation("https://example.test/");
+        ResourceLoader.setRetryOptions(1, 0);
+        let calls = 0;
+        let canceled = 0;
+        globalThis.fetch = async () => {
+            if (++calls === 2) return new Response(new Uint8Array([7]));
+            return {
+                ok: false,
+                status: 503,
+                body: {
+                    cancel() {
+                        canceled++;
+                        if (cleanup === "throwing") throw new Error("cleanup failed");
+                        return cleanup === "pending" ? new Promise(() => {}) : Promise.reject(new Error("cleanup failed"));
+                    }
+                }
+            };
+        };
+        assert.deepEqual(new Uint8Array(await ResourceLoader.loadResource("retry.bin")), new Uint8Array([7]));
+        assert.equal(canceled, 1);
+        assert.equal(calls, 2);
+    });
+}
