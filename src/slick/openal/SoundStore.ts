@@ -67,6 +67,7 @@ export class SoundStore {
             await Promise.allSettled(Array.from(SoundStore.pendingNativeDecodes));
         }
     }
+
     private deferredLoading = false;
     private inited = false;
     private soundWorksFlag = false;
