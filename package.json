@@ -1,6 +1,6 @@
 {
     "name": "slick2d-ts",
-    "version": "1.7.3",
+    "version": "1.7.4",
     "description": "A TypeScript/WebGL parity layer for selected Slick2D APIs used by Java game ports.",
     "license": "BSD-3-Clause",
     "type": "module",
@@ -44,19 +44,23 @@
         "test": "npm run build && node --import ./test/support/test-environment.mjs --test test/*.mjs",
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "check:dist": "node scripts/check-dist-clean.mjs",
-        "verify": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run check:dist",
+        "verify": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run check:dist && npm run verify:dependencies",
         "qualify": "node scripts/assert-clean-git.mjs && npm run verify && npm run verify:browser && node scripts/assert-clean-git.mjs",
         "clean": "node scripts/clean-dist.mjs",
         "test:browser": "node scripts/run-browser-tests.mjs",
         "verify:browser": "npm run build && npm run test:browser",
-        "release:archive": "node scripts/archive-release.mjs"
+        "release:archive": "node scripts/archive-release.mjs",
+        "verify:dependencies": "npm audit --audit-level=high"
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
         "@stylistic/eslint-plugin": "^5.10.0",
-        "eslint": "^10.10.0",
-        "prettier": "^3.9.8",
-        "typescript": "^6.0.3",
-        "typescript-eslint": "^8.70.0"
+        "eslint": "^10.11.0",
+        "prettier": "^3.9.9",
+        "typescript": "~6.0.3",
+        "typescript-eslint": "^8.71.0"
+    },
+    "engines": {
+        "node": ">=24.0.0"
     }
 }

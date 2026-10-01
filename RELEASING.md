@@ -57,3 +57,7 @@ The game repositories consume `slick2d-ts` through immutable commit archives. Af
 4. create an annotated engine tag only on the exact qualified commit when the release is ready.
 
 Never move an existing release tag. Creating a build, archive, or tag does not deploy or repin a game automatically.
+
+## Dependency maintenance and artifact freeze
+
+Use Node.js 24 or newer and npm's committed lockfile. Routine dependencies use compatible ranges; TypeScript stays on 6.0.x while the selected parser supports versions below 6.1. Review compiler and Node-typing major changes separately. Playwright, when present, stays exact with its matching browser installation. Audit development dependencies as well as runtime dependencies.
