@@ -1,36 +1,18 @@
 # Slick2D-ts
 
-A TypeScript/WebGL2 compatibility layer for bringing Java games built on selected [Slick2D](https://github.com/nguillaumin/slick2d-maven) and [LWJGL](https://www.lwjgl.org/) APIs to browsers. It supports the behavior required by the maintained game ports; it is not a complete Slick2D implementation or a desktop runtime.
+A TypeScript/WebGL2 compatibility layer for bringing Java games built on selected [Slick2D](https://github.com/nguillaumin/slick2d-maven) and [LWJGL](https://www.lwjgl.org/) APIs to browsers. It supports the maintained game ports; it is not a complete Slick2D implementation or a desktop runtime.
 
-See [COMPATIBILITY.md](COMPATIBILITY.md) for supported browser extensions, intentional no-ops, and differences from Java APIs. Integration examples are available in [Ms. Pac-Man](https://github.com/meatfighter/ms-pac-man-2010-js), [Stickvania](https://github.com/meatfighter/stickvania-js), and [Jackal](https://github.com/meatfighter/jackal-js).
-
-The game about pages also reference [JInput](https://jinput.github.io/jinput/), the controller library used by their Java implementations.
-
-## Repository layout
-
-| Path                   | Purpose                                                        |
-| ---------------------- | -------------------------------------------------------------- |
-| `src/index.ts`         | Public package exports                                         |
-| `src/slick/`           | Slick-style lifecycle, graphics, images, input, and audio APIs |
-| `src/slick/rendering/` | WebGL rendering implementation                                 |
-| `src/slick/util/`      | Resource loading and Java-port utilities                       |
-| `src/lwjgl/`           | Selected LWJGL-style compatibility APIs                        |
-| `dist/`                | Committed JavaScript, TypeScript declarations, and source maps |
-| `test/`                | Node-based behavioral and regression tests                     |
-| `test/browser/`        | Real-browser integration fixtures                              |
-| `scripts/`             | Build checks, browser-test runner, and release archiving       |
+See [COMPATIBILITY.md](COMPATIBILITY.md) for supported APIs, browser extensions, intentional no-ops, and differences from Java. Integration examples are available in [Ms. Pac-Man](https://github.com/meatfighter/ms-pac-man-2010-js), [Stickvania](https://github.com/meatfighter/stickvania-js), and [Jackal](https://github.com/meatfighter/jackal-js).
 
 ## Using the library
 
-The package is not published to npm. Install an immutable archive of a qualified engine commit, replacing the placeholder with its full 40-character SHA:
+The package is not published to npm. Install an immutable archive of a qualified engine commit, replacing the placeholder with its full SHA:
 
 ```sh
 npm install "https://codeload.github.com/meatfighter/slick2d-ts/tar.gz/<commit-sha>"
 ```
 
-Keep `package.json` and `package-lock.json` on the same revision. The archive contains the committed `dist/` files; consumers do not need to compile the engine. Use a browser application with ES-module/bundler support and WebGL2.
-
-A minimal game in a browser module:
+Keep `package.json` and `package-lock.json` on the same revision. The archive includes committed `dist/` output, so consumers do not need to compile the engine. Use an ES-module/bundler-capable browser application with WebGL2.
 
 ```ts
 import { AppGameContainer, BasicGame, Color, type GameContainer, type Graphics } from "slick2d-ts";
@@ -39,11 +21,8 @@ class DemoGame extends BasicGame {
     public constructor() {
         super("Demo");
     }
-
     public init(_container: GameContainer): void {}
-
     public update(_container: GameContainer, _delta: number): void {}
-
     public render(container: GameContainer, g: Graphics): void {
         g.setColor(Color.black);
         g.fillRect(0, 0, container.getWidth(), container.getHeight());
@@ -54,55 +33,45 @@ const app = new AppGameContainer(new DemoGame(), 640, 480, false);
 await app.start();
 ```
 
-Run after the document body exists. Without `Display.setParent(...)`, the container creates a canvas in `document.body`. Use `BufferedScalableGame` when a fixed-resolution scene should be rendered to a native-size framebuffer and scaled as a whole; its modes are described in [COMPATIBILITY.md](COMPATIBILITY.md).
+Run after the document body exists. Without `Display.setParent(...)`, the container creates a canvas in `document.body`. Use `BufferedScalableGame` for a fixed-resolution scene rendered to a native-size framebuffer and scaled as a whole.
 
-Browser resource loading is asynchronous. Preload image/data resources with `ResourceLoader.preloadResources(...)` and audio with `SoundStore.get().preloadAudioBuffers(...)` before synchronous gameplay consumes them. Use cancellation, bounded concurrency, and progress callbacks as needed. Individual resource requests have a finite default deadline; see [ResourceLoader.ts](src/slick/util/ResourceLoader.ts) for load options and structured failure details.
+Preload resources before synchronous gameplay consumes them: `ResourceLoader.preloadResources(...)` for images/data and `SoundStore.get().preloadAudioBuffers(...)` for audio. Coordinate cancellation and settlement across parallel preload batches before offering Retry. Request audio unlock from a user gesture and respect browser fullscreen/lifecycle restrictions. See [COMPATIBILITY.md](COMPATIBILITY.md) and [ResourceLoader.ts](src/slick/util/ResourceLoader.ts) for contracts and options.
 
-Each preload batch settles its own started work before rejecting. If a host starts several batches together, it must also coordinate cancellation and settlement across those batches before allowing Retry. See the shared-request cancellation rules in [COMPATIBILITY.md](COMPATIBILITY.md). Request audio unlock from a user gesture and follow browser fullscreen and lifecycle restrictions.
+## Development
 
-## Local development
-
-Use Node.js 24 and Git. JDK tools are not required to build this TypeScript library.
-
-Run commands from the repository root:
+Use Node.js 24 and Git. A JDK is not required for this library.
 
 ```sh
 npm ci
 npm run build
 ```
 
-On Windows PowerShell, use `npm.cmd` if execution policy blocks `npm.ps1`.
+On Windows, use `npm.cmd` if PowerShell blocks `npm.ps1`.
 
-| Task                                | Command                                   | Behavior                                                                    |
-| ----------------------------------- | ----------------------------------------- | --------------------------------------------------------------------------- |
-| Build distribution                  | `npm run build`                           | Cleans and regenerates `dist/` from TypeScript                              |
-| Check formatting / apply formatting | `npm run format:check` / `npm run format` | Repository Prettier rules                                                   |
-| Lint / check types                  | `npm run lint` / `npm run typecheck`      | Source checks                                                               |
-| Run behavioral tests                | `npm test`                                | Rebuilds `dist/`, then runs `test/*.mjs`                                    |
-| Check committed distribution        | `npm run check:dist`                      | Requires no staged, unstaged, or untracked changes under `dist/`            |
-| Run complete source verification    | `npm run verify`                          | Formatting, lint, types, behavioral tests, and committed-distribution check |
-| Run browser verification            | `npm run verify:browser`                  | Rebuilds and runs the real Chromium suite                                   |
-| Qualify local commit                | `npm run qualify`                         | Full local pre-push verification, including browser tests                   |
+| Path                                      | Purpose                                             |
+| ----------------------------------------- | --------------------------------------------------- |
+| `src/index.ts`                            | Public exports                                      |
+| `src/slick/`, `src/lwjgl/`                | Compatibility APIs and browser implementation       |
+| `src/slick/rendering/`, `src/slick/util/` | Rendering and resource utilities                    |
+| `test/`, `test/browser/`, `scripts/`      | Behavioral checks, browser fixtures, and tooling    |
+| `dist/`                                   | Committed JavaScript, declarations, and source maps |
 
-For browser tests, install Chrome or Chromium and set `CHROMIUM_PATH` when it is not found in the runner's Linux locations. For example, in PowerShell, adjust this path to your installation:
+| Task                      | Command                                                 |
+| ------------------------- | ------------------------------------------------------- |
+| Format / lint / typecheck | `npm run format` / `npm run lint` / `npm run typecheck` |
+| Build distribution        | `npm run build`                                         |
+| Behavioral tests          | `npm test`                                              |
+| Check committed output    | `npm run check:dist`                                    |
+| Full local qualification  | `npm run qualify`                                       |
 
-```powershell
-$env:CHROMIUM_PATH = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-npm run verify:browser
-```
+`build` and `test` regenerate `dist/`. After source changes, review and commit source and generated output together before qualification. `check:dist` requires a clean committed distribution; merely staging output is insufficient. Do not edit generated files by hand.
 
-The runner uses headless mode on Windows and macOS. On Linux it can use an existing display or Xvfb; `CHROMIUM_HEADLESS=1` selects headless mode. Browser coverage lives in [test/browser/](test/browser/) and [scripts/run-browser-tests.mjs](scripts/run-browser-tests.mjs). Run `npm run qualify` before pushing release-affecting changes; GitHub Actions is an optional manual Linux check.
+Browser verification needs Chrome or Chromium. Set `CHROMIUM_PATH` when discovery fails; Linux can use a display or Xvfb, or `CHROMIUM_HEADLESS=1`. See [scripts/run-browser-tests.mjs](scripts/run-browser-tests.mjs).
 
-## Maintaining the engine
+## Maintenance and releases
 
-- Preserve observable Java/Slick2D behavior, including numeric semantics, random state, timing, event ordering, and resource ownership. Java-shaped APIs should not be rewritten solely for style.
-- Keep browser-only extensions and compatibility limitations documented in [COMPATIBILITY.md](COMPATIBILITY.md). Prefer explicit supported APIs over requiring consumers to use reflection or reach into internals.
-- Avoid unnecessary allocations and repeated work in rendering, input polling, and other frequently executed paths. Add focused regression coverage for changed behavior.
-- Build after source changes, review the generated `dist/` diff, and commit source and distribution together. Do not edit generated files directly. The `check:dist` step intentionally fails until changed distribution files are committed; staging them is not sufficient.
-- Run the full source verification on the resulting commit and run real-browser checks for browser-facing changes. Validate affected features in the consuming games before advancing their engine pins; engine tests alone do not establish game compatibility.
+Preserve Java/Slick2D numeric semantics, random state, timing, event ordering, and resource ownership. Document browser-only extensions in [COMPATIBILITY.md](COMPATIBILITY.md), and avoid allocations or repeated work in hot paths.
 
-## Releases and attribution
+Qualify consuming games before advancing their engine pins; engine tests alone do not establish game compatibility. Documentation-only engine changes do not require repinning consumers.
 
-See [RELEASING.md](RELEASING.md) for the generated-`dist`, exact-commit qualification, archive, consumer-pin, and tagging procedure. Archiving requires a clean checkout and Node.js, Git, and tar.
-
-The source is licensed under the [BSD 3-Clause License](LICENSE). Upstream Slick2D attribution is in [NOTICE.md](NOTICE.md).
+See [RELEASING.md](RELEASING.md) for generated-output qualification, archives, and immutable consumer pins. The source uses the [BSD 3-Clause License](LICENSE); upstream attribution is in [NOTICE.md](NOTICE.md).
